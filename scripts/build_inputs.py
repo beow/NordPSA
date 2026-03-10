@@ -142,9 +142,9 @@ def build_vre_profiles() -> pd.DataFrame:
                 return (series / p_nom).clip(0, 1), p_nom
             return series * 0.0, 0.0
 
-        onshore_pu,  on_nom  = _normalise(onshore,  fleet_factor=0.70)  # wind_onshore_fleet_factor
-        offshore_pu, off_nom = _normalise(offshore, fleet_factor=0.80)  # wind_offshore_fleet_factor
-        solar_pu,    sol_nom = _normalise(solar,     fleet_factor=0.85)  # solar_fleet_factor
+        onshore_pu,  on_nom  = _normalise(onshore,  fleet_factor=1.0)
+        offshore_pu, off_nom = _normalise(offshore, fleet_factor=1.0)
+        solar_pu,    sol_nom = _normalise(solar,     fleet_factor=1.0)
 
         result[f"{zone}_wind_onshore"]  = onshore_pu
         result[f"{zone}_wind_offshore"] = offshore_pu
@@ -234,10 +234,9 @@ def build_thermal_profile() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Hydro
 # ---------------------------------------------------------------------------
-
-def build_hydro_params() -> dict:
-    print("Fittar hydromodell ...")
-    return hydro_mod.fit_and_save_all(NORDPSA_ZONES)
+# Hydro-parametrar (vårflodsprofil) är manuellt kalibrerade och lagras i
+# config/hydro_params.yaml — de skrivs INTE över av build_inputs.py.
+# Se nordpsa/hydro.py för modellbeskrivning.
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +285,6 @@ if __name__ == "__main__":
     build_vre_profiles()
     build_nuclear_profile(cfg)
     build_thermal_profile()
-    build_hydro_params()
     build_market_price()
 
     print("\nKlart! Alla indata sparade i data/processed/")

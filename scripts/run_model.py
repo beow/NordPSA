@@ -47,7 +47,7 @@ def load_inputs(cfg: dict) -> dict:
 
     with open(PROC_DIR / "vre_pnom.yaml") as f:
         vre_noms = yaml.safe_load(f)
-    with open(PROC_DIR / "hydro_params.yaml") as f:
+    with open(CONFIG_PATH.parent / "hydro_params.yaml") as f:
         hydro_params = yaml.safe_load(f)
 
     # Sätt UTC-index och ta bort timezone (PyPSA kräver tz-naivt)
@@ -146,6 +146,9 @@ def main() -> None:
                         help="Tidsupp. i timmar (åsidosätter config)")
     parser.add_argument("--year", type=int, default=None,
                         help="Kör ett enstaka år (t.ex. 2024)")
+    parser.add_argument("--output", default=None,
+                        help="Resultatmapp under results/ (t.ex. 'run_v2_spring_flood'). "
+                             "Standard: automatiskt namn baserat på upplösning och år.")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -160,9 +163,12 @@ def main() -> None:
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs)
 
-    label = f"res{res}h_{'_'.join(str(s.year) for s in [snapshots[0], snapshots[-1]])}"
-    if args.year:
-        label = f"res{res}h_{args.year}"
+    if args.output:
+        label = args.output
+    else:
+        label = f"res{res}h_{'_'.join(str(s.year) for s in [snapshots[0], snapshots[-1]])}"
+        if args.year:
+            label = f"res{res}h_{args.year}"
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
