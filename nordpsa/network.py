@@ -66,6 +66,12 @@ def build_network(
     n = pypsa.Network()
     n.set_snapshots(snapshots)
 
+    # PyPSA 1.x sätter snapshot_weightings=1 per default; för 3h-tidssteg
+    # måste vikterna sättas till dt_h så att rörliga kostnader (EUR/MWh) och
+    # kapitalkostand (EUR/MW/år × n_år) är konsistenta i LP-objektet.
+    dt_h  = (snapshots[1] - snapshots[0]).total_seconds() / 3600
+    n.snapshot_weightings[:] = dt_h
+
     # Ytterligare fast last (t.ex. datacenter)
     extra = cfg.get("additional_load_mw", {})
     if extra:
@@ -78,7 +84,6 @@ def build_network(
     ccfg  = cfg["costs"]
     r     = ccfg["discount_rate"]
     fom   = ccfg["fom_fraction"]
-    dt_h  = (snapshots[1] - snapshots[0]).total_seconds() / 3600
     n_years = len(snapshots) * dt_h / 8760.0
 
     _add_buses(n, cfg)
@@ -338,3 +343,41 @@ def _add_market_connections(
             p_max_pu=1.0,
             marginal_cost=mc,
         )
+
+
+# ---------------------------------------------------------------------------
+# Extra LP-constraints
+# ---------------------------------------------------------------------------
+
+def hydro_soc_initial_constraint(cfg: dict):
+    """Returnerar en extra_functionality-callback som fixerar hydro SOC vid t=0.
+
+    cyclic_state_of_charge=True ger SOC[0]==SOC[-1].
+    Denna constraint lägger till SOC[0]==target, så att start=slut=target.
+
+    Värdet hämtas från zones.yaml: hydro_soc_initial (fraktion av max kapacitet).
+    """
+    targets = {}  # {"{zone} hydro": target_mwh}
+    for zone, zcfg in cfg["zones"].items():
+        frac = zcfg.get("hydro_soc_initial", None)
+        if frac is None:
+            continue
+        p_nom = zcfg.get("hydro_p_nom_mw", 0)
+        max_h = zcfg.get("hydro_max_hours", 0)
+        if p_nom == 0:
+            continue
+        targets[f"{zone} hydro"] = frac * p_nom * max_h
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not targets:
+            return
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        t0 = snapshots[0]
+        for su_name, target_mwh in targets.items():
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=t0) == target_mwh,
+                name=f"soc_initial-{su_name}",
+            )
+
+    return _extra_functionality

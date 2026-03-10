@@ -21,7 +21,7 @@ pd.options.future.infer_string = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nordpsa.network import build_network
+from nordpsa.network import build_network, hydro_soc_initial_constraint
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
@@ -100,6 +100,8 @@ def solve(n, cfg: dict, log_path: Path | None = None) -> bool:
     if log_path is not None:
         options["log_file"] = str(log_path)
 
+    extra_func = hydro_soc_initial_constraint(cfg)
+
     print(f"Löser med {solver} ({len(n.snapshots)} tidssteg, "
           f"{len(n.generators) + len(n.storage_units)} generatorer) ...")
     if log_path:
@@ -108,6 +110,7 @@ def solve(n, cfg: dict, log_path: Path | None = None) -> bool:
     status, condition = n.optimize(
         solver_name=solver,
         solver_options=options,
+        extra_functionality=extra_func,
     )
 
     print(f"  Status: {status} / {condition}")
