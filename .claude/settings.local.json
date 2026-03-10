@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda env:*)",
+      "Bash(conda run:*)",
+      "WebSearch",
+      "Bash(ps:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

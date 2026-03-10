@@ -1,0 +1,130 @@
+# NordPSA zone definitions
+# Hydro p_nom and max_hours are initial estimates — to be calibrated against eSett data.
+# NTC capacities based on approximate published values; adjust as needed.
+
+zones:
+  SE-N:
+    mbas: [SE1, SE2]
+    hydro_p_nom_mw: 8500
+    hydro_max_hours: 2700
+    nuclear_p_nom_mw: 0
+
+  SE-S:
+    mbas: [SE3, SE4]
+    hydro_p_nom_mw: 7000
+    hydro_max_hours: 1500
+    nuclear_p_nom_mw: 6900   # Forsmark 1-3 + Ringhals 3-4
+
+  NO-N:
+    mbas: [NO3, NO4]
+    hydro_p_nom_mw: 11000
+    hydro_max_hours: 4500
+    nuclear_p_nom_mw: 0
+
+  NO-S:
+    mbas: [NO1, NO2, NO5]
+    hydro_p_nom_mw: 22000
+    hydro_max_hours: 2500
+    nuclear_p_nom_mw: 0
+
+  DK:
+    mbas: [DK1, DK2]
+    hydro_p_nom_mw: 0
+    hydro_max_hours: 0
+    nuclear_p_nom_mw: 0
+
+  FI:
+    mbas: [FI]
+    hydro_p_nom_mw: 3200
+    hydro_max_hours: 500
+    nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
+
+# Continental market connections: [zone, capacity_mw, price_eur_per_mwh]
+# Positive flow = import (zone buys at price), negative flow = export (zone earns price).
+market_connections:
+  - [NO-S, 2100,  60.0]
+  - [SE-S, 1200,  60.0]
+  - [DK,   4000,  60.0]
+  - [FI,   1000,  60.0]
+
+# Interconnections: [zone_from, zone_to, capacity_mw]
+# Capacity applies in both directions.
+links:
+  - [NO-N, SE-N,  600]
+  - [SE-N, SE-S, 7300]
+  - [SE-N, FI,   1400]
+  - [NO-N, NO-S, 1600]
+  - [NO-S, SE-S, 3600]
+  - [NO-S, DK,   1700]
+  - [SE-S, DK,   2000]
+  - [SE-S, FI,   1200]
+
+# Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
+# Sätt till 0 eller ta bort raden för att inaktivera.
+additional_load_mw:
+  SE-N: 1000
+  SE-S: 1000
+  NO-N: 1000
+  NO-S: 1000
+  DK:   1000
+  FI:   1000
+
+# Simulation period
+snapshots:
+  start: "2023-01-01"
+  end:   "2026-01-01"   # exclusive, i.e. up to and including 2025-12-31
+  resolution_hours: 1   # set to 2, 3 or 6 to coarsen
+
+# Technology costs
+# discount_rate and fom_fraction apply to all technologies.
+# capital_cost = overnight_eur_per_w * 1e6 * (CRF + fom_fraction)  [EUR/MW/yr]
+costs:
+  discount_rate: 0.06
+  fom_fraction:  0.02   # fraction of overnight cost per year
+
+  nuclear:
+    overnight_eur_per_w: 7.0
+    lifetime_years: 60
+    vom_eur_per_mwh: 20.0
+    extendable: true
+    p_nom_max_mw: 20000    # max utbyggnad per zon
+
+  wind_onshore:
+    overnight_eur_per_w: 1.2
+    lifetime_years: 25
+    vom_eur_per_mwh: 1.0
+    extendable: true
+    p_nom_max_mw: 50000
+
+  wind_offshore:
+    overnight_eur_per_w: 2.5
+    lifetime_years: 25
+    vom_eur_per_mwh: 2.0
+    extendable: true
+    p_nom_max_mw: 50000
+
+  solar:
+    overnight_eur_per_w: 0.5
+    lifetime_years: 30
+    vom_eur_per_mwh: 0.5
+    extendable: true
+    p_nom_max_mw: 50000
+
+  gas:
+    overnight_eur_per_w: 2.0
+    lifetime_years: 40
+    vom_eur_per_mwh: 100.0
+    extendable: true
+    p_nom_max_mw: 20000
+
+  hydro:
+    vom_eur_per_mwh: 10.0
+    extendable: false   # hydro capacity fixed; no new reservoirs
+
+# Solver
+solver:
+  name: highs
+  threads: 4
+  solver: ipm          # interior point method — skalbar för stora LP
+  run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
+  ipm_optimality_tolerance: 1e-6
