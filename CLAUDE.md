@@ -27,17 +27,21 @@ make solve        # run model (scripts/run_model.py)
 
 Common solve variants:
 ```bash
-python scripts/run_model.py --resolution 3       # 3h timesteps, 2023-2025
-python scripts/run_model.py --resolution 3 --year 2024   # single year
+python scripts/run_model.py --resolution 3 --output run01_description   # 3h, 2023-2025
+python scripts/run_model.py --resolution 3 --year 2024 --output run02_2024only
 ```
+
+**Run discipline:** always commit before starting a full simulation. Name the output directory in the commit message so results are traceable to code state:
+```bash
+git commit -m "Change X → next run: run02_fleet_factors"
+python scripts/run_model.py --resolution 3 --output run02_fleet_factors
+```
+Results go to `results/<output>/` and are gitignored (large files). `network.nc` contains full PyPSA network including inflow timeseries — verify correct hydrology with `n.storage_units_t.inflow`.
 
 Visualize results:
 ```bash
-python scripts/plot_dispatch.py results/res3h_2023_2025/ --resample 7D
-python scripts/plot_dispatch.py results/res3h_2023_2025/ --zone SE-S
+python scripts/plot_dispatch.py results/run01_spring_flood_cyclic/ --resample 7D
 ```
-
-Results are saved to `results/<label>/` with dispatch CSVs, flows, prices, hydro SoC, and `network.nc`.
 
 ## Architecture
 
@@ -57,7 +61,7 @@ data/processed/
   vre_pnom.yaml           (installed capacities per zone/carrier)
   nuclear_profile.parquet (availability factor per zone, 0-1)
   thermal_profile.parquet (must-run thermal MW per zone)
-  hydro_params.yaml       (fitted inflow model parameters)
+  hydro_params.yaml       (GENERATED — do not edit, auto-fitted from production data)
   market_price.parquet    (DE-LU hourly price)
             ↓
 nordpsa/network.py → pypsa.Network
@@ -103,7 +107,9 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 
-**Hydro inflow model:** Fitted once per zone (mean over 2023-2025). Same seasonal curve repeated each year — no inter-year reservoir carryover. Cyclic SOC means reservoir refills annually.
+**Hydro inflow model:** Parameters are manually calibrated spring-flood profiles stored in `config/hydro_params.yaml` (NOT `data/processed/hydro_params.yaml` which is auto-generated and must never be used). SE-N: A=10000 MW spring flood, mu=day 135 (May 15), phi=183 (summer-high cosine). `build_inputs.py` does NOT regenerate these — they are a config artifact. Verify correct hydrology after each run: SE-N inflow should peak ~15000 MW in May, ~2600 MW in January; reservoir SOC should peak ~85% in July.
+
+**Hydro SOC cycling:** `cyclic_state_of_charge=True` + `extra_functionality` callback pins SOC[t=0] = target from `hydro_soc_initial` in `zones.yaml`. This forces start = end = target (e.g. 70%) while the LP optimizes freely in between.
 
 **p_nom_max bounds:** All extendable generators have finite `p_nom_max_mw` in config (20k for nuclear/gas, 50k for VRE per zone). Without these, HiGHS sees ~3e10 column bounds and prints scaling warnings (harmless but ugly).
 
