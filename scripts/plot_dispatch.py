@@ -1,9 +1,11 @@
 """
 Skapar stackade area-grafer för elproduktion per zon och för Norden totalt.
 
-Färger och ordning (nere→upp): export, import, kärnkraft, hydro,
-onshore vind, offshore vind, sol, gas (dispatchable), thermisk must-run.
-Efterfrågan visas som svart linje.
+Färger och ordning (nere→upp): export (market+länk), import (market+länk),
+kärnkraft, hydro, onshore vind, offshore vind, sol, gas, termisk must-run.
+Efterfrågan visas som svart heldragen linje.
+Last + nettoutförsel (= effektiv last på lokala generatorer) visas som
+streckad linje — ska sammanfalla med toppen av produktionsstapeln.
 
 Användning:
     python scripts/plot_dispatch.py results/res6h_2024/
@@ -24,38 +26,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 PROC_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
 
 # ---------------------------------------------------------------------------
+# Kända zoner (för tolkning av länkkolumnnamn)
+# ---------------------------------------------------------------------------
+
+KNOWN_ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
+
+# ---------------------------------------------------------------------------
 # Färger och stapelordning
 # ---------------------------------------------------------------------------
 
 COLORS = {
-    "nuclear":      "#7B2FBE",   # lila
-    "hydro":        "#2196F3",   # blå
-    "wind_onshore": "#4CAF50",   # grön
-    "wind_offshore":"#1B5E20",   # mörkgrön
-    "solar":        "#FF9800",   # orange
-    "gas":     "#9E9E9E",   # grå (dispatchable gas)
-    "thermal": "#795548",   # brun (must-run thermal)
-    "import":       "#F48FB1",   # rosa
-    "export":       "#F48FB1",   # rosa (under noll)
-    "slack":        "#FF0000",   # röd (load shedding, bör vara noll)
+    "nuclear":        "#7B2FBE",   # lila
+    "hydro":          "#2196F3",   # blå
+    "wind_onshore":   "#4CAF50",   # grön
+    "wind_offshore":  "#1B5E20",   # mörkgrön
+    "solar":          "#FF9800",   # orange
+    "gas":            "#9E9E9E",   # grå (dispatchable gas)
+    "thermal":        "#795548",   # brun (must-run thermal)
+    "import":         "#F48FB1",   # rosa (marknad)
+    "export":         "#F48FB1",   # rosa (marknad, under noll)
+    "link_import":    "#FF7043",   # korall/orange-röd (transmissionslänkar)
+    "link_export":    "#FF7043",   # korall/orange-röd (transmissionslänkar, under noll)
+    "slack":          "#FF0000",   # röd (load shedding, bör vara noll)
 }
 
 LABELS = {
-    "nuclear":      "Kärnkraft",
-    "hydro":        "Hydro",
-    "wind_onshore": "Vind onshore",
-    "wind_offshore":"Vind offshore",
-    "solar":        "Sol",
-    "gas":  "Gas",
-    "thermal":      "Termisk",
-    "import":       "Import",
-    "export":       "Export",
-    "slack":        "Last-avlastning",
+    "nuclear":        "Kärnkraft",
+    "hydro":          "Hydro",
+    "wind_onshore":   "Vind onshore",
+    "wind_offshore":  "Vind offshore",
+    "solar":          "Sol",
+    "gas":            "Gas",
+    "thermal":        "Termisk",
+    "import":         "Import (marknad)",
+    "export":         "Export (marknad)",
+    "link_import":    "Import (länk)",
+    "link_export":    "Export (länk)",
+    "slack":          "Last-avlastning",
 }
 
 # Ordning nere→upp i positiv stapel (export hanteras separat under noll)
 STACK_ORDER = [
-    "import", "nuclear", "thermal", "hydro", "wind_onshore",
+    "import", "link_import", "nuclear", "thermal", "hydro", "wind_onshore",
     "wind_offshore", "solar", "gas",
 ]
 
@@ -69,7 +81,9 @@ def load_results(res_dir: Path) -> dict:
                         index_col=0, parse_dates=True)
     hydro = pd.read_csv(res_dir / "dispatch_hydro.csv",
                         index_col=0, parse_dates=True)
-    return dict(gen=gen, hydro=hydro)
+    flows_path = res_dir / "flows.csv"
+    flows = pd.read_csv(flows_path, index_col=0, parse_dates=True) if flows_path.exists() else None
+    return dict(gen=gen, hydro=hydro, flows=flows)
 
 
 def load_demand(snapshots: pd.DatetimeIndex, res_hours: float) -> pd.DataFrame:
@@ -78,6 +92,42 @@ def load_demand(snapshots: pd.DatetimeIndex, res_hours: float) -> pd.DataFrame:
     df = pd.read_parquet(PROC_DIR / "load.parquet")
     df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
     return df.resample(freq).mean().reindex(snapshots)
+
+
+# ---------------------------------------------------------------------------
+# Länkflöden
+# ---------------------------------------------------------------------------
+
+def _parse_link_col(col: str) -> tuple[str, str] | tuple[None, None]:
+    """Tolkar kolumnnamn som '{z0}-{z1}' och returnerar (z0, z1) eller (None, None)."""
+    for z0 in KNOWN_ZONES:
+        if col.startswith(z0 + "-"):
+            z1 = col[len(z0) + 1:]
+            if z1 in KNOWN_ZONES:
+                return z0, z1
+    return None, None
+
+
+def _zone_link_gross(zone: str, flows: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Brutto-inflöde och brutto-utflöde för zonen via transmissionslänkar.
+
+    Varje länk behandlas per riktning: en länk kan flöda in till zonen
+    medan en annan flödar ut — det nettas INTE ihop.
+    Returnerar (inflow, outflow), båda positiva.
+    """
+    inflow  = pd.Series(0.0, index=flows.index)
+    outflow = pd.Series(0.0, index=flows.index)
+    for col in flows.columns:
+        z0, z1 = _parse_link_col(col)
+        if z0 == zone:
+            # Positivt flöde = z0→z1 (utförsel från zonen)
+            outflow += flows[col].clip(lower=0)
+            inflow  += (-flows[col]).clip(lower=0)
+        elif z1 == zone:
+            # Positivt flöde = z0→z1 (inflöde till zonen)
+            inflow  += flows[col].clip(lower=0)
+            outflow += (-flows[col]).clip(lower=0)
+    return inflow, outflow
 
 
 # ---------------------------------------------------------------------------
@@ -98,18 +148,33 @@ def extract_zone_carrier(gen: pd.DataFrame) -> dict[str, dict[str, pd.Series]]:
 
 
 def build_zone_df(zone: str, data: dict, demand: pd.DataFrame) -> pd.DataFrame:
-    """Bygger en DataFrame med en kolumn per bärare (MW) för en zon."""
+    """Bygger en DataFrame med en kolumn per bärare (MW) för en zon.
+
+    Kolumner:
+      export         — marknadsgenerator, negativa värden (under noll)
+      link_export    — netto-utförsel via NTC-länkar, negativa värden
+      import         — marknadsgenerator, positiva värden
+      link_import    — netto-inflöde via NTC-länkar, positiva värden
+      nuclear/hydro/… — lokal produktion, positiva värden
+      demand         — faktisk last (MW)
+      demand_net     — last + nettoutförsel = effektiv last på lokala generatorer
+                       (ska sammanfalla med toppen av produktionsstapeln)
+    """
     gen_by_zone = extract_zone_carrier(data["gen"])
     zone_gen    = gen_by_zone.get(zone, {})
+    idx         = data["gen"].index
 
     cols = {}
 
-    # Generatorer från dispatch_generators.csv
+    # Marknadsgenerator: import (pos) och export (neg)
+    market_series = zone_gen.get("market", pd.Series(0.0, index=idx))
+    if "market" in zone_gen:
+        cols["import"] = market_series.clip(lower=0)
+        cols["export"] = market_series.clip(upper=0)
+
+    # Övriga generatorer
     for carrier, series in zone_gen.items():
-        if carrier == "market":
-            cols["import"]  = series.clip(lower=0)
-            cols["export"]  = series.clip(upper=0)
-        elif carrier in COLORS:
+        if carrier not in ("market",) and carrier in COLORS:
             cols[carrier] = series.clip(lower=0)
 
     # Hydro från dispatch_hydro.csv
@@ -117,11 +182,29 @@ def build_zone_df(zone: str, data: dict, demand: pd.DataFrame) -> pd.DataFrame:
     if hydro_col in data["hydro"].columns:
         cols["hydro"] = data["hydro"][hydro_col].clip(lower=0)
 
-    # Efterfrågan
+    # Transmissionslänkar: brutto inflow/outflow per zon
+    flows = data.get("flows")
+    link_inflow  = pd.Series(0.0, index=idx)
+    link_outflow = pd.Series(0.0, index=idx)
+    if flows is not None:
+        li, lo = _zone_link_gross(zone, flows.reindex(idx).fillna(0))
+        link_inflow, link_outflow = li, lo
+        cols["link_import"] = link_inflow           # positiv, staplas ovan noll
+        cols["link_export"] = -link_outflow         # negativ, visas under noll
+
+    # Efterfrågan och streckad kurva
     if demand is not None and zone in demand.columns:
         cols["demand"] = demand[zone]
+        # Visuell stacktop = G + Li⁺ + Lm⁺
+        # Från energibalansen: G + Li⁺ + Lm⁺ = D + Li⁻ + Lm⁻
+        # → stacktop = D + brutto-utflöde (länk) + |export market|
+        cols["demand_net"] = (
+            demand[zone]
+            + link_outflow
+            + (-market_series).clip(lower=0)   # marknadens export (0 vid import)
+        )
 
-    return pd.DataFrame(cols, index=data["gen"].index).fillna(0)
+    return pd.DataFrame(cols, index=idx).fillna(0)
 
 
 # ---------------------------------------------------------------------------
@@ -142,16 +225,20 @@ def plot_zone(ax: plt.Axes, df: pd.DataFrame, zone: str,
 
     t = df.index
 
-    # --- Negativ yta: export ---
-    if "export" in df.columns:
-        ax.fill_between(t, df["export"], 0,
-                        color=COLORS["export"], alpha=0.8,
-                        label=LABELS["export"], step="post")
+    # --- Negativa ytor: export (marknad + länk), staplade under noll ---
+    neg_bottom = np.zeros(len(df))
+    for key in ("export", "link_export"):
+        if key in df.columns:
+            vals = df[key].values   # ≤ 0
+            ax.fill_between(t, neg_bottom + vals, neg_bottom,
+                            color=COLORS[key], alpha=0.8,
+                            label=LABELS[key], step="post")
+            neg_bottom += vals
 
     # --- Positiva staplar ---
     bottoms = np.zeros(len(df))
     for carrier in STACK_ORDER:
-        if carrier not in df.columns or carrier == "export":
+        if carrier not in df.columns:
             continue
         vals = df[carrier].values
         ax.fill_between(t, bottoms, bottoms + vals,
@@ -160,10 +247,17 @@ def plot_zone(ax: plt.Axes, df: pd.DataFrame, zone: str,
                         step="post")
         bottoms += vals
 
-    # --- Efterfrågekurva ---
+    # --- Efterfrågekurva (heldragen) ---
     if "demand" in df.columns:
         ax.step(t, df["demand"], color="black", linewidth=1.0,
                 where="post", label="Efterfrågan")
+
+    # --- Last + nettoutförsel = direkt summa av stackkolumnerna (garanterat i topp) ---
+    pos_cols = [c for c in STACK_ORDER if c in df.columns]
+    if pos_cols:
+        stack_top = df[pos_cols].clip(lower=0).sum(axis=1)
+        ax.step(t, stack_top, color="black", linewidth=1.0,
+                linestyle="--", where="post", label="Last + nettoutförsel")
 
     # --- Formatering ---
     ax.set_title(zone, fontsize=11, fontweight="bold")
@@ -181,21 +275,27 @@ def make_legend(fig: plt.Figure, carriers_present: set) -> None:
     handles = []
     seen = set()
 
-    # Export
-    if "export" in carriers_present:
-        patch = plt.Rectangle((0, 0), 1, 1, fc=COLORS["export"], alpha=0.8)
-        handles.append((patch, LABELS["export"]))
-        seen.add("export")
+    # Export (marknad + länk), under noll
+    for key in ("export", "link_export"):
+        if key in carriers_present:
+            patch = plt.Rectangle((0, 0), 1, 1, fc=COLORS[key], alpha=0.8)
+            handles.append((patch, LABELS[key]))
+            seen.add(key)
 
+    # Positiva staplar i STACK_ORDER
     for carrier in STACK_ORDER:
         if carrier in carriers_present and carrier not in seen:
             patch = plt.Rectangle((0, 0), 1, 1, fc=COLORS[carrier], alpha=0.85)
             handles.append((patch, LABELS.get(carrier, carrier)))
             seen.add(carrier)
 
-    # Efterfrågan
-    line = plt.Line2D([0], [0], color="black", linewidth=1.0)
-    handles.append((line, "Efterfrågan"))
+    # Kurvor
+    line_demand = plt.Line2D([0], [0], color="black", linewidth=1.0)
+    handles.append((line_demand, "Efterfrågan"))
+
+    if any(c in carriers_present for c in STACK_ORDER):
+        line_net = plt.Line2D([0], [0], color="black", linewidth=1.0, linestyle="--")
+        handles.append((line_net, "Last + nettoutförsel"))
 
     patches, labels = zip(*handles)
     fig.legend(patches, labels,
