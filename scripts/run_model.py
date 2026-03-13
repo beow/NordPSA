@@ -153,12 +153,28 @@ def main() -> None:
     parser.add_argument("--output", default=None,
                         help="Resultatmapp under results/ (t.ex. 'run_v2_spring_flood'). "
                              "Standard: automatiskt namn baserat på upplösning och år.")
+    parser.add_argument("--no-extra-load", action="store_true",
+                        help="Nollställ additional_load_mw — använd faktisk last utan tillägg")
+    parser.add_argument("--no-expansion", action="store_true",
+                        help="Lås alla teknologier som non-extendable — ren dispatch-körning")
     args = parser.parse_args()
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
 
-    print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}")
+    if args.no_extra_load:
+        cfg["additional_load_mw"] = {}
+
+    if args.no_expansion:
+        for tech in cfg.get("costs", {}):
+            if isinstance(cfg["costs"][tech], dict):
+                cfg["costs"][tech]["extendable"] = False
+
+    flags = []
+    if args.no_extra_load: flags.append("no-extra-load")
+    if args.no_expansion:  flags.append("no-expansion")
+    flag_str = f"  [{', '.join(flags)}]" if flags else ""
+    print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
     inputs    = load_inputs(cfg)
     snapshots = make_snapshots(cfg, res, args.year)
