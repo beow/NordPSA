@@ -81,8 +81,8 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
     freq = f"{resolution}h"
     out  = {}
     for key in ("load", "vre_profiles", "nuclear_profile", "thermal_profile"):
-        out[key] = inputs[key].resample(freq).mean().reindex(snapshots)
-    out["market_price"] = inputs["market_price"].resample(freq).mean().reindex(snapshots)
+        out[key] = inputs[key].resample(freq).mean().reindex(snapshots).ffill()
+    out["market_price"] = inputs["market_price"].resample(freq).mean().reindex(snapshots).ffill()
     out["vre_noms"]     = inputs["vre_noms"]
     out["hydro_params"] = inputs["hydro_params"]
     return out
