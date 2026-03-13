@@ -1,10 +1,13 @@
 """
-Hämtar dansk produktion (vind + sol) och kontinentala day-ahead-priser
-från Energy Charts och sparar som Parquet.
+Hämtar dansk produktion (vind + sol) och day-ahead-priser för alla
+handelsanslutna budzon från Energy Charts och sparar som Parquet.
 
 Utdata:
   data/raw/production_DK_ec_{year}.parquet  — dansk produktion
-  data/raw/price_market_{year}.parquet      — DE-LU day-ahead-priser
+  data/raw/price_{bzn}_{year}.parquet       — day-ahead-priser per budzon
+
+Tillgängliga budzoner (Energy Charts): DE-LU, EE, LT, PL, NL
+GB saknas i Energy Charts — hanteras separat via ENTSO-E när token aktiveras.
 
 Användning:
     python scripts/fetch_ec.py           # hämtar allt som saknas
@@ -22,15 +25,17 @@ from nordpsa.ec import EnergyChartsClient, EC_COUNTRY_DK
 RAW_DIR    = Path(__file__).resolve().parents[1] / "data" / "raw"
 YEARS      = [2023, 2024, 2025]
 SLEEP_S    = 1.0    # Energy Charts är ett gratisAPI — var snäll mot servern
-PRICE_BZN  = "DE-LU"   # Tyska day-ahead-priser som proxy för kontinentalt marknadspris
+
+# Budzoner att hämta från Energy Charts (GB saknas — hanteras via ENTSO-E)
+PRICE_BZNS = ["DE-LU", "EE", "LT", "PL", "NL"]
 
 
 def raw_path_dk(year: int) -> Path:
     return RAW_DIR / f"production_DK_ec_{year}.parquet"
 
 
-def raw_path_price(year: int) -> Path:
-    return RAW_DIR / f"price_market_{year}.parquet"
+def raw_path_price(bzn: str, year: int) -> Path:
+    return RAW_DIR / f"price_{bzn}_{year}.parquet"
 
 
 def fetch_all(force: bool = False) -> None:
@@ -60,25 +65,26 @@ def fetch_all(force: bool = False) -> None:
         print(f"OK ({len(df)} rader)")
         time.sleep(SLEEP_S)
 
-    # --- Kontinentala marknadspriser (DE-LU day-ahead) ---
-    print("\n=== Kontinentala day-ahead-priser (DE-LU) ===")
-    for i, year in enumerate(YEARS, 1):
-        out = raw_path_price(year)
-        if out.exists() and not force:
-            print(f"[{i}/{len(YEARS)}] hoppar över {out.name} (finns redan)")
-            continue
+    # --- Day-ahead-priser per budzon ---
+    for bzn in PRICE_BZNS:
+        print(f"\n=== Day-ahead-priser: {bzn} ===")
+        for i, year in enumerate(YEARS, 1):
+            out = raw_path_price(bzn, year)
+            if out.exists() and not force:
+                print(f"[{i}/{len(YEARS)}] hoppar över {out.name} (finns redan)")
+                continue
 
-        print(f"[{i}/{len(YEARS)}] hämtar {PRICE_BZN} priser {year} ...", end=" ", flush=True)
-        try:
-            s = cli.fetch_price_year(PRICE_BZN, year)
-        except Exception as e:
-            print(f"FEL: {e}")
-            continue
+            print(f"[{i}/{len(YEARS)}] hämtar {bzn} {year} ...", end=" ", flush=True)
+            try:
+                s = cli.fetch_price_year(bzn, year)
+            except Exception as e:
+                print(f"FEL: {e}")
+                continue
 
-        s.to_frame().to_parquet(out)
-        print(f"OK ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
-        if i < len(YEARS):
-            time.sleep(SLEEP_S)
+            s.to_frame().to_parquet(out)
+            print(f"OK ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
+            if i < len(YEARS):
+                time.sleep(SLEEP_S)
 
     print("\nKlart!")
 

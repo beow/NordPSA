@@ -53,7 +53,7 @@ def build_network(
     nuclear_profile:  pd.DataFrame,
     thermal_profile:  pd.DataFrame,
     hydro_params:     dict,
-    market_price:     pd.Series,
+    market_prices:    Dict[str, pd.Series],
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -95,7 +95,7 @@ def build_network(
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
-    _add_market_connections(n, cfg, market_price)
+    _add_market_connections(n, cfg, market_prices)
 
     return n
 
@@ -133,7 +133,7 @@ def _add_slack(n: pypsa.Network, cfg: dict) -> None:
     eftersom marknaden agerar säkerhetsventil. Slack behålls för isolerade
     zoner för att garantera LP-feasibilitet.
     """
-    market_zones = {z for z, *_ in cfg.get("market_connections", [])}
+    market_zones = {zone for _name, zone, *_ in cfg.get("market_connections", [])}
     for zone in cfg["zones"]:
         if zone in market_zones:
             continue
@@ -320,22 +320,22 @@ def _add_gas(
 
 
 def _add_market_connections(
-    n:            pypsa.Network,
-    cfg:          dict,
-    market_price: pd.Series,
+    n:             pypsa.Network,
+    cfg:           dict,
+    market_prices: Dict[str, pd.Series],
 ) -> None:
-    """Import/export-ventil mot kontinentala marknaden per zon.
+    """Import/export-ventiler mot angränsande marknader.
 
-    Modelleras som en Generator med p_min_pu=-1:
+    En Generator per kabel med p_min_pu=-1:
       p > 0 → import (zonen köper, kostnaden = price(t) × p)
       p < 0 → export (zonen säljer, intäkten = price(t) × |p|)
-    marginal_cost är en tidsserie (DE-LU day-ahead) gemensam för alla zoner.
-    Fallback till fast pris från config om market_price saknas.
+    Generatornamn: "<Nord zon> <motpart>", t.ex. "DK GB".
+    price_bzn anger vilken kolumn i market_prices som används.
     """
-    for zone, p_nom, fallback_price in cfg.get("market_connections", []):
-        mc = market_price if market_price is not None else fallback_price
+    for name, zone, p_nom, price_bzn in cfg.get("market_connections", []):
+        mc = market_prices[price_bzn]
         n.add(
-            "Generator", f"{zone} market",
+            "Generator", name,
             bus=zone,
             carrier="market",
             p_nom=p_nom,

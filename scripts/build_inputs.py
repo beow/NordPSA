@@ -243,15 +243,15 @@ def build_thermal_profile() -> pd.DataFrame:
 # Marknadspriser
 # ---------------------------------------------------------------------------
 
-def build_market_price() -> pd.Series:
-    """
-    Sammanfogar rådata för kontinentala day-ahead-priser (DE-LU) 2023-2025.
-    Klipps till standardperioden och sparas som market_price.parquet.
-    """
-    print("Bygger marknadsprisserie ...")
+# Budzoner att läsa in — måste matcha PRICE_BZNS i fetch_ec.py
+PRICE_BZNS = ["DE-LU", "EE", "LT", "PL", "NL"]
+
+
+def _load_price_bzn(bzn: str) -> pd.Series:
+    """Laddar och sammanfogar råprisdata för en budzon (alla år)."""
     frames = []
     for year in YEARS:
-        path = RAW_DIR / f"price_market_{year}.parquet"
+        path = RAW_DIR / f"price_{bzn}_{year}.parquet"
         if not path.exists():
             raise FileNotFoundError(
                 f"Prisdata saknas: {path}\n"
@@ -263,14 +263,29 @@ def build_market_price() -> pd.Series:
 
     s = pd.concat(frames).sort_index()["price_eur_mwh"]
     s = s.loc[PERIOD_START:PERIOD_END]
-    s.index.name = "time"
-
     # Fyll ev. glapp med forward-fill (max 2h) och sedan medelvärde
     s = s.resample("h").mean().ffill(limit=2).fillna(s.mean())
-
-    s.to_frame().to_parquet(PROCESSED_DIR / "market_price.parquet")
-    print(f"  → market_price.parquet  ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
     return s
+
+
+def build_market_prices() -> pd.DataFrame:
+    """
+    Sammanfogar råprisdata för alla budzoner 2023-2025.
+    Returnerar och sparar en DataFrame med en kolumn per budzon.
+    Utdatafil: market_prices.parquet
+    """
+    print("Bygger marknadspriser ...")
+    result = {}
+    for bzn in PRICE_BZNS:
+        s = _load_price_bzn(bzn)
+        result[bzn] = s
+        print(f"  {bzn:<8} {len(s)} timmar  medel={s.mean():.1f} EUR/MWh")
+
+    out = pd.DataFrame(result)
+    out.index.name = "time"
+    out.to_parquet(PROCESSED_DIR / "market_prices.parquet")
+    print(f"  → market_prices.parquet  ({len(out)} rader, {len(out.columns)} budzoner)")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +300,6 @@ if __name__ == "__main__":
     build_vre_profiles()
     build_nuclear_profile(cfg)
     build_thermal_profile()
-    build_market_price()
+    build_market_prices()
 
     print("\nKlart! Alla indata sparade i data/processed/")

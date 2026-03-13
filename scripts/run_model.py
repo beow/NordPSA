@@ -39,11 +39,11 @@ def load_config() -> dict:
 
 def load_inputs(cfg: dict) -> dict:
     """Laddar alla förberedda indata från data/processed/."""
-    load_df      = pd.read_parquet(PROC_DIR / "load.parquet")
-    vre          = pd.read_parquet(PROC_DIR / "vre_profiles.parquet")
-    nuclear      = pd.read_parquet(PROC_DIR / "nuclear_profile.parquet")
-    thermal      = pd.read_parquet(PROC_DIR / "thermal_profile.parquet")
-    market_price = pd.read_parquet(PROC_DIR / "market_price.parquet")["price_eur_mwh"]
+    load_df       = pd.read_parquet(PROC_DIR / "load.parquet")
+    vre           = pd.read_parquet(PROC_DIR / "vre_profiles.parquet")
+    nuclear       = pd.read_parquet(PROC_DIR / "nuclear_profile.parquet")
+    thermal       = pd.read_parquet(PROC_DIR / "thermal_profile.parquet")
+    prices_df     = pd.read_parquet(PROC_DIR / "market_prices.parquet")
 
     with open(PROC_DIR / "vre_pnom.yaml") as f:
         vre_noms = yaml.safe_load(f)
@@ -51,14 +51,15 @@ def load_inputs(cfg: dict) -> dict:
         hydro_params = yaml.safe_load(f)
 
     # Sätt UTC-index och ta bort timezone (PyPSA kräver tz-naivt)
-    for df in (load_df, vre, nuclear, thermal):
+    for df in (load_df, vre, nuclear, thermal, prices_df):
         df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
-    market_price.index = pd.to_datetime(market_price.index, utc=True).tz_localize(None)
+
+    market_prices = {col: prices_df[col] for col in prices_df.columns}
 
     return dict(
         load=load_df, vre_profiles=vre, vre_noms=vre_noms,
         nuclear_profile=nuclear, thermal_profile=thermal,
-        hydro_params=hydro_params, market_price=market_price,
+        hydro_params=hydro_params, market_prices=market_prices,
     )
 
 
@@ -82,7 +83,10 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
     out  = {}
     for key in ("load", "vre_profiles", "nuclear_profile", "thermal_profile"):
         out[key] = inputs[key].resample(freq).mean().reindex(snapshots).ffill()
-    out["market_price"] = inputs["market_price"].resample(freq).mean().reindex(snapshots).ffill()
+    out["market_prices"] = {
+        bzn: s.resample(freq).mean().reindex(snapshots).ffill()
+        for bzn, s in inputs["market_prices"].items()
+    }
     out["vre_noms"]     = inputs["vre_noms"]
     out["hydro_params"] = inputs["hydro_params"]
     return out
