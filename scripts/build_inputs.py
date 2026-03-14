@@ -142,9 +142,37 @@ def build_vre_profiles() -> pd.DataFrame:
                 return (series / p_nom).clip(0, 1), p_nom
             return series * 0.0, 0.0
 
+        def _normalise_solar_by_year(series: pd.Series, fleet_factor: float = 1.0) -> tuple[pd.Series, float]:
+            """Skalningsmetod för sol: normalisera varje år till 2025 års p99-nivå.
+
+            Solflottan växer år för år. Rå produktion 2023 är lägre än 2025 inte för
+            att solen skiner mindre, utan för att färre paneler fanns installerade.
+            Lösning: beräkna p99 per kalenderår, skala upp 2023/2024 med faktorn
+            p99_2025 / p99_år. På så vis antar modellen att 2025 års flotta gäller
+            under hela perioden — konsistent med ett kapacitetsexpansionsperspektiv.
+            p_nom sätts till 2025 års p99 / fleet_factor.
+            """
+            p99_per_year = {}
+            for yr in YEARS:
+                yr_data = series[series.index.year == yr]
+                p99_per_year[yr] = float(np.percentile(yr_data, 99)) if len(yr_data) > 0 else 0.0
+
+            ref_p99 = p99_per_year.get(2025, 0.0)
+            if ref_p99 <= 1:
+                return series * 0.0, 0.0
+
+            scaled = series.copy()
+            for yr, p99_yr in p99_per_year.items():
+                if p99_yr > 1:
+                    mask = series.index.year == yr
+                    scaled.loc[mask] = series.loc[mask] * (ref_p99 / p99_yr)
+
+            p_nom = ref_p99 / fleet_factor
+            return (scaled / p_nom).clip(0, 1), p_nom
+
         onshore_pu,  on_nom  = _normalise(onshore,  fleet_factor=0.70)  # wind_onshore_fleet_factor
         offshore_pu, off_nom = _normalise(offshore, fleet_factor=0.80)  # wind_offshore_fleet_factor
-        solar_pu,    sol_nom = _normalise(solar,     fleet_factor=0.85)  # solar_fleet_factor
+        solar_pu,    sol_nom = _normalise_solar_by_year(solar, fleet_factor=0.85)
 
         result[f"{zone}_wind_onshore"]  = onshore_pu
         result[f"{zone}_wind_offshore"] = offshore_pu
