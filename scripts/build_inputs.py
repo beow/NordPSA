@@ -241,15 +241,30 @@ def build_nuclear_profile(cfg: dict) -> pd.DataFrame:
 
 def build_thermal_profile() -> pd.DataFrame:
     """
-    Must-run termisk produktion (MW) = thermal + other per zon.
+    Must-run termisk produktion (MW) per zon.
+
+    SE/NO/FI (eSett): thermal + other — eSett har ingen finare uppdelning.
+    DK (Energy Charts): coal + gas + biomass + waste + fossil_oil.
+      eSett DK samlar ALL produktion i 'other' (ingen teknikuppdelning),
+      vilket skulle dubbelräkna vind/sol som redan modelleras separat.
     Sparas som absoluta MW; network.py beräknar p_nom = max per zon.
     """
     print("Bygger termisk profil ...")
     result = {}
 
     for zone in NORDPSA_ZONES:
-        df      = load_raw("production", zone)
-        thermal = df["thermal"].fillna(0) + df["other"].fillna(0)
+        if zone == "DK":
+            # Must-run för DK: 100% waste + 50% biomass.
+            # Kol, gas och olja exkluderas — fossilt fasas ut och gas
+            # modelleras separat som dispatchbar peaklastresurs.
+            dk_ec = _load_dk_ec()
+            thermal = (
+                dk_ec.get("waste",   pd.Series(0.0, index=dk_ec.index)).fillna(0) * 1.0
+              + dk_ec.get("biomass", pd.Series(0.0, index=dk_ec.index)).fillna(0) * 0.5
+            )
+        else:
+            df      = load_raw("production", zone)
+            thermal = df["thermal"].fillna(0) + df["other"].fillna(0)
         result[zone] = thermal.clip(lower=0)
 
     out = pd.DataFrame(result)
