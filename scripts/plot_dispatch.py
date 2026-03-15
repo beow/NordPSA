@@ -4,8 +4,7 @@ Skapar stackade area-grafer för elproduktion per zon och för Norden totalt.
 Färger och ordning (nere→upp): export (market+länk), import (market+länk),
 kärnkraft, hydro, onshore vind, offshore vind, sol, gas, termisk must-run.
 Efterfrågan visas som svart heldragen linje.
-Last + nettoutförsel (= effektiv last på lokala generatorer) visas som
-streckad linje — ska sammanfalla med toppen av produktionsstapeln.
+Efterfrågan visas som svart heldragen linje.
 
 Användning:
     python scripts/plot_dispatch.py results/res6h_2024/
@@ -252,13 +251,6 @@ def plot_zone(ax: plt.Axes, df: pd.DataFrame, zone: str,
         ax.step(t, df["demand"], color="black", linewidth=1.0,
                 where="post", label="Efterfrågan")
 
-    # --- Last + nettoutförsel = direkt summa av stackkolumnerna (garanterat i topp) ---
-    pos_cols = [c for c in STACK_ORDER if c in df.columns]
-    if pos_cols:
-        stack_top = df[pos_cols].clip(lower=0).sum(axis=1)
-        ax.step(t, stack_top, color="black", linewidth=1.0,
-                linestyle="--", where="post", label="Last + nettoutförsel")
-
     # --- Formatering ---
     ax.set_title(zone, fontsize=11, fontweight="bold")
     ax.set_ylabel("MW")
@@ -292,10 +284,6 @@ def make_legend(fig: plt.Figure, carriers_present: set) -> None:
     # Kurvor
     line_demand = plt.Line2D([0], [0], color="black", linewidth=1.0)
     handles.append((line_demand, "Efterfrågan"))
-
-    if any(c in carriers_present for c in STACK_ORDER):
-        line_net = plt.Line2D([0], [0], color="black", linewidth=1.0, linestyle="--")
-        handles.append((line_net, "Last + nettoutförsel"))
 
     patches, labels = zip(*handles)
     fig.legend(patches, labels,
