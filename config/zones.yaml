@@ -5,15 +5,15 @@
 zones:
   SE-N:
     mbas: [SE1, SE2]
-    hydro_p_nom_mw: 8500
-    hydro_max_hours: 2700
+    hydro_p_nom_mw: 11500
+    hydro_max_hours: 2522
     hydro_soc_initial: 0.70   # ~70% fyllnadsgrad 1 jan (SE1+SE2)
     nuclear_p_nom_mw: 0
 
   SE-S:
     mbas: [SE3, SE4]
-    hydro_p_nom_mw: 7000
-    hydro_max_hours: 1500
+    hydro_p_nom_mw: 2000
+    hydro_max_hours: 1750
     hydro_soc_initial: 0.55   # ~55% fyllnadsgrad 1 jan (SE3+SE4 snitt)
     nuclear_p_nom_mw: 6900   # Forsmark 1-3 + Ringhals 3-4
 

@@ -31,10 +31,11 @@ python scripts/run_model.py --resolution 3 --output run01_description   # 3h, 20
 python scripts/run_model.py --resolution 3 --year 2024 --output run02_2024only
 ```
 
-**Run discipline:** always commit before starting a full simulation. Name the output directory in the commit message so results are traceable to code state:
+**Run discipline:** commit *after* a successful simulation, not before. This ensures only good runs are traced to code state. Always propose the commit message and wait for user approval before committing. Name the output directory in the commit message so results are traceable:
 ```bash
-git commit -m "Change X → next run: run02_fleet_factors"
 python scripts/run_model.py --resolution 3 --output run02_fleet_factors
+# verify results, then:
+git commit -m "Change X → ran: run02_fleet_factors"
 ```
 Results go to `results/<output>/` and are gitignored (large files). `network.nc` contains full PyPSA network including inflow timeseries — verify correct hydrology with `n.storage_units_t.inflow`.
 
