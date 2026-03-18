@@ -286,20 +286,30 @@ def build_thermal_profile() -> pd.DataFrame:
 # Marknadspriser
 # ---------------------------------------------------------------------------
 
-# Budzoner att läsa in — måste matcha PRICE_BZNS i fetch_ec.py
-PRICE_BZNS = ["DE-LU", "EE", "LT", "PL", "NL"]
+# Budzoner att läsa in — måste matcha PRICE_BZNS_EC + PRICE_BZNS_ENTSOE i fetch_ec.py
+PRICE_BZNS = ["DE-LU", "EE", "LT", "PL", "NL", "GB"]
 
 
-def _load_price_bzn(bzn: str) -> pd.Series:
-    """Laddar och sammanfogar råprisdata för en budzon (alla år)."""
+def _load_price_bzn(bzn: str, fallback_bzn: str | None = None) -> pd.Series:
+    """Laddar och sammanfogar råprisdata för en budzon (alla år).
+    Om filen saknas och fallback_bzn är satt används fallback-zonen istället.
+    """
+    files_missing = any(
+        not (RAW_DIR / f"price_{bzn}_{year}.parquet").exists()
+        for year in YEARS
+    )
+    if files_missing:
+        if fallback_bzn is not None:
+            print(f"  OBS: price_{bzn}_*.parquet saknas — använder {fallback_bzn} som proxy")
+            return _load_price_bzn(fallback_bzn)
+        raise FileNotFoundError(
+            f"Prisdata saknas för {bzn}.\n"
+            "Kör 'python scripts/fetch_ec.py' först."
+        )
+
     frames = []
     for year in YEARS:
         path = RAW_DIR / f"price_{bzn}_{year}.parquet"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Prisdata saknas: {path}\n"
-                "Kör 'python scripts/fetch_ec.py' först."
-            )
         df = pd.read_parquet(path)
         df.index = pd.to_datetime(df.index, utc=True)
         frames.append(df)
@@ -317,10 +327,13 @@ def build_market_prices() -> pd.DataFrame:
     Returnerar och sparar en DataFrame med en kolumn per budzon.
     Utdatafil: market_prices.parquet
     """
+    # Fallback-zoner om rådata saknas (t.ex. GB innan ENTSO-E-token aktiverats)
+    FALLBACKS = {"GB": "NL"}
+
     print("Bygger marknadspriser ...")
     result = {}
     for bzn in PRICE_BZNS:
-        s = _load_price_bzn(bzn)
+        s = _load_price_bzn(bzn, fallback_bzn=FALLBACKS.get(bzn))
         result[bzn] = s
         print(f"  {bzn:<8} {len(s)} timmar  medel={s.mean():.1f} EUR/MWh")
 

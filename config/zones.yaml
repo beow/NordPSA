@@ -55,16 +55,16 @@ market_connections:
   - [SE-S DE, SE-S,  600, DE-LU]
   - [DK DE,   DK,   3500, DE-LU]
   - [DK NL,   DK,    700, NL]
-  - [DK GB,   DK,   1400, NL]    # NL proxy; replace with GB when ENTSO-E token is activated
+  - [DK GB,   DK,   1400, GB]
   - [NO DE,   NO-S, 1400, DE-LU]
   - [NO NL,   NO-S,  700, NL]
-  - [NO GB,   NO-S, 1400, NL]    # NL proxy; replace with GB when ENTSO-E token is activated
+  - [NO GB,   NO-S, 1400, GB]
 
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
   - [NO-N, SE-N,  600]
-  - [SE-N, SE-S, 7300]
+  - [SE-N, SE-S, 5000]
   - [SE-N, FI,   1400]
   - [NO-N, NO-S, 1600]
   - [NO-S, SE-S, 3600]
