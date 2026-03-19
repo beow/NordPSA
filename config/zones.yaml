@@ -49,28 +49,28 @@ zones:
 # price_bzn: Energy Charts bidding zone code used as marginal cost signal
 # Positive flow = import (zone buys), negative flow = export (zone earns).
 market_connections:
-  - [FI EE,   FI,   1000, EE]
+  - [FI EE,   FI,   1016, EE]
   - [SE-S LT, SE-S,  700, LT]
   - [SE-S PL, SE-S,  600, PL]
-  - [SE-S DE, SE-S,  600, DE-LU]
-  - [DK DE,   DK,   3500, DE-LU]
+  - [SE-S DE, SE-S,  615, DE-LU]
+  - [DK DE,   DK,   3244, DE-LU]
   - [DK NL,   DK,    700, NL]
-  - [DK GB,   DK,   1400, GB]
+  - [DK GB,   DK,   1456, GB]
   - [NO DE,   NO-S, 1400, DE-LU]
-  - [NO NL,   NO-S,  700, NL]
-  - [NO GB,   NO-S, 1400, GB]
+  - [NO NL,   NO-S,  640, NL]
+  - [NO GB,   NO-S, 1449, GB]
 
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
-  - [NO-N, SE-N,  600]
-  - [SE-N, SE-S, 5000]
-  - [SE-N, FI,   1400]
-  - [NO-N, NO-S, 1600]
-  - [NO-S, SE-S, 3600]
-  - [NO-S, DK,   1700]
-  - [SE-S, DK,   2000]
-  - [SE-S, FI,   1200]
+  - [NO-N, SE-N,  1763]
+  - [SE-N, SE-S,  7610]
+  - [SE-N, FI,    1839]
+  - [NO-N, NO-S,  2716]
+  - [NO-S, SE-S,  1306]
+  - [NO-S, DK,    1681]
+  - [SE-S, DK,    1282]
+  - [SE-S, FI,    1200]
 
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
 # Sätt till 0 eller ta bort raden för att inaktivera.

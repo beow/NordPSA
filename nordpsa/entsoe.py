@@ -59,11 +59,16 @@ CURRENCY_TO_EUR: dict[str, float] = {
 
 class ENTSOEClient:
     def __init__(self, api_token: Optional[str] = None, base_url: str = ENTSOE_BASE_URL):
-        self.api_token = api_token or os.environ.get("ENTSOE_API_TOKEN", "")
+        # Stöder både ENTSOE_token (befintlig) och ENTSOE_API_TOKEN
+        self.api_token = (
+            api_token
+            or os.environ.get("ENTSOE_API_TOKEN", "")
+            or os.environ.get("ENTSOE_token", "")
+        )
         if not self.api_token:
             raise ValueError(
-                "ENTSO-E API-token saknas. Sätt miljövariabeln ENTSOE_API_TOKEN "
-                "eller skicka api_token= till konstruktorn."
+                "ENTSO-E API-token saknas. Sätt ENTSOE_token eller ENTSOE_API_TOKEN "
+                "i miljön, eller skicka api_token= till konstruktorn."
             )
         self.base_url = base_url
         self.sess = requests.Session()
@@ -111,6 +116,91 @@ class ENTSOEClient:
         start = pd.Timestamp(f"{year}-01-01 00:00", tz="UTC")
         end   = pd.Timestamp(f"{year}-12-31 23:00", tz="UTC")
         return self.fetch_day_ahead_price(bzn, start, end)
+
+    def fetch_cross_border_flows(
+        self,
+        out_domain: str,
+        in_domain: str,
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+        sleep_s: float = 0.5,
+    ) -> pd.Series:
+        """
+        Hämtar timvisa fysiska cross-border flöden (A11) från out_domain → in_domain.
+        Positiva värden = flöde i riktningen out → in.
+
+        Delar automatiskt upp i årsblock om perioden är längre än 1 år.
+        """
+        out_eic = EIC_CODES.get(out_domain, out_domain)
+        in_eic  = EIC_CODES.get(in_domain,  in_domain)
+
+        # Dela upp i årsblock (ENTSO-E tillåter max 1 år per anrop)
+        chunks = []
+        t = start
+        while t <= end:
+            t_end = min(pd.Timestamp(f"{t.year}-12-31 23:00", tz="UTC"), end)
+            params = {
+                "securityToken": self.api_token,
+                "documentType":  "A11",
+                "in_Domain":     in_eic,
+                "out_Domain":    out_eic,
+                "periodStart":   t.strftime("%Y%m%d%H%M"),
+                "periodEnd":     (t_end + pd.Timedelta(hours=1)).strftime("%Y%m%d%H%M"),
+            }
+            r = self.sess.get(self.base_url, params=params, timeout=60)
+            try:
+                r.raise_for_status()
+            except requests.HTTPError:
+                raise requests.HTTPError(
+                    f"{r.status_code} {r.reason}\nURL: {r.url}\nBody: {r.text[:500]}",
+                    response=r,
+                ) from None
+            chunk = self._parse_xml_quantity(r.text)
+            if not chunk.empty:
+                chunks.append(chunk)
+            t = pd.Timestamp(f"{t.year + 1}-01-01 00:00", tz="UTC")
+            if t <= end and sleep_s > 0:
+                time.sleep(sleep_s)
+
+        if not chunks:
+            return pd.Series(dtype=float, name=f"{out_domain}→{in_domain}")
+        s = pd.concat(chunks).sort_index()
+        s = s[~s.index.duplicated(keep="first")]
+        s.name = f"{out_domain}→{in_domain}"
+        return s
+
+    def _parse_xml_quantity(self, xml_text: str) -> pd.Series:
+        """Parsar ENTSO-E XML och returnerar timvis MW-flöde (quantity)."""
+        root = ET.fromstring(xml_text)
+        ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+        def t(name: str) -> str:
+            return "{%s}%s" % (ns, name) if ns else name
+
+        records: dict[pd.Timestamp, float] = {}
+        for ts in root.findall(".//" + t("TimeSeries")):
+            for period in ts.findall(t("Period")):
+                interval   = period.find(t("timeInterval"))
+                start_str  = interval.find(t("start")).text       # type: ignore[union-attr]
+                resolution = period.find(t("resolution")).text     # type: ignore[union-attr]
+                freq_min   = 30 if "PT30M" in resolution else 60
+
+                start_dt = pd.Timestamp(start_str)
+                for point in period.findall(t("Point")):
+                    pos      = int(point.find(t("position")).text)   # type: ignore[union-attr]
+                    qty_el   = point.find(t("quantity"))
+                    if qty_el is None:
+                        continue
+                    qty      = float(qty_el.text)
+                    ts_pt    = start_dt + pd.Timedelta(minutes=freq_min * (pos - 1))
+                    records[ts_pt] = qty
+
+        s = pd.Series(records).sort_index()
+        s.index = pd.to_datetime(s.index, utc=True)
+        if len(s) > 1:
+            dt_min = (s.index[1] - s.index[0]).total_seconds() / 60
+            if dt_min < 60:
+                s = s.resample("h").mean()
+        return s
 
     def _parse_xml(self, xml_text: str) -> pd.Series:
         root = ET.fromstring(xml_text)
