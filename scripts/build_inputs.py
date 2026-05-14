@@ -53,7 +53,9 @@ def load_raw(series: str, zone: str) -> pd.DataFrame:
         df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
         frames.append(df)
     df = pd.concat(frames, ignore_index=True).sort_values("timestampUTC")
-    return df.set_index("timestampUTC")
+    df = df.set_index("timestampUTC")
+    df = df[~df.index.duplicated(keep="first")]
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,7 @@ def _load_dk_ec() -> pd.DataFrame:
         frames.append(pd.read_parquet(path))
     df = pd.concat(frames).sort_index()
     df.index = pd.to_datetime(df.index, utc=True)
+    df = df[~df.index.duplicated(keep="first")]
     return df
 
 
@@ -315,6 +318,7 @@ def _load_price_bzn(bzn: str, fallback_bzn: str | None = None) -> pd.Series:
         frames.append(df)
 
     s = pd.concat(frames).sort_index()["price_eur_mwh"]
+    s = s[~s.index.duplicated(keep="first")]
     s = s.loc[PERIOD_START:PERIOD_END]
     # Fyll ev. glapp med forward-fill (max 2h) och sedan medelvärde
     s = s.resample("h").mean().ffill(limit=2).fillna(s.mean())

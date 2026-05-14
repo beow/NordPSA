@@ -87,8 +87,9 @@ class EnergyChartsClient:
         if "unix_seconds" not in data or "production_types" not in data:
             raise ValueError(f"Oväntat API-svar: {list(data.keys())}")
 
-        # Tidsstämplar — unix_seconds är UTC epoch
-        timestamps = pd.to_datetime(data["unix_seconds"], unit="s", utc=True)
+        # Tidsstämplar — unix_seconds är UTC epoch.
+        # as_unit("ns") krävs för korrekt parquet-serialisering med pyarrow.
+        timestamps = pd.to_datetime(data["unix_seconds"], unit="s", utc=True).as_unit("ns")
 
         cols = {}
         for pt in data["production_types"]:
@@ -140,7 +141,7 @@ class EnergyChartsClient:
             ) from None
 
         data = r.json()
-        timestamps = pd.to_datetime(data["unix_seconds"], unit="s", utc=True)
+        timestamps = pd.to_datetime(data["unix_seconds"], unit="s", utc=True).as_unit("ns")
         prices = pd.Series(data["price"], index=timestamps, name="price_eur_mwh",
                            dtype=float)
 
