@@ -21,7 +21,12 @@ pd.options.future.infer_string = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nordpsa.network import build_network, hydro_soc_initial_constraint
+from nordpsa.hydro import load_annual_hydro_production
+from nordpsa.network import (
+    build_network,
+    hydro_annual_production_constraints,
+    hydro_soc_initial_constraint,
+)
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
@@ -96,7 +101,8 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
 # Lösning och sparning
 # ---------------------------------------------------------------------------
 
-def solve(n, cfg: dict, log_path: Path | None = None) -> bool:
+def solve(n, cfg: dict, log_path: Path | None = None,
+          restricted_yearly_hydro: bool = False) -> bool:
     scfg    = cfg["solver"]
     solver  = scfg["name"]
     options = {k: v for k, v in scfg.items() if k != "name"}
@@ -104,7 +110,17 @@ def solve(n, cfg: dict, log_path: Path | None = None) -> bool:
     if log_path is not None:
         options["log_file"] = str(log_path)
 
-    extra_func = hydro_soc_initial_constraint(cfg)
+    callbacks = [hydro_soc_initial_constraint(cfg)]
+    if restricted_yearly_hydro:
+        hydro_zones = [z for z, zc in cfg["zones"].items()
+                       if zc.get("hydro_p_nom_mw", 0) > 0]
+        annual_prod = load_annual_hydro_production(hydro_zones)
+        callbacks.append(hydro_annual_production_constraints(cfg, annual_prod))
+        print(f"  → årsvis hydrocap aktiv för: {', '.join(annual_prod)}")
+
+    def extra_func(n, snapshots):
+        for cb in callbacks:
+            cb(n, snapshots)
 
     print(f"Löser med {solver} ({len(n.snapshots)} tidssteg, "
           f"{len(n.generators) + len(n.storage_units)} generatorer) ...")
@@ -157,6 +173,10 @@ def main() -> None:
                         help="Nollställ additional_load_mw — använd faktisk last utan tillägg")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
+    parser.add_argument("--normalized-inflow-profiles", action="store_true",
+                        help="Normera inflödesprofilen per år mot faktisk vattenkraftproduktion")
+    parser.add_argument("--restricted-yearly-hydro", action="store_true",
+                        help="LP-caps: begränsa hydrodispatch per zon och år till faktisk nivå")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -171,8 +191,10 @@ def main() -> None:
                 cfg["costs"][tech]["extendable"] = False
 
     flags = []
-    if args.no_extra_load: flags.append("no-extra-load")
-    if args.no_expansion:  flags.append("no-expansion")
+    if args.no_extra_load:              flags.append("no-extra-load")
+    if args.no_expansion:               flags.append("no-expansion")
+    if args.normalized_inflow_profiles: flags.append("normalized-inflow")
+    if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -181,7 +203,8 @@ def main() -> None:
     inputs    = resample_inputs(inputs, snapshots, res)
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
-    n = build_network(cfg, snapshots, **inputs)
+    n = build_network(cfg, snapshots, **inputs,
+                      normalize_inflow=args.normalized_inflow_profiles)
 
     if args.output:
         label = args.output
@@ -195,7 +218,8 @@ def main() -> None:
     (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
 
     n.sanitize()
-    ok = solve(n, cfg, log_path=log_path)
+    ok = solve(n, cfg, log_path=log_path,
+               restricted_yearly_hydro=args.restricted_yearly_hydro)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")
         sys.exit(1)

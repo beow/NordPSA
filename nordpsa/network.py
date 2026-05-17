@@ -9,14 +9,16 @@ Nätverksstruktur:
   - Load shedding (slack) per zon med högt pris
 """
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Dict
+
+import xarray as xr
 
 import numpy as np
 import pandas as pd
 import pypsa
 import yaml
 
-from nordpsa.hydro import inflow_timeseries
+from nordpsa.hydro import compute_annual_scales, inflow_timeseries
 
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
@@ -45,15 +47,16 @@ def _annualized_cost(overnight_eur_per_w: float, lifetime: int,
 
 
 def build_network(
-    cfg:              dict,
-    snapshots:        pd.DatetimeIndex,
-    load:             pd.DataFrame,
-    vre_profiles:     pd.DataFrame,
-    vre_noms:         dict,
-    nuclear_profile:  pd.DataFrame,
-    thermal_profile:  pd.DataFrame,
-    hydro_params:     dict,
-    market_prices:    Dict[str, pd.Series],
+    cfg:                     dict,
+    snapshots:               pd.DatetimeIndex,
+    load:                    pd.DataFrame,
+    vre_profiles:            pd.DataFrame,
+    vre_noms:                dict,
+    nuclear_profile:         pd.DataFrame,
+    thermal_profile:         pd.DataFrame,
+    hydro_params:            dict,
+    market_prices:           Dict[str, pd.Series],
+    normalize_inflow:        bool = False,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -91,7 +94,7 @@ def build_network(
     _add_loads(n, load)
     _add_slack(n, cfg)
     _add_thermal(n, thermal_profile)
-    _add_hydro(n, cfg, hydro_params, snapshots, ccfg)
+    _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
@@ -171,11 +174,12 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame) -> None:
 
 
 def _add_hydro(
-    n:            pypsa.Network,
-    cfg:          dict,
-    hydro_params: dict,
-    snapshots:    pd.DatetimeIndex,
-    ccfg:         dict,
+    n:                pypsa.Network,
+    cfg:              dict,
+    hydro_params:     dict,
+    snapshots:        pd.DatetimeIndex,
+    ccfg:             dict,
+    normalize_inflow: bool = False,
 ) -> None:
     mc = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -184,7 +188,9 @@ def _add_hydro(
         if p_nom == 0 or zone not in hydro_params:
             continue
 
-        inflow = inflow_timeseries(hydro_params[zone], snapshots)
+        params = hydro_params[zone]
+        annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
+        inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
 
         n.add(
             "StorageUnit", f"{zone} hydro",
@@ -379,5 +385,48 @@ def hydro_soc_initial_constraint(cfg: dict):
                 soc.sel(name=su_name, snapshot=t0) == target_mwh,
                 name=f"soc_initial-{su_name}",
             )
+
+    return _extra_functionality
+
+
+def hydro_annual_production_constraints(
+    cfg:               dict,
+    annual_production: Dict[str, Dict[int, float]],
+) -> Callable:
+    """Returnerar en extra_functionality-callback som lägger till LP-caps:
+
+    sum(p_dispatch[zone hydro, t] * dt_h  for t in year)  <=  actual_MWh[zone][year]
+
+    Förhindrar att optimeraren omfördelar vatten mellan år.
+    Används av --restricted_yearly_hydro.
+    """
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not annual_production:
+            return
+        m = n.model
+        p = m.variables["StorageUnit-p_dispatch"]
+        weights = n.snapshot_weightings["generators"]
+
+        for zone, year_limits in annual_production.items():
+            su_name = f"{zone} hydro"
+            if su_name not in n.storage_units.index:
+                continue
+            for year, limit_mwh in year_limits.items():
+                mask = snapshots.year == year
+                if not mask.any():
+                    continue
+                year_snaps = snapshots[mask]
+                # Vikter som DataArray (1D snapshot) — xarray broadcastar mot
+                # linopy-variabelns 2D (snapshot × name) utan fel
+                w_da = xr.DataArray(
+                    weights.loc[year_snaps].values,
+                    dims=["snapshot"],
+                    coords={"snapshot": year_snaps},
+                )
+                dispatch = p.sel(name=su_name, snapshot=year_snaps)
+                m.add_constraints(
+                    (dispatch * w_da).sum() <= limit_mwh,
+                    name=f"annual_hydro_cap-{su_name}-{year}",
+                )
 
     return _extra_functionality
