@@ -177,6 +177,8 @@ def main() -> None:
                         help="Normera inflödesprofilen per år mot faktisk vattenkraftproduktion")
     parser.add_argument("--restricted-yearly-hydro", action="store_true",
                         help="LP-caps: begränsa hydrodispatch per zon och år till faktisk nivå")
+    parser.add_argument("--no-market", action="store_true",
+                        help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -190,11 +192,15 @@ def main() -> None:
             if isinstance(cfg["costs"][tech], dict):
                 cfg["costs"][tech]["extendable"] = False
 
+    if args.no_market:
+        cfg["market_connections"] = []
+
     flags = []
     if args.no_extra_load:              flags.append("no-extra-load")
     if args.no_expansion:               flags.append("no-expansion")
     if args.normalized_inflow_profiles: flags.append("normalized-inflow")
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
+    if args.no_market:                  flags.append("no-market")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
