@@ -57,6 +57,8 @@ def build_network(
     hydro_params:            dict,
     market_prices:           Dict[str, pd.Series],
     normalize_inflow:        bool = False,
+    cyclic_soc:              bool = True,
+    soc_initial_override:    dict | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -94,7 +96,8 @@ def build_network(
     _add_loads(n, load)
     _add_slack(n, cfg)
     _add_thermal(n, thermal_profile)
-    _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow)
+    _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow,
+               cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
@@ -174,12 +177,14 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame) -> None:
 
 
 def _add_hydro(
-    n:                pypsa.Network,
-    cfg:              dict,
-    hydro_params:     dict,
-    snapshots:        pd.DatetimeIndex,
-    ccfg:             dict,
-    normalize_inflow: bool = False,
+    n:                    pypsa.Network,
+    cfg:                  dict,
+    hydro_params:         dict,
+    snapshots:            pd.DatetimeIndex,
+    ccfg:                 dict,
+    normalize_inflow:     bool = False,
+    cyclic_soc:           bool = True,
+    soc_initial_override: dict | None = None,
 ) -> None:
     mc = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -192,6 +197,14 @@ def _add_hydro(
         annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
         inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
 
+        if cyclic_soc:
+            soc_init = 0.0  # ignoreras när cyclic=True
+        elif soc_initial_override and zone in soc_initial_override:
+            soc_init = soc_initial_override[zone]
+        else:
+            frac = zcfg.get("hydro_soc_initial", 0.5)
+            soc_init = frac * p_nom * max_h
+
         n.add(
             "StorageUnit", f"{zone} hydro",
             bus=zone,
@@ -199,7 +212,8 @@ def _add_hydro(
             p_nom=p_nom,
             max_hours=max_h,
             inflow=inflow,
-            cyclic_state_of_charge=True,
+            cyclic_state_of_charge=cyclic_soc,
+            state_of_charge_initial=soc_init,
             spill_cost=0.0,        # tillåt fri spill vid reservoardumpning
             p_min_pu=0.0,          # förbjud pumpning (ej pumpad-lagringshydro)
             efficiency_dispatch=1.0,
@@ -386,6 +400,33 @@ def hydro_soc_initial_constraint(cfg: dict):
                 name=f"soc_initial-{su_name}",
             )
 
+    return _extra_functionality
+
+
+def hydro_terminal_value(cfg: dict, lambda_per_zone: Dict[str, float]):
+    """Returnerar en extra_functionality-callback som lägger till terminalvärde.
+
+    Lägger till  -λ × SOC[T]  i LP-målfunktionen per hydro-zon.
+    Belönar modellen för att hålla vatten vid fönstrets sista tidssteg,
+    vilket ger ett realistiskt vattenvärde i rullande horisont-optimering.
+
+    lambda_per_zone: {zone: EUR/MWh} — typiskt observerat marknadspris.
+    """
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        t_last = snapshots[-1]
+        for zone in cfg["zones"]:
+            lam = lambda_per_zone.get(zone, 0.0)
+            if lam <= 0.0:
+                continue
+            su_name = f"{zone} hydro"
+            if su_name not in n.storage_units.index:
+                continue
+            # Addera belöningsterm: hämta befintligt mål, lägg till -λ×SOC[T], sätt om
+            term    = -lam * soc.sel(name=su_name, snapshot=t_last)
+            new_obj = m.objective.expression + term
+            m.add_objective(new_obj, overwrite=True)
     return _extra_functionality
 
 

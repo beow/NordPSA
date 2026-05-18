@@ -26,6 +26,7 @@ from nordpsa.network import (
     build_network,
     hydro_annual_production_constraints,
     hydro_soc_initial_constraint,
+    hydro_terminal_value,
 )
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
@@ -157,6 +158,145 @@ def save_results(n, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Rullande horisont
+# ---------------------------------------------------------------------------
+
+def slice_inputs(inputs: dict, snapshots: pd.DatetimeIndex) -> dict:
+    """Skär alla tidsserier i inputs till givna snapshots."""
+    out = {}
+    for key in ("load", "vre_profiles", "nuclear_profile", "thermal_profile"):
+        out[key] = inputs[key].reindex(snapshots)
+    out["market_prices"] = {
+        bzn: s.reindex(snapshots) for bzn, s in inputs["market_prices"].items()
+    }
+    out["vre_noms"]     = inputs["vre_noms"]
+    out["hydro_params"] = inputs["hydro_params"]
+    return out
+
+
+def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int):
+    """Delar upp snapshots i sekventiella fönster av window_steps tidssteg."""
+    n = len(snapshots)
+    for s in range(0, n, window_steps):
+        yield snapshots[s : min(s + window_steps, n)]
+
+
+def get_terminal_lambdas(
+    cfg:             dict,
+    market_prices:   dict,
+    t_last:          pd.Timestamp,
+    lookahead_steps: int,
+) -> dict:
+    """λ per hydro-zon = framåtriktat medelpris av DE-LU nästa fönster."""
+    de_lu = market_prices.get("DE-LU")
+    if de_lu is None:
+        lam = 60.0
+    else:
+        idx   = de_lu.index.get_indexer([t_last], method="nearest")[0]
+        ahead = de_lu.iloc[idx : idx + lookahead_steps]
+        lam   = float(ahead.mean()) if len(ahead) > 0 else float(de_lu.mean())
+    return {
+        zone: lam
+        for zone, zcfg in cfg["zones"].items()
+        if zcfg.get("hydro_p_nom_mw", 0) > 0
+    }
+
+
+def save_rolling_results(results: dict, label: str) -> None:
+    out = RESULTS_DIR / label
+    out.mkdir(parents=True, exist_ok=True)
+    results["gen"].to_csv(out / "dispatch_generators.csv")
+    results["hydro_p"].to_csv(out / "dispatch_hydro.csv")
+    results["soc"].to_csv(out / "hydro_soc.csv")
+    results["spill"].to_csv(out / "hydro_spill.csv")
+    results["flows"].to_csv(out / "flows.csv")
+    results["prices"].to_csv(out / "prices.csv")
+    print(f"  → resultat sparade i {out}/")
+
+
+def rolling_horizon_solve(
+    cfg:        dict,
+    inputs:     dict,
+    snapshots:  pd.DatetimeIndex,
+    args,
+    resolution: int,
+    label:      str,
+) -> bool:
+    steps_per_week = (7 * 24) // resolution
+    window_steps   = args.rolling_weeks * steps_per_week
+    windows        = list(rolling_windows(snapshots, window_steps))
+    n_win          = len(windows)
+    scfg           = cfg["solver"]
+    solver_opts    = {k: v for k, v in scfg.items() if k != "name"}
+
+    print(f"Rullande horisont: {args.rolling_weeks} veckor/fönster"
+          f" ({window_steps} tidssteg), {n_win} fönster totalt")
+
+    # Initial SOC från zones.yaml
+    soc_carry: dict = {}
+    for zone, zcfg in cfg["zones"].items():
+        p_nom = zcfg.get("hydro_p_nom_mw", 0)
+        max_h = zcfg.get("hydro_max_hours", 0)
+        if p_nom > 0:
+            frac = zcfg.get("hydro_soc_initial", 0.5)
+            soc_carry[zone] = frac * p_nom * max_h
+
+    out_dir = RESULTS_DIR / label
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    all_dfs: dict = {k: [] for k in ("prices", "gen", "hydro_p", "soc", "spill", "flows")}
+
+    for i, win_snaps in enumerate(windows):
+        print(f"\nFönster {i+1}/{n_win}: {win_snaps[0].date()} – {win_snaps[-1].date()}"
+              f"  ({len(win_snaps)} tidssteg)")
+
+        win_inputs = slice_inputs(inputs, win_snaps)
+        n = build_network(
+            cfg, win_snaps, **win_inputs,
+            normalize_inflow=args.normalized_inflow_profiles,
+            cyclic_soc=False,
+            soc_initial_override=soc_carry,
+        )
+
+        lam_per_zone = get_terminal_lambdas(
+            cfg, inputs["market_prices"], win_snaps[-1], window_steps
+        )
+        tv_cb = hydro_terminal_value(cfg, lam_per_zone)
+
+        def extra_func(n, snaps, _cb=tv_cb):
+            _cb(n, snaps)
+
+        log_path = out_dir / f"highs_w{i+1:02d}.log"
+        status, condition = n.optimize(
+            solver_name=scfg["name"],
+            solver_options=dict(solver_opts, log_file=str(log_path)),
+            extra_functionality=extra_func,
+        )
+        print(f"  Status: {status} / {condition}")
+
+        if status != "ok":
+            print("  Lösning misslyckades — avbryter")
+            return False
+
+        # SOC carry-over till nästa fönster
+        soc_t = n.storage_units_t.state_of_charge
+        for zone in list(soc_carry):
+            su = f"{zone} hydro"
+            if su in soc_t.columns:
+                soc_carry[zone] = float(soc_t[su].iloc[-1])
+
+        all_dfs["prices"].append(n.buses_t.marginal_price)
+        all_dfs["gen"].append(n.generators_t.p)
+        all_dfs["hydro_p"].append(n.storage_units_t.p)
+        all_dfs["soc"].append(soc_t)
+        all_dfs["spill"].append(n.storage_units_t.spill)
+        all_dfs["flows"].append(n.links_t.p0)
+
+    save_rolling_results({k: pd.concat(v) for k, v in all_dfs.items()}, label)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -179,6 +319,10 @@ def main() -> None:
                         help="LP-caps: begränsa hydrodispatch per zon och år till faktisk nivå")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
+    parser.add_argument("--rolling-horizon", action="store_true",
+                        help="Lös med rullande horisont + terminalvärde (fixar konstant vattenvärde)")
+    parser.add_argument("--rolling-weeks", type=int, default=4,
+                        help="Fönsterstorlek i veckor för rullande horisont (standard: 4)")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -201,6 +345,7 @@ def main() -> None:
     if args.normalized_inflow_profiles: flags.append("normalized-inflow")
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
+    if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -208,16 +353,24 @@ def main() -> None:
     snapshots = make_snapshots(cfg, res, args.year)
     inputs    = resample_inputs(inputs, snapshots, res)
 
-    print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
-    n = build_network(cfg, snapshots, **inputs,
-                      normalize_inflow=args.normalized_inflow_profiles)
-
     if args.output:
         label = args.output
     else:
         label = f"res{res}h_{'_'.join(str(s.year) for s in [snapshots[0], snapshots[-1]])}"
         if args.year:
             label = f"res{res}h_{args.year}"
+
+    if args.rolling_horizon:
+        ok = rolling_horizon_solve(cfg, inputs, snapshots, args, res, label)
+        if not ok:
+            print("Rullande horisont misslyckades")
+            sys.exit(1)
+        print("Klart!")
+        return
+
+    print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
+    n = build_network(cfg, snapshots, **inputs,
+                      normalize_inflow=args.normalized_inflow_profiles)
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
