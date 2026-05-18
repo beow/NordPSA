@@ -292,6 +292,19 @@ def build_thermal_profile() -> pd.DataFrame:
 # Budzoner att läsa in — måste matcha PRICE_BZNS_EC + PRICE_BZNS_ENTSOE i fetch_ec.py
 PRICE_BZNS = ["DE-LU", "EE", "LT", "PL", "NL", "GB"]
 
+# NordPSA-zon → ingående MBAs
+ZONE_MBAS = {
+    "SE-N": ["SE1", "SE2"],
+    "SE-S": ["SE3", "SE4"],
+    "NO-N": ["NO3", "NO4"],
+    "NO-S": ["NO1", "NO2", "NO5"],
+    "DK":   ["DK1", "DK2"],
+    "FI":   ["FI"],
+}
+
+# Statiska DK-vikter (eSett saknar MBA-uppdelad DK-last)
+DK_LOAD_WEIGHTS = {"DK1": 0.60, "DK2": 0.40}
+
 
 def _load_price_bzn(bzn: str, fallback_bzn: str | None = None) -> pd.Series:
     """Laddar och sammanfogar råprisdata för en budzon (alla år).
@@ -325,6 +338,96 @@ def _load_price_bzn(bzn: str, fallback_bzn: str | None = None) -> pd.Series:
     return s
 
 
+def _load_mba_price(mba: str) -> pd.Series:
+    """Laddar och sammanfogar timsprisdata för en nordisk MBA."""
+    frames = []
+    for year in YEARS:
+        path = RAW_DIR / f"price_mba_{mba}_{year}.parquet"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"MBA-prisdata saknas: {path}\n"
+                "Kör 'python scripts/fetch_ec.py' först."
+            )
+        df = pd.read_parquet(path)
+        df.index = pd.to_datetime(df.index, utc=True)
+        frames.append(df)
+    s = pd.concat(frames).sort_index()["price_eur_mwh"]
+    s = s[~s.index.duplicated(keep="first")]
+    s = s.loc[PERIOD_START:PERIOD_END]
+    return s.resample("h").mean().ffill(limit=2).fillna(s.mean())
+
+
+def _load_mba_consumption(mba: str) -> pd.Series:
+    """Laddar eSett per-MBA konsumtionsdata (lastvolym för viktning)."""
+    frames = []
+    for year in YEARS:
+        path = RAW_DIR / f"consumption_mba_{mba}_{year}.parquet"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"MBA-konsumtionsdata saknas: {path}\n"
+                "Kör 'python scripts/fetch_esett.py' först."
+            )
+        df = pd.read_parquet(path)
+        df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
+        frames.append(df)
+    df = pd.concat(frames, ignore_index=True).sort_values("timestampUTC")
+    df = df.set_index("timestampUTC")
+    df = df[~df.index.duplicated(keep="first")]
+    s = df["total"].abs()
+    s = s.loc[PERIOD_START:PERIOD_END]
+    return s.resample("h").mean().ffill(limit=2).fillna(s.mean())
+
+
+def build_zone_prices() -> pd.DataFrame:
+    """
+    Timsvisa zonepriser för alla 6 NordPSA-zoner som lastvolymvägda medelvärden
+    av MBA-priserna inom varje zon.
+    DK: statiska vikter (DK1=60%, DK2=40%) — eSett saknar MBA-uppdelad DK-last.
+    """
+    print("Bygger zonpriser (lastvolymvägda MBA-medelvärden) ...")
+    result = {}
+    for zone, mbas in ZONE_MBAS.items():
+        prices, loads = {}, {}
+        for mba in mbas:
+            try:
+                prices[mba] = _load_mba_price(mba)
+            except FileNotFoundError as e:
+                print(f"  OBS: {e}")
+                continue
+            if zone == "DK":
+                loads[mba] = DK_LOAD_WEIGHTS.get(mba, 1.0 / len(mbas))
+            else:
+                try:
+                    loads[mba] = _load_mba_consumption(mba)
+                except FileNotFoundError as e:
+                    print(f"  OBS: {e} — faller tillbaka på enkelt medelvärde")
+
+        if not prices:
+            print(f"  {zone}: inga prisdata — hoppar över")
+            continue
+
+        valid = list(prices.keys())
+        price_df = pd.DataFrame({mba: prices[mba] for mba in valid})
+
+        if zone == "DK":
+            w = [DK_LOAD_WEIGHTS.get(mba, 1.0 / len(valid)) for mba in valid]
+            w_sum = sum(w)
+            zone_price = sum(price_df[mba] * (wi / w_sum) for mba, wi in zip(valid, w))
+        elif all(isinstance(loads.get(mba), pd.Series) for mba in valid):
+            w_df = pd.DataFrame({mba: loads[mba] for mba in valid})
+            w_df = w_df.reindex(price_df.index).ffill().fillna(0).clip(lower=0)
+            total = w_df.sum(axis=1).replace(0, np.nan)
+            zone_price = (price_df * w_df).sum(axis=1) / total
+            zone_price = zone_price.fillna(price_df.mean(axis=1))
+        else:
+            zone_price = price_df.mean(axis=1)
+
+        result[zone] = zone_price
+        print(f"  {zone} ({'+'.join(valid)}): medel={zone_price.mean():.1f} EUR/MWh")
+
+    return pd.DataFrame(result)
+
+
 def build_market_prices() -> pd.DataFrame:
     """
     Sammanfogar råprisdata för alla budzoner 2023-2025.
@@ -340,6 +443,10 @@ def build_market_prices() -> pd.DataFrame:
         s = _load_price_bzn(bzn, fallback_bzn=FALLBACKS.get(bzn))
         result[bzn] = s
         print(f"  {bzn:<8} {len(s)} timmar  medel={s.mean():.1f} EUR/MWh")
+
+    zone_df = build_zone_prices()
+    for zone in zone_df.columns:
+        result[zone] = zone_df[zone]
 
     out = pd.DataFrame(result)
     out.index.name = "time"

@@ -31,15 +31,15 @@ EIC_CODES: dict[str, str] = {
     "SE3": "10Y1001A1001A46L",
     "SE4": "10Y1001A1001A47J",
     # Norska budzoner
-    "NO1": "10YNO_1________2",
-    "NO2": "10YNO_2________T",
-    "NO3": "10YNO_3________J",
-    "NO4": "10YNO_4________9",
+    "NO1": "10YNO-1--------2",
+    "NO2": "10YNO-2--------T",
+    "NO3": "10YNO-3--------J",
+    "NO4": "10YNO-4--------9",
     "NO5": "10Y1001A1001A48H",
     # Övriga nordiska
     "DK1": "10YDK-1--------W",
     "DK2": "10YDK-2--------M",
-    "FI":  "10YFI_1________U",
+    "FI":  "10YFI-1--------U",
     # Kontinentala grannar
     "DE-LU": "10Y1001A1001A83F",
     "NL":    "10YNL----------L",

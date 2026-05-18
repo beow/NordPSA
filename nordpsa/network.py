@@ -91,13 +91,16 @@ def build_network(
     fom   = ccfg["fom_fraction"]
     n_years = len(snapshots) * dt_h / 8760.0
 
+    zone_prices = {z: market_prices[z] for z in cfg["zones"] if z in market_prices}
+
     _add_buses(n, cfg)
     _add_links(n, cfg)
     _add_loads(n, load)
     _add_slack(n, cfg)
     _add_thermal(n, thermal_profile)
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow,
-               cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override)
+               cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
+               zone_prices=zone_prices)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
@@ -185,8 +188,9 @@ def _add_hydro(
     normalize_inflow:     bool = False,
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
+    zone_prices:          dict | None = None,
 ) -> None:
-    mc = ccfg["hydro"]["vom_eur_per_mwh"]
+    mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
         p_nom = zcfg.get("hydro_p_nom_mw", 0)
         max_h = zcfg.get("hydro_max_hours", 0)
@@ -204,6 +208,11 @@ def _add_hydro(
         else:
             frac = zcfg.get("hydro_soc_initial", 0.5)
             soc_init = frac * p_nom * max_h
+
+        if zone_prices and zone in zone_prices:
+            mc = zone_prices[zone].reindex(snapshots).ffill().clip(lower=mc_default)
+        else:
+            mc = mc_default
 
         n.add(
             "StorageUnit", f"{zone} hydro",

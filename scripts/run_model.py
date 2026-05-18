@@ -103,7 +103,8 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
 # ---------------------------------------------------------------------------
 
 def solve(n, cfg: dict, log_path: Path | None = None,
-          restricted_yearly_hydro: bool = False) -> bool:
+          restricted_yearly_hydro: bool = False,
+          lambda_per_zone: dict | None = None) -> bool:
     scfg    = cfg["solver"]
     solver  = scfg["name"]
     options = {k: v for k, v in scfg.items() if k != "name"}
@@ -118,6 +119,10 @@ def solve(n, cfg: dict, log_path: Path | None = None,
         annual_prod = load_annual_hydro_production(hydro_zones)
         callbacks.append(hydro_annual_production_constraints(cfg, annual_prod))
         print(f"  → årsvis hydrocap aktiv för: {', '.join(annual_prod)}")
+    if lambda_per_zone:
+        callbacks.append(hydro_terminal_value(cfg, lambda_per_zone))
+        for zone, lam in lambda_per_zone.items():
+            print(f"  → terminalvärde {zone}: λ={lam:.1f} EUR/MWh")
 
     def extra_func(n, snapshots):
         for cb in callbacks:
@@ -309,8 +314,8 @@ def main() -> None:
     parser.add_argument("--output", default=None,
                         help="Resultatmapp under results/ (t.ex. 'run_v2_spring_flood'). "
                              "Standard: automatiskt namn baserat på upplösning och år.")
-    parser.add_argument("--no-extra-load", action="store_true",
-                        help="Nollställ additional_load_mw — använd faktisk last utan tillägg")
+    parser.add_argument("--extra-load", type=float, default=0.0,
+                        help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
     parser.add_argument("--normalized-inflow-profiles", action="store_true",
@@ -323,13 +328,18 @@ def main() -> None:
                         help="Lös med rullande horisont + terminalvärde (fixar konstant vattenvärde)")
     parser.add_argument("--rolling-weeks", type=int, default=4,
                         help="Fönsterstorlek i veckor för rullande horisont (standard: 4)")
+    parser.add_argument("--hydro-terminal-value", action="store_true",
+                        help="Vattenvärde via terminalvillkor -λ*SOC[T] (λ=medel zonpris) istf cyklisk SOC")
     args = parser.parse_args()
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
 
-    if args.no_extra_load:
-        cfg["additional_load_mw"] = {}
+    # Extra last: nollställ alltid config-värden; applicera --extra-load om givet
+    cfg["additional_load_mw"] = {}
+    if args.extra_load:
+        for z in cfg["zones"]:
+            cfg["additional_load_mw"][z] = args.extra_load
 
     if args.no_expansion:
         for tech in cfg.get("costs", {}):
@@ -340,11 +350,12 @@ def main() -> None:
         cfg["market_connections"] = []
 
     flags = []
-    if args.no_extra_load:              flags.append("no-extra-load")
+    if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     if args.no_expansion:               flags.append("no-expansion")
     if args.normalized_inflow_profiles: flags.append("normalized-inflow")
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
+    if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
@@ -368,9 +379,21 @@ def main() -> None:
         print("Klart!")
         return
 
+    cyclic_soc = not args.hydro_terminal_value
+
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
-                      normalize_inflow=args.normalized_inflow_profiles)
+                      normalize_inflow=args.normalized_inflow_profiles,
+                      cyclic_soc=cyclic_soc)
+
+    # Terminalvärde: λ per hydro-zon = medel zonpris över hela perioden
+    lambda_per_zone = None
+    if args.hydro_terminal_value:
+        lambda_per_zone = {
+            zone: float(inputs["market_prices"][zone].mean())
+            for zone, zcfg in cfg["zones"].items()
+            if zcfg.get("hydro_p_nom_mw", 0) > 0 and zone in inputs["market_prices"]
+        }
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
@@ -378,7 +401,8 @@ def main() -> None:
 
     n.sanitize()
     ok = solve(n, cfg, log_path=log_path,
-               restricted_yearly_hydro=args.restricted_yearly_hydro)
+               restricted_yearly_hydro=args.restricted_yearly_hydro,
+               lambda_per_zone=lambda_per_zone)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")
         sys.exit(1)

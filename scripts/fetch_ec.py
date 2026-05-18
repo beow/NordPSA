@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nordpsa.ec import EnergyChartsClient, EC_COUNTRY_DK
-from nordpsa.entsoe import ElexonClient
+from nordpsa.entsoe import ElexonClient, ENTSOEClient
 
 RAW_DIR    = Path(__file__).resolve().parents[1] / "data" / "raw"
 YEARS      = [2023, 2024, 2025]
@@ -31,8 +31,12 @@ SLEEP_S    = 1.0    # Energy Charts är ett gratisAPI — var snäll mot servern
 
 # Budzoner att hämta från Energy Charts
 PRICE_BZNS_EC = ["DE-LU", "EE", "LT", "PL", "NL"]
-# Budzoner att hämta från ENTSO-E
+# Budzoner att hämta från ENTSO-E (GB saknas post-Brexit, NO saknas i EC efter feb 2025)
 PRICE_BZNS_ENTSOE = ["GB"]
+# Nordic MBA-zoner: SE/DK/FI från Energy Charts, NO från ENTSO-E
+NORDIC_MBAS_EC     = ["SE1", "SE2", "SE3", "SE4", "DK1", "DK2", "FI"]
+NORDIC_MBAS_ENTSOE = ["NO1", "NO2", "NO3", "NO4", "NO5"]
+NORDIC_MBAS = NORDIC_MBAS_EC + NORDIC_MBAS_ENTSOE  # för bakåtkompatibilitet
 
 
 def raw_path_dk(year: int) -> Path:
@@ -41,6 +45,10 @@ def raw_path_dk(year: int) -> Path:
 
 def raw_path_price(bzn: str, year: int) -> Path:
     return RAW_DIR / f"price_{bzn}_{year}.parquet"
+
+
+def raw_path_mba_price(mba: str, year: int) -> Path:
+    return RAW_DIR / f"price_mba_{mba}_{year}.parquet"
 
 
 def fetch_all(force: bool = False) -> None:
@@ -111,6 +119,59 @@ def fetch_all(force: bool = False) -> None:
             s.to_frame().to_parquet(out)
             print(f"OK ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
             if i < len(YEARS):
+                time.sleep(SLEEP_S)
+
+    # --- Day-ahead-priser: Nordiska MBAs — SE/DK/FI från Energy Charts ---
+    print(f"\n=== Day-ahead-priser: Nordiska MBAs SE/DK/FI (Energy Charts) ===")
+    total_ec = len(NORDIC_MBAS_EC) * len(YEARS)
+    done_ec  = 0
+    for mba in NORDIC_MBAS_EC:
+        for year in YEARS:
+            done_ec += 1
+            out = raw_path_mba_price(mba, year)
+            if out.exists() and not force:
+                print(f"[{done_ec}/{total_ec}] hoppar över {out.name} (finns redan)")
+                continue
+
+            print(f"[{done_ec}/{total_ec}] hämtar {mba} {year} ...", end=" ", flush=True)
+            try:
+                s = ec_cli.fetch_price_year(mba, year)
+            except Exception as e:
+                print(f"FEL: {e}")
+                continue
+
+            s.to_frame().to_parquet(out)
+            print(f"OK ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
+            time.sleep(SLEEP_S)
+
+    # --- Day-ahead-priser: Nordiska MBAs — NO från ENTSO-E ---
+    print(f"\n=== Day-ahead-priser: Nordiska MBAs NO (ENTSO-E) ===")
+    try:
+        entsoe_cli = ENTSOEClient()
+    except ValueError as e:
+        print(f"  OBS: {e} — hoppar över norska MBA-priser")
+        entsoe_cli = None
+
+    if entsoe_cli:
+        total_no = len(NORDIC_MBAS_ENTSOE) * len(YEARS)
+        done_no  = 0
+        for mba in NORDIC_MBAS_ENTSOE:
+            for year in YEARS:
+                done_no += 1
+                out = raw_path_mba_price(mba, year)
+                if out.exists() and not force:
+                    print(f"[{done_no}/{total_no}] hoppar över {out.name} (finns redan)")
+                    continue
+
+                print(f"[{done_no}/{total_no}] hämtar {mba} {year} ...", end=" ", flush=True)
+                try:
+                    s = entsoe_cli.fetch_price_year(mba, year)
+                except Exception as e:
+                    print(f"FEL: {e}")
+                    continue
+
+                s.to_frame().to_parquet(out)
+                print(f"OK ({len(s)} timmar, medel={s.mean():.1f} EUR/MWh)")
                 time.sleep(SLEEP_S)
 
     print("\nKlart!")

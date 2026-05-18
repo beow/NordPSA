@@ -21,9 +21,16 @@ YEARS   = [2023, 2024, 2025]
 SERIES  = ["production", "consumption"]
 SLEEP_S = 0.5   # paus mellan anrop för att inte hammra API:et
 
+# MBAs att hämta per-MBA konsumtion för (DK exkluderas — eSett saknar MBA-uppdelad DK-last)
+NORDIC_MBAS_ESETT = ["SE1", "SE2", "SE3", "SE4", "NO1", "NO2", "NO3", "NO4", "NO5", "FI"]
+
 
 def raw_path(series: str, zone: str, year: int) -> Path:
     return RAW_DIR / f"{series}_{zone}_{year}.parquet"
+
+
+def raw_path_mba(series: str, mba: str, year: int) -> Path:
+    return RAW_DIR / f"{series}_mba_{mba}_{year}.parquet"
 
 
 def fetch_all(force: bool = False) -> None:
@@ -57,6 +64,33 @@ def fetch_all(force: bool = False) -> None:
                 df.to_parquet(out, index=False)
                 print(f"OK ({len(df)} rader → {out.name})")
                 time.sleep(SLEEP_S)
+
+    # --- Per-MBA konsumtion (för lastvolymvägda zonpriser) ---
+    print("\n=== Per-MBA konsumtion (eSett) ===")
+    total_mba = len(NORDIC_MBAS_ESETT) * len(YEARS)
+    done_mba  = 0
+    for mba in NORDIC_MBAS_ESETT:
+        for year in YEARS:
+            done_mba += 1
+            out = raw_path_mba("consumption", mba, year)
+            if out.exists() and not force:
+                print(f"[{done_mba}/{total_mba}] hoppar över {out.name} (finns redan)")
+                continue
+
+            print(f"[{done_mba}/{total_mba}] hämtar consumption {mba} {year} ...", end=" ", flush=True)
+            try:
+                df = cli.fetch_year("consumption", mba, year, resolution="hour")
+            except Exception as e:
+                print(f"FEL: {e}")
+                continue
+
+            if df.empty:
+                print("tom respons — hoppar över")
+                continue
+
+            df.to_parquet(out, index=False)
+            print(f"OK ({len(df)} rader → {out.name})")
+            time.sleep(SLEEP_S)
 
     print("\nKlart!")
 
