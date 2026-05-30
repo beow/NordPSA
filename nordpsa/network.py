@@ -18,7 +18,7 @@ import pandas as pd
 import pypsa
 import yaml
 
-from nordpsa.hydro import compute_annual_scales, inflow_timeseries
+from nordpsa.hydro import compute_annual_scales, inflow_timeseries, load_nve_inflow
 
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
@@ -57,8 +57,10 @@ def build_network(
     hydro_params:            dict,
     market_prices:           Dict[str, pd.Series],
     normalize_inflow:        bool = False,
+    actual_inflow:           bool = False,
     cyclic_soc:              bool = True,
     soc_initial_override:    dict | None = None,
+    voll:                    bool = False,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -96,9 +98,10 @@ def build_network(
     _add_buses(n, cfg)
     _add_links(n, cfg)
     _add_loads(n, load)
-    _add_slack(n, cfg)
+    _add_slack(n, cfg, all_zones=voll)
     _add_thermal(n, thermal_profile)
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow,
+               actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
                zone_prices=zone_prices)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
@@ -135,16 +138,17 @@ def _add_loads(n: pypsa.Network, load: pd.DataFrame) -> None:
         n.add("Load", f"{zone} load", bus=zone, p_set=load[zone])
 
 
-def _add_slack(n: pypsa.Network, cfg: dict) -> None:
-    """Load shedding — bara för zoner utan marknadsanslutning.
+def _add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False) -> None:
+    """Load shedding-generator per zon.
 
-    Zoner med marknadsventil (p_min_pu=-1 generator) klarar sig utan slack
-    eftersom marknaden agerar säkerhetsventil. Slack behålls för isolerade
-    zoner för att garantera LP-feasibilitet.
+    all_zones=False (standard): bara zoner utan marknadsanslutning.
+    all_zones=True (--voll): alla zoner, inklusive de med marknadsanslutning.
+      Används som VOLL-mått: slack-dispatch × MC_SLACK = losskostnad i EUR.
+      Priser toppas vid MC_SLACK istf att dualvariabler exploderar.
     """
     market_zones = {zone for _name, zone, *_ in cfg.get("market_connections", [])}
     for zone in cfg["zones"]:
-        if zone in market_zones:
+        if not all_zones and zone in market_zones:
             continue
         n.add(
             "Generator", f"{zone} slack",
@@ -179,6 +183,9 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame) -> None:
         )
 
 
+NVE_INFLOW_ZONES = {"NO-N", "NO-S", "SE-N", "SE-S"}
+
+
 def _add_hydro(
     n:                    pypsa.Network,
     cfg:                  dict,
@@ -186,6 +193,7 @@ def _add_hydro(
     snapshots:            pd.DatetimeIndex,
     ccfg:                 dict,
     normalize_inflow:     bool = False,
+    actual_inflow:        bool = False,
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
@@ -197,9 +205,12 @@ def _add_hydro(
         if p_nom == 0 or zone not in hydro_params:
             continue
 
-        params = hydro_params[zone]
-        annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
-        inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
+        if actual_inflow and zone in NVE_INFLOW_ZONES:
+            inflow = load_nve_inflow(zone, snapshots)
+        else:
+            params = hydro_params[zone]
+            annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
+            inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True

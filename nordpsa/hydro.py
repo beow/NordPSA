@@ -161,6 +161,37 @@ def load_annual_hydro_production(zones: list[str]) -> Dict[str, Dict[int, float]
     return result
 
 
+def load_nve_inflow(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:
+    """
+    Laddar NVE faktisk veckovist inflöde (MW) och expanderar till snapshot-index
+    via forward-fill (konstantvärde inom varje vecka, energikonservativt).
+
+    Kräver data/raw/inflow_nve_{zone}_{year}.parquet för varje år i snapshots.
+    Finns bara för NO-N och NO-S.
+    """
+    years = sorted(set(snapshots.year))
+    frames = []
+    for year in years:
+        path = RAW_DIR / f"inflow_nve_{zone}_{year}.parquet"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Saknar NVE-inflödesdata: {path.name} "
+                f"— kör 'python scripts/fetch_nve.py' först."
+            )
+        df = pd.read_parquet(path)
+        df["week_start"] = pd.to_datetime(df["week_start"], utc=True).dt.tz_localize(None)
+        frames.append(df.set_index("week_start")["inflow_mw"])
+
+    weekly = pd.concat(frames).sort_index()
+
+    # Expandera till snapshot-frekvens: lägg snapshots i det veckoglesade indexet
+    # och ffill så att varje snapshot får veckans MW-värde
+    combined_idx = weekly.index.union(snapshots)
+    result = weekly.reindex(combined_idx).ffill().reindex(snapshots).fillna(0.0)
+    result.name = "inflow_mw"
+    return result
+
+
 def inflow_timeseries(params: Dict[str, float],
                       timestamps: pd.DatetimeIndex,
                       annual_scales: Dict[int, float] | None = None) -> pd.Series:

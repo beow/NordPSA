@@ -259,6 +259,7 @@ def rolling_horizon_solve(
         n = build_network(
             cfg, win_snaps, **win_inputs,
             normalize_inflow=args.normalized_inflow_profiles,
+            actual_inflow=not args.parametric_inflow,
             cyclic_soc=False,
             soc_initial_override=soc_carry,
         )
@@ -320,6 +321,9 @@ def main() -> None:
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
     parser.add_argument("--normalized-inflow-profiles", action="store_true",
                         help="Normera inflödesprofilen per år mot faktisk vattenkraftproduktion")
+    parser.add_argument("--parametric-inflow", action="store_true",
+                        help="Använd parametrisk inflödesfunktion (Gauss+cosinus) istf faktiska "
+                             "NVE/ENTSO-E-profiler. Standard: faktiska profiler används.")
     parser.add_argument("--restricted-yearly-hydro", action="store_true",
                         help="LP-caps: begränsa hydrodispatch per zon och år till faktisk nivå")
     parser.add_argument("--no-market", action="store_true",
@@ -330,6 +334,10 @@ def main() -> None:
                         help="Fönsterstorlek i veckor för rullande horisont (standard: 4)")
     parser.add_argument("--hydro-terminal-value", action="store_true",
                         help="Vattenvärde via terminalvillkor -λ*SOC[T] (λ=medel zonpris) istf cyklisk SOC")
+    parser.add_argument("--link-scale", action="append", default=[], metavar="Z0,Z1,FACTOR",
+                        help="Skala NTC för länk Z0↔Z1 med FACTOR (t.ex. 'SE-N,SE-S,0.5'). Kan anges flera gånger.")
+    parser.add_argument("--voll", action="store_true",
+                        help="Lägg till VOLL-slack (3000 EUR/MWh) i ALLA zoner — ger losslastmått och förhindrar dualexplosion")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -349,14 +357,32 @@ def main() -> None:
     if args.no_market:
         cfg["market_connections"] = []
 
+    for spec in args.link_scale:
+        parts = spec.split(",")
+        if len(parts) != 3:
+            print(f"Ogiltigt --link-scale format: '{spec}' (förväntat Z0,Z1,FACTOR)")
+            sys.exit(1)
+        z0, z1, factor = parts[0].strip(), parts[1].strip(), float(parts[2])
+        scaled = False
+        for link in cfg["links"]:
+            if (link[0] == z0 and link[1] == z1) or (link[0] == z1 and link[1] == z0):
+                link[2] = link[2] * factor
+                print(f"  → NTC {link[0]}↔{link[1]}: {link[2]/factor:.0f} → {link[2]:.0f} MW (×{factor})")
+                scaled = True
+        if not scaled:
+            print(f"Varning: ingen länk hittades för {z0}↔{z1}")
+
     flags = []
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     if args.no_expansion:               flags.append("no-expansion")
     if args.normalized_inflow_profiles: flags.append("normalized-inflow")
+    if args.parametric_inflow:          flags.append("parametric-inflow")
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
     if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
+    for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")
+    if args.voll:                       flags.append("voll")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -384,7 +410,9 @@ def main() -> None:
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
                       normalize_inflow=args.normalized_inflow_profiles,
-                      cyclic_soc=cyclic_soc)
+                      actual_inflow=not args.parametric_inflow,
+                      cyclic_soc=cyclic_soc,
+                      voll=args.voll)
 
     # Terminalvärde: λ per hydro-zon = medel zonpris över hela perioden
     lambda_per_zone = None

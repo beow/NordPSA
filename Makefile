@@ -1,4 +1,4 @@
-.PHONY: env fetch build solve results all
+.PHONY: env fetch fetch-ec fetch-nve build solve results all
 
 env:
 	conda env create -f environment.yml
@@ -11,6 +11,9 @@ fetch:
 
 fetch-ec:
 	python scripts/fetch_ec.py
+
+fetch-nve:
+	python scripts/fetch_nve.py
 
 build:
 	python scripts/build_inputs.py

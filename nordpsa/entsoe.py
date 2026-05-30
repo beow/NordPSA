@@ -169,8 +169,35 @@ class ENTSOEClient:
         s.name = f"{out_domain}→{in_domain}"
         return s
 
-    def _parse_xml_quantity(self, xml_text: str) -> pd.Series:
-        """Parsar ENTSO-E XML och returnerar timvis MW-flöde (quantity)."""
+    def fetch_reservoir_year(self, bzn: str, year: int) -> pd.Series:
+        """
+        Hämtar veckovisa reservoarnivåer (MWh) för en budzon, A72/A16.
+        Returnerar pd.Series med ISO-veckostart (måndag UTC) som index.
+
+        ENTSO-E A72 använder P7D-upplösning med start söndag 23:00 UTC
+        (= CET måndag 00:00). Tidsstämplarna normaliseras till måndag 00:00 UTC.
+        """
+        eic = EIC_CODES.get(bzn, bzn)
+        params = {
+            "securityToken": self.api_token,
+            "documentType":  "A72",
+            "processType":   "A16",
+            "in_Domain":     eic,
+            "periodStart":   f"{year}01010000",
+            "periodEnd":     f"{year}12312300",
+        }
+        r = self.sess.get(self.base_url, params=params, timeout=60)
+        try:
+            r.raise_for_status()
+        except requests.HTTPError:
+            raise requests.HTTPError(
+                f"{r.status_code} {r.reason}\nURL: {r.url}\nBody: {r.text[:300]}",
+                response=r,
+            ) from None
+        return self._parse_xml_reservoir(r.text, year)
+
+    def _parse_xml_reservoir(self, xml_text: str, year: int) -> pd.Series:
+        """Parsar ENTSO-E A72 (P7D) och returnerar veckovis MWh med måndag UTC-index."""
         root = ET.fromstring(xml_text)
         ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
         def t(name: str) -> str:
@@ -179,28 +206,135 @@ class ENTSOEClient:
         records: dict[pd.Timestamp, float] = {}
         for ts in root.findall(".//" + t("TimeSeries")):
             for period in ts.findall(t("Period")):
+                interval  = period.find(t("timeInterval"))
+                start_str = interval.find(t("start")).text          # type: ignore[union-attr]
+                start_dt  = pd.Timestamp(start_str)
+
+                for point in period.findall(t("Point")):
+                    pos    = int(point.find(t("position")).text)     # type: ignore[union-attr]
+                    qty_el = point.find(t("quantity"))
+                    if qty_el is None:
+                        continue
+                    # P7D: position n → start + (n-1) × 7 dagar
+                    ts_pt = start_dt + pd.Timedelta(days=7 * (pos - 1))
+                    # Normalisera söndag 23:00 UTC → måndag 00:00 UTC
+                    ts_pt = (ts_pt + pd.Timedelta(hours=1)).normalize()
+                    if ts_pt.tz is None:
+                        ts_pt = ts_pt.tz_localize("UTC")
+                    records[ts_pt] = float(qty_el.text)
+
+        s = pd.Series(records).sort_index()
+        # Filtrera till begärt år (± 1 vecka)
+        start = pd.Timestamp(f"{year}-01-01", tz="UTC")
+        end   = pd.Timestamp(f"{year}-12-31 23:59", tz="UTC")
+        return s.loc[start:end]
+
+    def fetch_hydro_generation(
+        self,
+        bzn: str,
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+        sleep_s: float = 0.5,
+    ) -> pd.Series:
+        """
+        Hämtar faktisk vattenkraftgenerering (A75/A16) för en budzon, MW timvis.
+
+        Summerar B11 (run-of-river), B12 (reservoar) och B10 (pumped storage,
+        nettogenerering). Delar upp i årsblock vid behov.
+        """
+        PSR_TYPES = ["B11", "B12", "B10"]
+        eic = EIC_CODES.get(bzn, bzn)
+        chunks_all: list[pd.Series] = []
+
+        t = start
+        while t <= end:
+            t_end = min(pd.Timestamp(f"{t.year}-12-31 23:00", tz="UTC"), end)
+            for psr in PSR_TYPES:
+                params = {
+                    "securityToken": self.api_token,
+                    "documentType":  "A75",
+                    "processType":   "A16",
+                    "in_Domain":     eic,
+                    "psrType":       psr,
+                    "periodStart":   t.strftime("%Y%m%d%H%M"),
+                    "periodEnd":     (t_end + pd.Timedelta(hours=1)).strftime("%Y%m%d%H%M"),
+                }
+                r = self.sess.get(self.base_url, params=params, timeout=60)
+                try:
+                    r.raise_for_status()
+                except requests.HTTPError:
+                    continue   # psrType kanske inte finns för denna zon
+                chunk = self._parse_xml_quantity(r.text)
+                if not chunk.empty:
+                    chunks_all.append(chunk)
+                time.sleep(sleep_s)
+            t = pd.Timestamp(f"{t.year + 1}-01-01 00:00", tz="UTC")
+
+        if not chunks_all:
+            return pd.Series(dtype=float, name=f"hydro_{bzn}")
+
+        # Summera alla psrType per tidsstämpel; klämma till begärd period
+        combined = pd.concat(chunks_all)
+        s = combined.groupby(combined.index).sum()
+        s = s.sort_index().loc[start:end]
+        s.name = f"hydro_{bzn}"
+        return s
+
+    def fetch_hydro_year(self, bzn: str, year: int) -> pd.Series:
+        """Hämtar faktisk vattenkraftgenerering för ett helt kalenderår."""
+        start = pd.Timestamp(f"{year}-01-01 00:00", tz="UTC")
+        end   = pd.Timestamp(f"{year}-12-31 23:00", tz="UTC")
+        return self.fetch_hydro_generation(bzn, start, end)
+
+    def _parse_xml_quantity(self, xml_text: str) -> pd.Series:
+        """Parsar ENTSO-E XML och returnerar timvis MW-flöde (quantity).
+
+        Hanterar blandade upplösningar (PT15M, PT30M, PT60M) inom ett svar
+        genom att behandla varje Period separat och resampla till timvis.
+        """
+        root = ET.fromstring(xml_text)
+        ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+        def t(name: str) -> str:
+            return "{%s}%s" % (ns, name) if ns else name
+
+        period_series: list[pd.Series] = []
+        for ts in root.findall(".//" + t("TimeSeries")):
+            for period in ts.findall(t("Period")):
                 interval   = period.find(t("timeInterval"))
                 start_str  = interval.find(t("start")).text       # type: ignore[union-attr]
                 resolution = period.find(t("resolution")).text     # type: ignore[union-attr]
-                freq_min   = 30 if "PT30M" in resolution else 60
+
+                if "PT15M" in resolution:
+                    freq_min = 15
+                elif "PT30M" in resolution:
+                    freq_min = 30
+                else:
+                    freq_min = 60
 
                 start_dt = pd.Timestamp(start_str)
+                records: dict[pd.Timestamp, float] = {}
                 for point in period.findall(t("Point")):
-                    pos      = int(point.find(t("position")).text)   # type: ignore[union-attr]
-                    qty_el   = point.find(t("quantity"))
+                    pos    = int(point.find(t("position")).text)   # type: ignore[union-attr]
+                    qty_el = point.find(t("quantity"))
                     if qty_el is None:
                         continue
-                    qty      = float(qty_el.text)
-                    ts_pt    = start_dt + pd.Timedelta(minutes=freq_min * (pos - 1))
-                    records[ts_pt] = qty
+                    ts_pt  = start_dt + pd.Timedelta(minutes=freq_min * (pos - 1))
+                    records[ts_pt] = float(qty_el.text)
 
-        s = pd.Series(records).sort_index()
-        s.index = pd.to_datetime(s.index, utc=True)
-        if len(s) > 1:
-            dt_min = (s.index[1] - s.index[0]).total_seconds() / 60
-            if dt_min < 60:
-                s = s.resample("h").mean()
-        return s
+                if not records:
+                    continue
+                s = pd.Series(records).sort_index()
+                s.index = pd.to_datetime(s.index, utc=True)
+                if freq_min < 60:
+                    s = s.resample("h").mean()
+                period_series.append(s)
+
+        if not period_series:
+            return pd.Series(dtype=float)
+
+        combined = pd.concat(period_series)
+        # Deduplicera per tidsstämpel — ta medel vid överlapp (MW-data)
+        return combined.groupby(combined.index).mean().sort_index()
 
     def _parse_xml(self, xml_text: str) -> pd.Series:
         root = ET.fromstring(xml_text)
