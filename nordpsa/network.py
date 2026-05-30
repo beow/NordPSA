@@ -234,7 +234,7 @@ def _add_hydro(
             inflow=inflow,
             cyclic_state_of_charge=cyclic_soc,
             state_of_charge_initial=soc_init,
-            spill_cost=0.0,        # tillåt fri spill vid reservoardumpning
+            spill_cost=50.0,       # högt spillkostnad bryter LP-degeneracy (undviker artefakt-spill)
             p_min_pu=0.0,          # förbjud pumpning (ej pumpad-lagringshydro)
             efficiency_dispatch=1.0,
             marginal_cost=mc,

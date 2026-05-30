@@ -105,21 +105,21 @@ costs:
   wind_onshore:
     overnight_eur_per_w: 1.2
     lifetime_years: 25
-    vom_eur_per_mwh: 1.0
+    vom_eur_per_mwh: 1.5
     extendable: true
     p_nom_max_mw: 50000
 
   wind_offshore:
     overnight_eur_per_w: 2.5
     lifetime_years: 25
-    vom_eur_per_mwh: 2.0
+    vom_eur_per_mwh: 3.0
     extendable: true
     p_nom_max_mw: 50000
 
   solar:
     overnight_eur_per_w: 0.5
     lifetime_years: 30
-    vom_eur_per_mwh: 0.5
+    vom_eur_per_mwh: 1.0
     extendable: true
     p_nom_max_mw: 50000
 
@@ -131,13 +131,13 @@ costs:
     p_nom_max_mw: 20000
 
   hydro:
-    vom_eur_per_mwh: 1.0
+    vom_eur_per_mwh: 0.5
     extendable: false   # hydro capacity fixed; no new reservoirs
 
 # Solver
 solver:
   name: highs
-  threads: 4
+  threads: 16
   solver: ipm          # interior point method — skalbar för stora LP
   run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
   ipm_optimality_tolerance: 1e-6

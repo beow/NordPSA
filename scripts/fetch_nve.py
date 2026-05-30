@@ -279,9 +279,15 @@ def build_inflow(zone: str, year: int, reservoir_wkly: pd.DataFrame) -> pd.DataF
     merged["hydro_gwh"] = merged["hydro_gwh"].fillna(0.0)
 
     inflow_raw = merged["hydro_gwh"] + merged["delta_twh"] * 1000.0
-    annual_target = float(inflow_raw.sum())
 
-    inflow_clipped = inflow_raw.clip(lower=0.0)
+    # Smoothing: 8-veckors centrerat rullande medelvärde sprider vårflodspikar
+    # över en realistisk flodperiod (negativa veckor = mätgränsartefakt).
+    # annual_target beräknas på osmoothat för korrekt energibalans.
+    annual_target = float(inflow_raw.sum())
+    inflow_smooth = inflow_raw.rolling(window=8, center=True, min_periods=1).mean()
+
+    # Clip till ≥0 och rescala till korrekt årstotal
+    inflow_clipped = inflow_smooth.clip(lower=0.0)
     clipped_sum = float(inflow_clipped.sum())
     if clipped_sum > 0 and 0 < annual_target < clipped_sum:
         inflow_clipped = inflow_clipped * (annual_target / clipped_sum)
