@@ -284,7 +284,7 @@ def build_inflow(zone: str, year: int, reservoir_wkly: pd.DataFrame) -> pd.DataF
     # över en realistisk flodperiod (negativa veckor = mätgränsartefakt).
     # annual_target beräknas på osmoothat för korrekt energibalans.
     annual_target = float(inflow_raw.sum())
-    inflow_smooth = inflow_raw.rolling(window=8, center=True, min_periods=1).mean()
+    inflow_smooth = inflow_raw.rolling(window=4, center=True, min_periods=1).mean()
 
     # Clip till ≥0 och rescala till korrekt årstotal
     inflow_clipped = inflow_smooth.clip(lower=0.0)
