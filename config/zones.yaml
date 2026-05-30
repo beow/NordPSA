@@ -63,13 +63,13 @@ market_connections:
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
-  - [NO-N, SE-N,  1763]
-  - [SE-N, SE-S,  7610]
+  - [NO-N, SE-N,  1600]
+  - [SE-N, SE-S,  7300]
   - [SE-N, FI,    1839]
-  - [NO-N, NO-S,  2716]
-  - [NO-S, SE-S,  1306]
+  - [NO-N, NO-S,  1300]
+  - [NO-S, SE-S,  2120]
   - [NO-S, DK,    1681]
-  - [SE-S, DK,    1282]
+  - [SE-S, DK,    2015]
   - [SE-S, FI,    1200]
 
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
@@ -131,7 +131,7 @@ costs:
     p_nom_max_mw: 20000
 
   hydro:
-    vom_eur_per_mwh: 10.0
+    vom_eur_per_mwh: 1.0
     extendable: false   # hydro capacity fixed; no new reservoirs
 
 # Solver
