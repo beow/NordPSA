@@ -257,6 +257,17 @@ def rolling_horizon_solve(
     print(f"Rullande horisont: {args.rolling_weeks} veckor/fönster"
           f" ({window_steps} tidssteg), {n_win} fönster totalt")
 
+    # Fast terminalvärde λ (override) om angivet, annars framåtblickande DE-LU
+    lambda_override = None
+    if getattr(args, "terminal_lambda", None):
+        hydro_zones = [z for z, zc in cfg["zones"].items() if zc.get("hydro_p_nom_mw", 0) > 0]
+        if ":" in args.terminal_lambda:
+            lambda_override = {z.strip(): float(v) for z, v in
+                               (pair.split(":") for pair in args.terminal_lambda.split(","))}
+        else:
+            lambda_override = {z: float(args.terminal_lambda) for z in hydro_zones}
+        print(f"  → fast terminal-λ: {lambda_override}")
+
     # Initial SOC från zones.yaml
     soc_carry: dict = {}
     for zone, zcfg in cfg["zones"].items():
@@ -284,9 +295,12 @@ def rolling_horizon_solve(
             soc_initial_override=soc_carry,
         )
 
-        lam_per_zone = get_terminal_lambdas(
-            cfg, inputs["market_prices"], win_snaps[-1], window_steps
-        )
+        if lambda_override is not None:
+            lam_per_zone = lambda_override
+        else:
+            lam_per_zone = get_terminal_lambdas(
+                cfg, inputs["market_prices"], win_snaps[-1], window_steps
+            )
         tv_cb = hydro_terminal_value(cfg, lam_per_zone)
 
         def extra_func(n, snaps, _cb=tv_cb):
@@ -352,6 +366,10 @@ def main() -> None:
                         help="Lös med rullande horisont + terminalvärde (fixar konstant vattenvärde)")
     parser.add_argument("--rolling-weeks", type=int, default=4,
                         help="Fönsterstorlek i veckor för rullande horisont (standard: 4)")
+    parser.add_argument("--terminal-lambda", default=None, metavar="VAL|Z:val,...",
+                        help="Fast terminalvärde λ (EUR/MWh) i rullande horisont istället för "
+                             "framåtblickande DE-LU-medel. Enskilt ('11') eller per zon "
+                             "('NO-N:11,NO-S:2.8,SE-N:12,SE-S:1.6,FI:11'). Sätt till extraherade vattenvärden.")
     parser.add_argument("--hydro-terminal-value", action="store_true",
                         help="Vattenvärde via terminalvillkor -λ*SOC[T] (λ=medel zonpris) istf cyklisk SOC")
     parser.add_argument("--link-scale", action="append", default=[], metavar="Z0,Z1,FACTOR",
