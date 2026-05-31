@@ -23,8 +23,9 @@ from nordpsa.hydro import compute_annual_scales, inflow_timeseries, load_nve_inf
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
 
-# Nuclear load-following: kan gå ned till denna andel av p_max_pu(t)
-NUCLEAR_MIN_FRACTION = 0.6
+# Nuclear: 1.0 = must-run låst till faktisk produktion (p_min_pu = p_max_pu).
+# Sätt <1.0 för att tillåta load-following ned till den andelen av p_max_pu(t).
+NUCLEAR_MIN_FRACTION = 1.0
 
 
 # ---------------------------------------------------------------------------
