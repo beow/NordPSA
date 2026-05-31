@@ -364,6 +364,9 @@ def main() -> None:
     parser.add_argument("--soc-terminal-band", default=None, metavar="LOW,HIGH",
                         help="Icke-cyklisk: start = config hydro_soc_initial, slut flyter i [LOW,HIGH] "
                              "av kapacitet (t.ex. '0.6,0.8'). Tillåter netto-uttömning över horisonten.")
+    parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
+                        help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
+                             "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -399,6 +402,10 @@ def main() -> None:
 
     if args.no_market:
         cfg["market_connections"] = []
+
+    if args.spill_cost is not None:
+        cfg["costs"]["hydro"]["spill_cost_eur_per_mwh"] = args.spill_cost
+        print(f"  → hydro spill_cost = {args.spill_cost} EUR/MWh")
 
     if args.effective_ntc:
         eff = cfg.get("market_connections_effective_mw", {})

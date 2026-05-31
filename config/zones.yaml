@@ -20,14 +20,14 @@ zones:
   NO-N:
     mbas: [NO3, NO4]
     hydro_p_nom_mw: 11000
-    hydro_max_hours: 4500
+    hydro_max_hours: 2727   # 30.0 TWh reservoar (NVE NO3+NO4)
     hydro_soc_initial: 0.70   # ~70% fyllnadsgrad 1 jan
     nuclear_p_nom_mw: 0
 
   NO-S:
     mbas: [NO1, NO2, NO5]
     hydro_p_nom_mw: 22000
-    hydro_max_hours: 2500
+    hydro_max_hours: 2609   # 57.4 TWh reservoar (NVE NO1+NO2+NO5)
     hydro_soc_initial: 0.70   # ~70% fyllnadsgrad 1 jan
     nuclear_p_nom_mw: 0
 

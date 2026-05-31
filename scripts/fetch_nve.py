@@ -63,6 +63,10 @@ from nordpsa.entsoe import ENTSOEClient
 RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 YEARS   = [2023, 2024, 2025]
 
+# Smoothing-fönster (veckor) för inflödesprofilen. 1 = ingen smoothing (skarp vårflod, default).
+# Reservoaren (spill_cost) hanterar topparna; skarp vårflod är mer realistisk.
+SMOOTH_WEEKS = 1
+
 NVE_API_URL = "https://biapi.nve.no/magasinstatistikk/api/Magasinstatistikk/HentOffentligData"
 
 # NordPSA-zon → NVE omrnr och ENTSO-E budzoner
@@ -341,11 +345,10 @@ def build_inflow(zone: str, year: int, reservoir_wkly: pd.DataFrame) -> pd.DataF
 
     inflow_raw = merged["hydro_gwh"] + merged["delta_twh"] * 1000.0
 
-    # Smoothing: 8-veckors centrerat rullande medelvärde sprider vårflodspikar
-    # över en realistisk flodperiod (negativa veckor = mätgränsartefakt).
+    # Smoothing: SMOOTH_WEEKS-veckors centrerat rullande medel (default 1 = ingen).
     # annual_target beräknas på osmoothat för korrekt energibalans.
     annual_target = float(inflow_raw.sum())
-    inflow_smooth = inflow_raw.rolling(window=4, center=True, min_periods=1).mean()
+    inflow_smooth = inflow_raw.rolling(window=SMOOTH_WEEKS, center=True, min_periods=1).mean()
 
     # Clip till ≥0 och rescala till korrekt årstotal
     inflow_clipped = inflow_smooth.clip(lower=0.0)
@@ -441,7 +444,10 @@ if __name__ == "__main__":
     parser.add_argument("--force",        action="store_true", help="Skriv över befintliga filer")
     parser.add_argument("--fetch-entsoe", action="store_true", help="Hämta ENTSO-E-data innan beräkning")
     parser.add_argument("--summary",      action="store_true", help="Visa sammanfattning utan att hämta")
+    parser.add_argument("--smooth-weeks", type=int, default=SMOOTH_WEEKS,
+                        help="Smoothing-fönster i veckor (1 = ingen smoothing, skarp vårflod). Standard: 4")
     args = parser.parse_args()
+    SMOOTH_WEEKS = args.smooth_weeks
 
     if args.summary:
         print_summary()
