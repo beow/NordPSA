@@ -73,14 +73,7 @@ links:
   - [SE-S, FI,    1200]
 
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
-# Sätt till 0 eller ta bort raden för att inaktivera.
-additional_load_mw:
-  SE-N: 1000
-  SE-S: 1000
-  NO-N: 1000
-  NO-S: 1000
-  DK:   1000
-  FI:   1000
+# Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
 
 # Simulation period
 snapshots:
