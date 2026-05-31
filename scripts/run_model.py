@@ -151,6 +151,7 @@ def solve(n, cfg: dict, log_path: Path | None = None,
         solver_name=solver,
         solver_options=options,
         extra_functionality=extra_func,
+        assign_all_duals=True,   # behövs för att få vattenvärdet (mu_energy_balance)
     )
 
     print(f"  Status: {status} / {condition}")
@@ -170,6 +171,11 @@ def save_results(n, label: str) -> None:
     n.storage_units_t.spill.to_csv(out / "hydro_spill.csv")
     n.links_t.p0.to_csv(out / "flows.csv")
     n.buses_t.marginal_price.to_csv(out / "prices.csv")
+
+    # Vattenvärde = dual på lagringsbalansen (EUR/MWh), om assignad
+    wv = n.storage_units_t.get("mu_energy_balance")
+    if wv is not None and wv.shape[1] > 0:
+        wv.to_csv(out / "water_value.csv")
 
     # thermal dispatch finns nu i dispatch_generators.csv (carrier="thermal")
 
