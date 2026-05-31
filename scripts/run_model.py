@@ -361,6 +361,10 @@ def main() -> None:
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
+    parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
+                        help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
+                             "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
+                             "Appliceras efter --effective-ntc om båda anges.")
     args = parser.parse_args()
 
     def _parse_band(spec, name):
@@ -397,6 +401,25 @@ def main() -> None:
                 mc[2] = eff[mc[0]]
         print(f"  → effektiv kontinentkapacitet (P80) aktiv: {len(eff)} kablar")
 
+    if args.market_scale is not None:
+        if ":" in args.market_scale:
+            # Per zon: "FI:0.5,NO-S:0.8,..."
+            zone_factors = {}
+            for pair in args.market_scale.split(","):
+                z, f = pair.split(":")
+                zone_factors[z.strip()] = float(f)
+            for mc in cfg.get("market_connections", []):
+                if mc[1] in zone_factors:
+                    mc[2] = mc[2] * zone_factors[mc[1]]
+            print(f"  → kontinentkablar skalade per zon: "
+                  + ", ".join(f"{z}×{f}" for z, f in zone_factors.items()))
+        else:
+            factor = float(args.market_scale)
+            for mc in cfg.get("market_connections", []):
+                mc[2] = mc[2] * factor
+            print(f"  → kontinentkablar skalade ×{factor}: "
+                  f"{len(cfg.get('market_connections', []))} kablar")
+
     for spec in args.link_scale:
         parts = spec.split(",")
         if len(parts) != 3:
@@ -420,6 +443,7 @@ def main() -> None:
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
+    if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")
