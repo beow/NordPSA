@@ -358,6 +358,9 @@ def main() -> None:
     parser.add_argument("--soc-terminal-band", default=None, metavar="LOW,HIGH",
                         help="Icke-cyklisk: start = config hydro_soc_initial, slut flyter i [LOW,HIGH] "
                              "av kapacitet (t.ex. '0.6,0.8'). Tillåter netto-uttömning över horisonten.")
+    parser.add_argument("--effective-ntc", action="store_true",
+                        help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
+                             "market_connections_effective_mw) istället för märkkapacitet")
     args = parser.parse_args()
 
     def _parse_band(spec, name):
@@ -387,6 +390,13 @@ def main() -> None:
     if args.no_market:
         cfg["market_connections"] = []
 
+    if args.effective_ntc:
+        eff = cfg.get("market_connections_effective_mw", {})
+        for mc in cfg.get("market_connections", []):
+            if mc[0] in eff:
+                mc[2] = eff[mc[0]]
+        print(f"  → effektiv kontinentkapacitet (P80) aktiv: {len(eff)} kablar")
+
     for spec in args.link_scale:
         parts = spec.split(",")
         if len(parts) != 3:
@@ -409,6 +419,7 @@ def main() -> None:
     if args.parametric_inflow:          flags.append("parametric-inflow")
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
+    if args.effective_ntc:              flags.append("effective-ntc")
     if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")

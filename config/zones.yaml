@@ -60,6 +60,21 @@ market_connections:
   - [NO NL,   NO-S,  640, NL]
   - [NO GB,   NO-S, 1449, GB]
 
+# Effektiv kapacitet = P80 av faktiska fysiska flöden 2024 (ENTSO-E), dvs en
+# proxy för flow-based-krympning i korrelerade exporttimmar. Aktiveras med
+# --effective-ntc på run_model.py (default: märkkapacitet ovan).
+market_connections_effective_mw:
+  FI EE:    928
+  SE-S LT:  733
+  SE-S PL:  597
+  SE-S DE:  617
+  DK DE:   2480
+  DK NL:    697
+  DK GB:   1098
+  NO DE:   1399
+  NO NL:    620
+  NO GB:   1450
+
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
