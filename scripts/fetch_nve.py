@@ -27,13 +27,20 @@ Zonmappning
   SE-N  ←  ENTSO-E reservoar + prod: SE1, SE2
   SE-S  ←  ENTSO-E reservoar + prod: SE3, SE4
 
+Run-of-river separeras
+----------------------
+ENTSO-E B11 (run-of-river) modelleras som separat must-run-generator i network.py,
+inte som lagringsbart reservoarinflöde. Reservoarinflödet (inflow_nve) använder därför
+endast reservoarproduktion (B12+B10). RoR-timprofilen sparas separat.
+
 Utdata
 ------
-  data/raw/inflow_nve_{zone}_{year}.parquet  (zone = NO-N, NO-S, SE-N, SE-S)
+  data/raw/inflow_nve_{zone}_{year}.parquet  reservoarinflöde (vecka), exkl. RoR
+  data/raw/ror_nve_{zone}_{year}.parquet     run-of-river must-run-profil (timme)
 
-Kolumner:
+Kolumner (inflow_nve):
   week_start   UTC-tidsstämpel för veckostart (måndag 00:00)
-  inflow_gwh   GWh inflöde under veckan
+  inflow_gwh   GWh reservoarinflöde under veckan
   inflow_mw    Medeleffekt (MW) = inflow_gwh * 1000 / 168
 
 Användning:
@@ -87,6 +94,14 @@ def entsoe_hydro_path(bzn: str, year: int) -> Path:
 
 def entsoe_reservoir_path(bzn: str, year: int) -> Path:
     return RAW_DIR / f"reservoir_entsoe_{bzn}_{year}.parquet"
+
+
+def entsoe_ror_path(bzn: str, year: int) -> Path:
+    return RAW_DIR / f"ror_entsoe_{bzn}_{year}.parquet"
+
+
+def ror_profile_path(zone: str, year: int) -> Path:
+    return RAW_DIR / f"ror_nve_{zone}_{year}.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -148,23 +163,68 @@ def fetch_entsoe_reservoirs(force: bool = False) -> None:
             time.sleep(1.0)
 
 
-def load_entsoe_hydro(zone: str) -> pd.Series:
-    """Laddar ENTSO-E hydrogenerering (MW, timvis) summerad för en NordPSA-zon."""
+def fetch_entsoe_ror(force: bool = False) -> None:
+    """Hämtar och cachar ENTSO-E run-of-river (B11) per timme för NO- och SE-budzoner."""
+    cli = ENTSOEClient()
+    all_bzns = sorted(
+        {b for v in NO_ZONE_MAP.values() for b in v["bzns"]}
+        | {b for v in SE_ZONE_MAP.values() for b in v["bzns"]}
+    )
+    total = len(all_bzns) * len(YEARS)
+    done = 0
+    for bzn in all_bzns:
+        for year in YEARS:
+            done += 1
+            out = entsoe_ror_path(bzn, year)
+            if out.exists() and not force:
+                print(f"  [{done}/{total}] hoppar {out.name}")
+                continue
+            print(f"  [{done}/{total}] B11 {bzn} {year} ...", end=" ", flush=True)
+            try:
+                s = cli.fetch_hydro_year(bzn, year, psr_types=["B11"])
+            except Exception as e:
+                print(f"FEL: {e}")
+                continue
+            s.rename("ror_mw").reset_index().rename(
+                columns={"index": "timestampUTC"}
+            ).to_parquet(out, index=False)
+            print(f"OK  {len(s)} h  {round(s.sum()/1e6, 2)} TWh")
+            time.sleep(1.0)
+
+
+def load_entsoe_hydro(zone: str, kind: str = "total") -> pd.Series:
+    """
+    Laddar ENTSO-E hydrogenerering (MW, timvis) summerad för en NordPSA-zon.
+
+    kind="total"     → B11+B12+B10 (cachad hydro_entsoe-fil)
+    kind="ror"       → B11 (run-of-river, cachad ror_entsoe-fil)
+    kind="reservoir" → total − ror (reservoarkraft, B12+B10)
+    """
     cfg = NO_ZONE_MAP.get(zone) or SE_ZONE_MAP.get(zone)
     assert cfg, f"Okänd zon: {zone}"
-    frames = []
-    for bzn in cfg["bzns"]:
-        for year in YEARS:
-            p = entsoe_hydro_path(bzn, year)
-            if not p.exists():
-                raise FileNotFoundError(
-                    f"Saknar ENTSO-E hydro: {p.name} — kör med --fetch-entsoe."
-                )
-            df = pd.read_parquet(p)
-            df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
-            frames.append(df.set_index("timestampUTC")["hydro_mw"].fillna(0.0))
-    combined = pd.concat(frames).sort_index()
-    return combined.groupby(combined.index).sum()
+
+    def _load(path_fn, col):
+        frames = []
+        for bzn in cfg["bzns"]:
+            for year in YEARS:
+                p = path_fn(bzn, year)
+                if not p.exists():
+                    raise FileNotFoundError(f"Saknar fil: {p.name} — kör med --fetch-entsoe.")
+                df = pd.read_parquet(p)
+                df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
+                frames.append(df.set_index("timestampUTC")[col].fillna(0.0))
+        combined = pd.concat(frames).sort_index()
+        return combined.groupby(combined.index).sum()
+
+    if kind == "total":
+        return _load(entsoe_hydro_path, "hydro_mw")
+    if kind == "ror":
+        return _load(entsoe_ror_path, "ror_mw")
+    if kind == "reservoir":
+        total = _load(entsoe_hydro_path, "hydro_mw")
+        ror   = _load(entsoe_ror_path, "ror_mw").reindex(total.index).fillna(0.0)
+        return (total - ror).clip(lower=0.0)
+    raise ValueError(f"Okänd kind: {kind}")
 
 
 # ---------------------------------------------------------------------------
@@ -262,10 +322,11 @@ def build_reservoir_weekly_entsoe(bzn_list: list[str]) -> pd.DataFrame:
 
 def build_inflow(zone: str, year: int, reservoir_wkly: pd.DataFrame) -> pd.DataFrame:
     """
-    Beräknar veckovist inflöde för en zon och ett år.
+    Beräknar veckovist RESERVOAR-inflöde för en zon och ett år.
+    Run-of-river (B11) exkluderas — den modelleras som separat must-run-generator.
     Returnerar DataFrame med: week_start, inflow_gwh, inflow_mw.
     """
-    hydro_h = load_entsoe_hydro(zone)
+    hydro_h = load_entsoe_hydro(zone, kind="reservoir")
 
     hydro_wk = (
         (hydro_h.resample("W-MON", label="left", closed="left").sum() / 1000.0)
@@ -339,6 +400,26 @@ def _compute_and_save(zone: str, reservoir_wkly: pd.DataFrame, force: bool) -> N
         total_twh = df["inflow_gwh"].sum() / 1000
         df.to_parquet(out, index=False)
         print(f"OK  {len(df)} veckor  {total_twh:.1f} TWh → {out.name}")
+    _save_ror_profile(zone, force)
+
+
+def _save_ror_profile(zone: str, force: bool) -> None:
+    """Sparar run-of-river (B11) timprofil per NordPSA-zon, ett år per fil."""
+    try:
+        ror = load_entsoe_hydro(zone, kind="ror")
+    except FileNotFoundError as e:
+        print(f"  RoR: {e}")
+        return
+    for year in YEARS:
+        out = ror_profile_path(zone, year)
+        if out.exists() and not force:
+            continue
+        s = ror[ror.index.year == year]
+        if s.empty:
+            continue
+        df = s.rename("ror_mw").reset_index().rename(columns={"index": "timestampUTC"})
+        df.to_parquet(out, index=False)
+        print(f"  RoR {year}: {s.sum()/1e6:.1f} TWh  max={s.max():.0f} MW → {out.name}")
 
 
 def print_summary() -> None:
@@ -368,6 +449,8 @@ if __name__ == "__main__":
         if args.fetch_entsoe:
             print("=== Hämtar ENTSO-E hydrogenerering ===")
             fetch_entsoe_hydro(force=args.force)
+            print("\n=== Hämtar ENTSO-E run-of-river (B11) ===")
+            fetch_entsoe_ror(force=args.force)
             print("\n=== Hämtar ENTSO-E reservoarnivåer (SE) ===")
             fetch_entsoe_reservoirs(force=args.force)
         fetch_all(force=args.force)

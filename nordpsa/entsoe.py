@@ -235,14 +235,15 @@ class ENTSOEClient:
         start: pd.Timestamp,
         end: pd.Timestamp,
         sleep_s: float = 0.5,
+        psr_types: list[str] | None = None,
     ) -> pd.Series:
         """
         Hämtar faktisk vattenkraftgenerering (A75/A16) för en budzon, MW timvis.
 
-        Summerar B11 (run-of-river), B12 (reservoar) och B10 (pumped storage,
-        nettogenerering). Delar upp i årsblock vid behov.
+        Summerar angivna PSR-typer (default B11 run-of-river, B12 reservoar,
+        B10 pumped storage netto). Delar upp i årsblock vid behov.
         """
-        PSR_TYPES = ["B11", "B12", "B10"]
+        PSR_TYPES = psr_types if psr_types is not None else ["B11", "B12", "B10"]
         eic = EIC_CODES.get(bzn, bzn)
         chunks_all: list[pd.Series] = []
 
@@ -280,11 +281,12 @@ class ENTSOEClient:
         s.name = f"hydro_{bzn}"
         return s
 
-    def fetch_hydro_year(self, bzn: str, year: int) -> pd.Series:
+    def fetch_hydro_year(self, bzn: str, year: int,
+                         psr_types: list[str] | None = None) -> pd.Series:
         """Hämtar faktisk vattenkraftgenerering för ett helt kalenderår."""
         start = pd.Timestamp(f"{year}-01-01 00:00", tz="UTC")
         end   = pd.Timestamp(f"{year}-12-31 23:00", tz="UTC")
-        return self.fetch_hydro_generation(bzn, start, end)
+        return self.fetch_hydro_generation(bzn, start, end, psr_types=psr_types)
 
     def _parse_xml_quantity(self, xml_text: str) -> pd.Series:
         """Parsar ENTSO-E XML och returnerar timvis MW-flöde (quantity).

@@ -192,6 +192,36 @@ def load_nve_inflow(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:
     return result
 
 
+def load_nve_ror(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:
+    """
+    Laddar run-of-river (B11) timprofil (MW) och reindexerar till snapshot-index.
+
+    Returnerar must-run-profilen för strömkraft. Saknas filen returneras nollserie
+    (zonen har ingen separat RoR-data). Resamplas till snapshot-frekvens via medel.
+    """
+    years = sorted(set(snapshots.year))
+    frames = []
+    for year in years:
+        path = RAW_DIR / f"ror_nve_{zone}_{year}.parquet"
+        if not path.exists():
+            continue
+        df = pd.read_parquet(path)
+        df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True).dt.tz_localize(None)
+        frames.append(df.set_index("timestampUTC")["ror_mw"])
+
+    if not frames:
+        return pd.Series(0.0, index=snapshots, name="ror_mw")
+
+    hourly = pd.concat(frames).sort_index()
+    hourly = hourly[~hourly.index.duplicated(keep="first")]
+    # Resampla till snapshot-frekvens (medel), reindexera, fyll luckor
+    dt_h = (snapshots[1] - snapshots[0]).total_seconds() / 3600
+    resampled = hourly.resample(f"{int(dt_h)}h").mean()
+    result = resampled.reindex(snapshots).ffill().bfill().fillna(0.0)
+    result.name = "ror_mw"
+    return result
+
+
 def inflow_timeseries(params: Dict[str, float],
                       timestamps: pd.DatetimeIndex,
                       annual_scales: Dict[int, float] | None = None) -> pd.Series:

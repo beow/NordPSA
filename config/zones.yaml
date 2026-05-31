@@ -124,7 +124,8 @@ costs:
     p_nom_max_mw: 20000
 
   hydro:
-    vom_eur_per_mwh: 0.5
+    vom_eur_per_mwh: 0.6        # reservoarkraft (lagringsvärde)
+    vom_ror_eur_per_mwh: 0.5    # run-of-river (must-run, lägre än reservoar)
     extendable: false   # hydro capacity fixed; no new reservoirs
 
 # Solver

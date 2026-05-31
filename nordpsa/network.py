@@ -18,7 +18,7 @@ import pandas as pd
 import pypsa
 import yaml
 
-from nordpsa.hydro import compute_annual_scales, inflow_timeseries, load_nve_inflow
+from nordpsa.hydro import compute_annual_scales, inflow_timeseries, load_nve_inflow, load_nve_ror
 
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
@@ -207,6 +207,28 @@ def _add_hydro(
 
         if actual_inflow and zone in NVE_INFLOW_ZONES:
             inflow = load_nve_inflow(zone, snapshots)
+            # Run-of-river: separat must-run-generator. Reservoarinflödet
+            # (inflow_nve) exkluderar redan B11. Reducera reservoar-p_nom med
+            # RoR-turbinkapaciteten så total turbinkapacitet bevaras.
+            ror = load_nve_ror(zone, snapshots)
+            ror_p_nom = float(ror.max())
+            if ror_p_nom > 1.0:
+                pu = (ror / ror_p_nom).clip(0, 1)
+                n.add(
+                    "Generator", f"{zone} hydro_ror",
+                    bus=zone,
+                    carrier="hydro",
+                    p_nom=ror_p_nom,
+                    p_nom_extendable=False,
+                    p_min_pu=pu,
+                    p_max_pu=pu,
+                    marginal_cost=ccfg["hydro"].get("vom_ror_eur_per_mwh", mc_default),
+                )
+                # Bevara reservoarens energikapacitet (p_nom × max_hours) när
+                # turbineffekten reduceras med RoR-andelen.
+                cap_mwh = p_nom * max_h
+                p_nom   = max(p_nom - ror_p_nom, 1.0)
+                max_h   = cap_mwh / p_nom
         else:
             params = hydro_params[zone]
             annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None

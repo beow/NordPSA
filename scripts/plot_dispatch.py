@@ -171,15 +171,22 @@ def build_zone_df(zone: str, data: dict, demand: pd.DataFrame) -> pd.DataFrame:
         cols["import"] = market_series.clip(lower=0)
         cols["export"] = market_series.clip(upper=0)
 
-    # Övriga generatorer
+    # Övriga generatorer (run-of-river 'hydro_ror' foldas in i hydro-bandet)
+    hydro_gen = pd.Series(0.0, index=idx)
     for carrier, series in zone_gen.items():
-        if carrier not in ("market",) and carrier in COLORS:
+        if carrier == "market":
+            continue
+        if carrier == "hydro_ror":
+            hydro_gen = hydro_gen.add(series.clip(lower=0), fill_value=0.0)
+        elif carrier in COLORS:
             cols[carrier] = series.clip(lower=0)
 
-    # Hydro från dispatch_hydro.csv
+    # Hydro: reservoar (dispatch_hydro.csv) + run-of-river (generator ovan)
     hydro_col = f"{zone} hydro"
     if hydro_col in data["hydro"].columns:
-        cols["hydro"] = data["hydro"][hydro_col].clip(lower=0)
+        hydro_gen = hydro_gen.add(data["hydro"][hydro_col].clip(lower=0), fill_value=0.0)
+    if float(hydro_gen.abs().sum()) > 0:
+        cols["hydro"] = hydro_gen
 
     # Transmissionslänkar: brutto inflow/outflow per zon
     flows = data.get("flows")
