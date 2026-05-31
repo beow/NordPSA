@@ -445,6 +445,83 @@ def hydro_soc_initial_constraint(cfg: dict):
     return _extra_functionality
 
 
+def hydro_soc_band_constraint(cfg: dict, low_frac: float, high_frac: float):
+    """Returnerar en extra_functionality-callback som tillåter SOC[t0] att flyta
+    inom ett band [low_frac, high_frac] × kapacitet istället för en fast nivå.
+
+    Med cyclic_state_of_charge=True gäller SOC[0]==SOC[-1], så bandet styr den
+    gemensamma start/slut-nivån. Kapaciteten = config p_nom × max_hours (bevaras
+    även när reservoar-p_nom reduceras av run-of-river-uppdelningen).
+    """
+    bands = {}  # {"{zone} hydro": (low_mwh, high_mwh)}
+    for zone, zcfg in cfg["zones"].items():
+        if zcfg.get("hydro_soc_initial", None) is None:
+            continue
+        p_nom = zcfg.get("hydro_p_nom_mw", 0)
+        max_h = zcfg.get("hydro_max_hours", 0)
+        if p_nom == 0:
+            continue
+        cap = p_nom * max_h
+        bands[f"{zone} hydro"] = (low_frac * cap, high_frac * cap)
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not bands:
+            return
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        t0 = snapshots[0]
+        for su_name, (low_mwh, high_mwh) in bands.items():
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=t0) >= low_mwh,
+                name=f"soc_band_lo-{su_name}",
+            )
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=t0) <= high_mwh,
+                name=f"soc_band_hi-{su_name}",
+            )
+
+    return _extra_functionality
+
+
+def hydro_soc_terminal_band_constraint(cfg: dict, low_frac: float, high_frac: float):
+    """Returnerar en extra_functionality-callback som binder SOC vid SISTA tidssteget
+    till ett band [low_frac, high_frac] × kapacitet.
+
+    Avsedd för icke-cyklisk drift (cyclic_state_of_charge=False): startnivån sätts av
+    state_of_charge_initial (config hydro_soc_initial), och slutnivån tillåts flyta
+    inom bandet — start ≠ slut tillåts. Modellen kan därmed netto-tömma (eller fylla)
+    lagret en gång över horisonten, begränsat av bandet.
+    """
+    bands = {}
+    for zone, zcfg in cfg["zones"].items():
+        if zcfg.get("hydro_soc_initial", None) is None:
+            continue
+        p_nom = zcfg.get("hydro_p_nom_mw", 0)
+        max_h = zcfg.get("hydro_max_hours", 0)
+        if p_nom == 0:
+            continue
+        cap = p_nom * max_h
+        bands[f"{zone} hydro"] = (low_frac * cap, high_frac * cap)
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not bands:
+            return
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        tT = snapshots[-1]
+        for su_name, (low_mwh, high_mwh) in bands.items():
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=tT) >= low_mwh,
+                name=f"soc_terminal_lo-{su_name}",
+            )
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=tT) <= high_mwh,
+                name=f"soc_terminal_hi-{su_name}",
+            )
+
+    return _extra_functionality
+
+
 def hydro_terminal_value(cfg: dict, lambda_per_zone: Dict[str, float]):
     """Returnerar en extra_functionality-callback som lägger till terminalvärde.
 
