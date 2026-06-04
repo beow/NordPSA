@@ -62,6 +62,7 @@ def build_network(
     cyclic_soc:              bool = True,
     soc_initial_override:    dict | None = None,
     voll:                    bool = False,
+    batteries:               list | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -109,6 +110,7 @@ def build_network(
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
+    _add_batteries(n, batteries)
 
     return n
 
@@ -262,6 +264,33 @@ def _add_hydro(
             efficiency_dispatch=1.0,
             marginal_cost=mc,
         )
+
+
+def _add_batteries(n: pypsa.Network, batteries: list | None) -> None:
+    """Lägger till batterier som StorageUnit (carrier 'battery').
+
+    batteries: lista av (zon, p_nom_mw, max_hours). Round-trip ~90% (0.95×0.95),
+    kan ladda (p_min_pu=-1), cyklisk SOC, litet marginalkostnad för att bryta
+    degeneracy. Inget inflöde.
+    """
+    if not batteries:
+        return
+    for zone, p_nom, max_h in batteries:
+        if zone not in n.buses.index:
+            print(f"  Varning: batteri-zon {zone} saknas — hoppar över")
+            continue
+        n.add(
+            "StorageUnit", f"{zone} battery",
+            bus=zone,
+            carrier="battery",
+            p_nom=p_nom,
+            max_hours=max_h,
+            efficiency_store=0.95,
+            efficiency_dispatch=0.95,
+            cyclic_state_of_charge=True,
+            marginal_cost=0.01,
+        )
+        print(f"  → batteri {zone}: {p_nom:.0f} MW / {max_h:.0f}h ({p_nom*max_h/1e3:.1f} GWh)")
 
 
 def _add_nuclear(

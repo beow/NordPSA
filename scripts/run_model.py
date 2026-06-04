@@ -385,6 +385,9 @@ def main() -> None:
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
+    parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
+                        help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:1000:4'. "
+                             "Kan anges flera gånger.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -403,6 +406,14 @@ def main() -> None:
 
     soc_band = _parse_band(args.soc_band, "--soc-band") if args.soc_band else None
     soc_terminal_band = _parse_band(args.soc_terminal_band, "--soc-terminal-band") if args.soc_terminal_band else None
+
+    batteries = []
+    for spec in args.add_battery:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            print(f"Ogiltigt --add-battery format: '{spec}' (förväntat ZON:MW:HOURS)")
+            sys.exit(1)
+        batteries.append((parts[0].strip(), float(parts[1]), float(parts[2])))
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
@@ -479,6 +490,7 @@ def main() -> None:
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")
     if args.voll:                       flags.append("voll")
+    for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
@@ -511,7 +523,8 @@ def main() -> None:
                       normalize_inflow=args.normalized_inflow_profiles,
                       actual_inflow=not args.parametric_inflow,
                       cyclic_soc=cyclic_soc,
-                      voll=args.voll)
+                      voll=args.voll,
+                      batteries=batteries)
 
     # Terminalvärde: λ per hydro-zon = medel zonpris över hela perioden
     lambda_per_zone = None
