@@ -388,9 +388,9 @@ def main() -> None:
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
                         help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:1000:4'. "
                              "Kan anges flera gånger.")
-    parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW",
-                        help="Lägg till ny kärnkraft (baslast) i en zon, t.ex. 'SE-S:2500'. "
-                             "Kan anges flera gånger.")
+    parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
+                        help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
+                             "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -421,10 +421,11 @@ def main() -> None:
     extra_nuclear = []
     for spec in args.add_nuclear:
         parts = spec.split(":")
-        if len(parts) != 2:
-            print(f"Ogiltigt --add-nuclear format: '{spec}' (förväntat ZON:MW)")
+        if len(parts) not in (2, 3):
+            print(f"Ogiltigt --add-nuclear format: '{spec}' (förväntat ZON:MW eller ZON:MW:PMIN)")
             sys.exit(1)
-        extra_nuclear.append((parts[0].strip(), float(parts[1])))
+        pmin = float(parts[2]) if len(parts) == 3 else 1.0
+        extra_nuclear.append((parts[0].strip(), float(parts[1]), pmin))
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)

@@ -296,16 +296,16 @@ def _add_batteries(n: pypsa.Network, batteries: list | None) -> None:
 
 
 def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict) -> None:
-    """Lägger till NY kärnkraft som MUST-RUN baslast (Generator, carrier 'nuclear').
+    """Lägger till NY kärnkraft (Generator, carrier 'nuclear').
 
-    extra_nuclear: lista av (zon, p_nom_mw). p_min_pu = p_max_pu = 1.0 → full effekt
-    varje timme (tvingad baslast, oberoende av pris). Namnges '{zon} nuclear_new'.
-    MC = nuclear VOM (påverkar ej dispatch eftersom tvingad; sätter aldrig priset).
+    extra_nuclear: lista av (zon, p_nom_mw, p_min_pu). p_min_pu=1.0 → must-run baslast
+    (full effekt varje timme); p_min_pu=0 → dispatchbar (kör när pris > MC, kan backa).
+    Namnges '{zon} nuclear_new'. MC = nuclear VOM.
     """
     if not extra_nuclear:
         return
     mc = ccfg["nuclear"]["vom_eur_per_mwh"]
-    for zone, p_nom in extra_nuclear:
+    for zone, p_nom, p_min in extra_nuclear:
         if zone not in n.buses.index:
             print(f"  Varning: kärnkrafts-zon {zone} saknas — hoppar över")
             continue
@@ -316,10 +316,11 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict)
             p_nom=p_nom,
             p_nom_extendable=False,
             p_max_pu=1.0,
-            p_min_pu=1.0,
+            p_min_pu=p_min,
             marginal_cost=mc,
         )
-        print(f"  → ny kärnkraft {zone}: {p_nom:.0f} MW (must-run baslast, full varje timme)")
+        mode = "must-run baslast" if p_min >= 0.999 else f"dispatchbar (p_min={p_min})"
+        print(f"  → ny kärnkraft {zone}: {p_nom:.0f} MW ({mode}, MC {mc} EUR/MWh)")
 
 
 def _add_nuclear(
