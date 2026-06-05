@@ -63,6 +63,7 @@ def build_network(
     soc_initial_override:    dict | None = None,
     voll:                    bool = False,
     batteries:               list | None = None,
+    extra_nuclear:           list | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -111,6 +112,7 @@ def build_network(
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
     _add_batteries(n, batteries)
+    _add_extra_nuclear(n, extra_nuclear, ccfg)
 
     return n
 
@@ -291,6 +293,33 @@ def _add_batteries(n: pypsa.Network, batteries: list | None) -> None:
             marginal_cost=0.01,
         )
         print(f"  → batteri {zone}: {p_nom:.0f} MW / {max_h:.0f}h ({p_nom*max_h/1e3:.1f} GWh)")
+
+
+def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict) -> None:
+    """Lägger till NY kärnkraft som MUST-RUN baslast (Generator, carrier 'nuclear').
+
+    extra_nuclear: lista av (zon, p_nom_mw). p_min_pu = p_max_pu = 1.0 → full effekt
+    varje timme (tvingad baslast, oberoende av pris). Namnges '{zon} nuclear_new'.
+    MC = nuclear VOM (påverkar ej dispatch eftersom tvingad; sätter aldrig priset).
+    """
+    if not extra_nuclear:
+        return
+    mc = ccfg["nuclear"]["vom_eur_per_mwh"]
+    for zone, p_nom in extra_nuclear:
+        if zone not in n.buses.index:
+            print(f"  Varning: kärnkrafts-zon {zone} saknas — hoppar över")
+            continue
+        n.add(
+            "Generator", f"{zone} nuclear_new",
+            bus=zone,
+            carrier="nuclear",
+            p_nom=p_nom,
+            p_nom_extendable=False,
+            p_max_pu=1.0,
+            p_min_pu=1.0,
+            marginal_cost=mc,
+        )
+        print(f"  → ny kärnkraft {zone}: {p_nom:.0f} MW (must-run baslast, full varje timme)")
 
 
 def _add_nuclear(
