@@ -82,6 +82,57 @@ def make_vre_extendable(n, cfg: dict, zones: list, n_years: float,
     return touched
 
 
+def boost_onshore_capfac(profiles: "pd.DataFrame", increase: float) -> "pd.DataFrame":
+    """Höjer landbaserad vinds kapacitetsfaktor med en relativ andel `increase`
+    (0.1 = +10%) via en olinjär potens-transform per zon:
+
+        x   = cf / cf_max            (cf_max = profilens max per zon, ~0.8 pga
+                                      geografisk spridning — INTE installerad effekt)
+        cf' = cf_max · x^γ,  γ < 1
+
+    Konkav (γ<1) → lyfter låga/mellan effektnivåer mest (relativt; "mer effektiv
+    vid lätta vindar"), fixerar bägge ändar: cf=0→0 (vindstilla) och cf=cf_max→cf_max
+    (märkeffekt oförändrad). cf' överskrider aldrig cf_max (geografisk envelopp).
+
+    γ löses per zon med bisektion (mean är monotont avtagande i γ) så att
+    mean(cf') = (1+increase)·mean(cf). Endast `*_wind_onshore`-kolumner berörs;
+    offshore och sol lämnas orörda.
+    """
+    if increase <= 0:
+        return profiles
+    out = profiles.copy()
+    print(f"Höjer landbaserad vind-CF med {increase*100:.0f}% (olinjär potens-transform):")
+    for col in [c for c in profiles.columns if c.endswith("_wind_onshore")]:
+        cf     = profiles[col].astype(float)
+        cf_max = float(cf.max())
+        if cf_max <= 0:
+            continue
+        x      = (cf / cf_max).clip(0.0, 1.0)
+        mean0  = float(cf.mean())
+        target = mean0 * (1.0 + increase)
+        # Tak: γ→0 ger cf'→cf_max för alla cf>0
+        max_mean = cf_max * float((cf > 0).mean())
+        zone = col.replace("_wind_onshore", "")
+        if target > max_mean:
+            print(f"  Varning: {zone} — mål {target:.3f} > tak {max_mean:.3f}; klampar till taket")
+            target = max_mean
+        # Bisektion i γ ∈ (eps, 1]; mean(γ) avtagande → m>target ⇒ höj γ
+        lo, hi = 1e-4, 1.0
+        g = 1.0
+        for _ in range(60):
+            g = 0.5 * (lo + hi)
+            m = float((cf_max * x.pow(g)).mean())
+            if m > target:
+                lo = g
+            else:
+                hi = g
+        cf1 = cf_max * x.pow(g)
+        out[col] = cf1
+        print(f"  {zone:6s} CF {mean0:.3f}→{float(cf1.mean()):.3f} "
+              f"(+{100*(cf1.mean()/mean0-1):.1f}%), γ={g:.3f}, cf_max={cf_max:.3f} (oförändrad)")
+    return out
+
+
 def load_inputs(cfg: dict) -> dict:
     """Laddar alla förberedda indata från data/processed/."""
     load_df       = pd.read_parquet(PROC_DIR / "load.parquet")
@@ -443,6 +494,10 @@ def main() -> None:
     parser.add_argument("--expand-budget-meur", type=float, default=None, metavar="MEUR",
                         help="Som --expand-budget-musd men direkt i miljoner EUR. "
                              "T.ex. 20000 = 20 mdr€. Har företräde om båda anges.")
+    parser.add_argument("--onwind-capfac-increase", type=float, default=0.0, metavar="FRAC",
+                        help="Höj landbaserad vinds kapacitetsfaktor med denna relativa "
+                             "andel (0.1 = +10%%). Olinjär potens-transform per zon: lyfter "
+                             "låga effektnivåer mest, märkeffekt (cf_max) oförändrad.")
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
@@ -562,6 +617,7 @@ def main() -> None:
     for z in args.expand_vre:           flags.append(f"expand-vre-{z}")
     if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
+    if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
@@ -569,6 +625,9 @@ def main() -> None:
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
     inputs    = load_inputs(cfg)
+    if args.onwind_capfac_increase:
+        inputs["vre_profiles"] = boost_onshore_capfac(
+            inputs["vre_profiles"], args.onwind_capfac_increase)
     snapshots = make_snapshots(cfg, res, args.year)
     inputs    = resample_inputs(inputs, snapshots, res)
 
