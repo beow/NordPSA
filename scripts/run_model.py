@@ -440,6 +440,9 @@ def main() -> None:
                         help="Tak på overnight-kostnaden (miljoner USD) för Σ tillkommande "
                              "VRE+batteri i --expand-vre-zonerna. T.ex. 25000 = 25 GUSD. "
                              f"Konverteras till EUR med {USD_TO_EUR} USD/EUR.")
+    parser.add_argument("--expand-budget-meur", type=float, default=None, metavar="MEUR",
+                        help="Som --expand-budget-musd men direkt i miljoner EUR. "
+                             "T.ex. 20000 = 20 mdr€. Har företräde om båda anges.")
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
@@ -558,6 +561,7 @@ def main() -> None:
     if args.battery_extendable:         flags.append("battery-ext")
     for z in args.expand_vre:           flags.append(f"expand-vre-{z}")
     if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
+    if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
@@ -600,7 +604,8 @@ def main() -> None:
     extra_callbacks = []
     if args.expand_vre:
         n_years = len(snapshots) * res / 8760.0
-        forced  = args.expand_budget_musd is not None   # likhets-budget → dispatcheffekt
+        forced  = (args.expand_budget_musd is not None
+                   or args.expand_budget_meur is not None)   # likhets-budget → dispatcheffekt
         print(f"Riktad VRE-expansion i: {', '.join(args.expand_vre)}"
               + (" (TVINGAD budget, kapital=0)" if forced else ""))
         make_vre_extendable(n, cfg, args.expand_vre, n_years,
@@ -610,9 +615,14 @@ def main() -> None:
             for bname, su in n.storage_units.iterrows():
                 if su.bus in set(args.expand_vre) and su.carrier == "battery":
                     n.storage_units.at[bname, "capital_cost"] = 0.0
-            budget_eur = args.expand_budget_musd * 1e6 * USD_TO_EUR
-            print(f"  OC-budget: {args.expand_budget_musd:.0f} MUSD "
-                  f"= {budget_eur/1e9:.2f} mdr€ (vid {USD_TO_EUR} USD/EUR, likhet)")
+            if args.expand_budget_meur is not None:
+                budget_eur = args.expand_budget_meur * 1e6
+                print(f"  OC-budget: {args.expand_budget_meur:.0f} MEUR "
+                      f"= {budget_eur/1e9:.2f} mdr€ (likhet)")
+            else:
+                budget_eur = args.expand_budget_musd * 1e6 * USD_TO_EUR
+                print(f"  OC-budget: {args.expand_budget_musd:.0f} MUSD "
+                      f"= {budget_eur/1e9:.2f} mdr€ (vid {USD_TO_EUR} USD/EUR, likhet)")
             extra_callbacks.append(
                 oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
 
