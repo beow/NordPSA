@@ -29,7 +29,12 @@ from nordpsa.network import (
     hydro_soc_band_constraint,
     hydro_soc_terminal_band_constraint,
     hydro_terminal_value,
+    oc_budget_constraint,
+    _annualized_cost,
 )
+
+USD_TO_EUR = 0.926   # 1 USD ≈ 0.926 EUR (1 EUR ≈ 1.08 USD), 2026
+VRE_CARRIERS = ("wind_onshore", "wind_offshore", "solar")
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
@@ -43,6 +48,38 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "zones.yaml"
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+def make_vre_extendable(n, cfg: dict, zones: list, n_years: float,
+                        capital_in_objective: bool = True) -> list:
+    """Gör wind_onshore/wind_offshore/solar i givna zoner investerbara, oavsett
+    global expansion-toggle. Befintlig kapacitet låses som golv (p_nom_min).
+
+    capital_in_objective=True  → capital_cost = annualiserad × n_years (lönsamhets-
+                                 optimering, modellen bygger så mycket som lönar sig).
+    capital_in_objective=False → capital_cost = 0 (sunk): kombineras med en
+                                 likhets-budget som TVINGAR fram en given utgift;
+                                 modellen optimerar bara mix + dispatch (dispatcheffekt).
+    Returnerar lista av berörda namn."""
+    r   = cfg["costs"]["discount_rate"]
+    fom = cfg["costs"]["fom_fraction"]
+    zones = set(zones)
+    touched = []
+    for name, gen in n.generators.iterrows():
+        if gen.bus in zones and gen.carrier in VRE_CARRIERS:
+            tcfg     = cfg["costs"][gen.carrier]
+            existing = float(gen.p_nom)
+            ann      = _annualized_cost(tcfg["overnight_eur_per_w"],
+                                        tcfg["lifetime_years"], r, fom)
+            n.generators.at[name, "p_nom_extendable"] = True
+            n.generators.at[name, "p_nom_min"]        = existing
+            n.generators.at[name, "p_nom_max"]        = existing + tcfg.get("p_nom_max_mw", 50000)
+            n.generators.at[name, "capital_cost"]     = ann * n_years if capital_in_objective else 0.0
+            touched.append(name)
+            cc = f"annual.kap {ann/1e3:.0f} €/kW/år" if capital_in_objective else "kapital=0 (sunk)"
+            print(f"  → expanderbar: {name} (existing {existing:.0f} MW, "
+                  f"overnight {tcfg['overnight_eur_per_w']:.2f} €/W, {cc})")
+    return touched
 
 
 def load_inputs(cfg: dict) -> dict:
@@ -108,7 +145,8 @@ def solve(n, cfg: dict, log_path: Path | None = None,
           restricted_yearly_hydro: bool = False,
           lambda_per_zone: dict | None = None,
           soc_band: tuple[float, float] | None = None,
-          soc_terminal_band: tuple[float, float] | None = None) -> bool:
+          soc_terminal_band: tuple[float, float] | None = None,
+          extra_callbacks: list | None = None) -> bool:
     scfg    = cfg["solver"]
     solver  = scfg["name"]
     options = {k: v for k, v in scfg.items() if k != "name"}
@@ -137,6 +175,8 @@ def solve(n, cfg: dict, log_path: Path | None = None,
         callbacks.append(hydro_terminal_value(cfg, lambda_per_zone))
         for zone, lam in lambda_per_zone.items():
             print(f"  → terminalvärde {zone}: λ={lam:.1f} EUR/MWh")
+    if extra_callbacks:
+        callbacks.extend(extra_callbacks)
 
     def extra_func(n, snapshots):
         for cb in callbacks:
@@ -388,6 +428,18 @@ def main() -> None:
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
                         help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:1000:4'. "
                              "Kan anges flera gånger.")
+    parser.add_argument("--battery-extendable", action="store_true",
+                        help="Gör --add-battery investerbart: modellen optimerar effekten "
+                             "0..MW (varaktighet fast) mot batterikostnad i config. "
+                             "Utan flaggan är batteriet fast (dispatch-tillägg).")
+    parser.add_argument("--expand-vre", action="append", default=[], metavar="ZON",
+                        help="Gör wind_onshore/wind_offshore/solar i ZON investerbara "
+                             "(oavsett --no-expansion). Kan anges flera gånger. Kombinera "
+                             "med --expand-budget-musd för riktad budgetbegränsad expansion.")
+    parser.add_argument("--expand-budget-musd", type=float, default=None, metavar="MUSD",
+                        help="Tak på overnight-kostnaden (miljoner USD) för Σ tillkommande "
+                             "VRE+batteri i --expand-vre-zonerna. T.ex. 25000 = 25 GUSD. "
+                             f"Konverteras till EUR med {USD_TO_EUR} USD/EUR.")
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
@@ -503,6 +555,9 @@ def main() -> None:
     for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")
     if args.voll:                       flags.append("voll")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
+    if args.battery_extendable:         flags.append("battery-ext")
+    for z in args.expand_vre:           flags.append(f"expand-vre-{z}")
+    if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
@@ -538,7 +593,28 @@ def main() -> None:
                       cyclic_soc=cyclic_soc,
                       voll=args.voll,
                       batteries=batteries,
+                      battery_extendable=args.battery_extendable,
                       extra_nuclear=extra_nuclear)
+
+    # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
+    extra_callbacks = []
+    if args.expand_vre:
+        n_years = len(snapshots) * res / 8760.0
+        forced  = args.expand_budget_musd is not None   # likhets-budget → dispatcheffekt
+        print(f"Riktad VRE-expansion i: {', '.join(args.expand_vre)}"
+              + (" (TVINGAD budget, kapital=0)" if forced else ""))
+        make_vre_extendable(n, cfg, args.expand_vre, n_years,
+                            capital_in_objective=not forced)
+        if forced:
+            # batteriets kapitalkostnad nollas också (sunk) i de berörda zonerna
+            for bname, su in n.storage_units.iterrows():
+                if su.bus in set(args.expand_vre) and su.carrier == "battery":
+                    n.storage_units.at[bname, "capital_cost"] = 0.0
+            budget_eur = args.expand_budget_musd * 1e6 * USD_TO_EUR
+            print(f"  OC-budget: {args.expand_budget_musd:.0f} MUSD "
+                  f"= {budget_eur/1e9:.2f} mdr€ (vid {USD_TO_EUR} USD/EUR, likhet)")
+            extra_callbacks.append(
+                oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
 
     # Terminalvärde: λ per hydro-zon = medel zonpris över hela perioden
     lambda_per_zone = None
@@ -558,7 +634,8 @@ def main() -> None:
                restricted_yearly_hydro=args.restricted_yearly_hydro,
                lambda_per_zone=lambda_per_zone,
                soc_band=soc_band,
-               soc_terminal_band=soc_terminal_band)
+               soc_terminal_band=soc_terminal_band,
+               extra_callbacks=extra_callbacks)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")
         sys.exit(1)

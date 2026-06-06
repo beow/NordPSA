@@ -143,6 +143,16 @@ costs:
     vom_ror_eur_per_mwh: 0.5    # run-of-river (must-run, lägre än reservoar)
     extendable: false   # hydro capacity fixed; no new reservoirs
 
+  # Li-ion (LFP) utility-scale. Tvådelad kostnad: effektdel (€/kW på p_nom,
+  # växelriktare/BOP/nät) + energidel (€/kWh × max_hours, celler). Near-term,
+  # mellan DEA 2030 (142 €/kWh / 160 €/kW) och NREL ATB 2024. Kort livslängd.
+  # overnight €/MW = (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1000
+  battery:
+    energy_eur_per_kwh: 180
+    power_eur_per_kw:   150
+    lifetime_years:     15
+    fom_fraction:       0.025
+
 # Solver
 solver:
   name: highs

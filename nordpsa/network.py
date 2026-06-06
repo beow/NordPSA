@@ -63,6 +63,7 @@ def build_network(
     soc_initial_override:    dict | None = None,
     voll:                    bool = False,
     batteries:               list | None = None,
+    battery_extendable:      bool = False,
     extra_nuclear:           list | None = None,
 ) -> pypsa.Network:
     """
@@ -111,7 +112,7 @@ def build_network(
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
-    _add_batteries(n, batteries)
+    _add_batteries(n, batteries, ccfg, r, n_years, extendable=battery_extendable)
     _add_extra_nuclear(n, extra_nuclear, ccfg)
 
     return n
@@ -268,31 +269,53 @@ def _add_hydro(
         )
 
 
-def _add_batteries(n: pypsa.Network, batteries: list | None) -> None:
+def _add_batteries(n: pypsa.Network, batteries: list | None,
+                   ccfg: dict, r: float, n_years: float,
+                   extendable: bool = False) -> None:
     """Lägger till batterier som StorageUnit (carrier 'battery').
 
     batteries: lista av (zon, p_nom_mw, max_hours). Round-trip ~90% (0.95×0.95),
     kan ladda (p_min_pu=-1), cyklisk SOC, litet marginalkostnad för att bryta
     degeneracy. Inget inflöde.
+
+    Kostnad delas i effektdel (€/kW på p_nom) + energidel (€/kWh × max_hours).
+    overnight €/MW = (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1000.
+    Annualiseras med batteriets egen livslängd (kort, ~15 år) och FOM.
+    Om extendable=True optimerar modellen effekten 0..p_nom (varaktighet fast).
     """
     if not batteries:
         return
+    bc      = ccfg["battery"]
+    e_kwh   = bc["energy_eur_per_kwh"]
+    p_kw    = bc["power_eur_per_kw"]
+    life    = bc["lifetime_years"]
+    fom     = bc["fom_fraction"]
     for zone, p_nom, max_h in batteries:
         if zone not in n.buses.index:
             print(f"  Varning: batteri-zon {zone} saknas — hoppar över")
             continue
+        overnight_mw = (p_kw + max_h * e_kwh) * 1e3          # €/MW
+        cap_cost     = overnight_mw * (_crf(life, r) + fom) * n_years
         n.add(
             "StorageUnit", f"{zone} battery",
             bus=zone,
             carrier="battery",
             p_nom=p_nom,
+            p_nom_extendable=extendable,
+            p_nom_min=0.0 if extendable else p_nom,
+            p_nom_max=p_nom if extendable else float("inf"),
             max_hours=max_h,
             efficiency_store=0.95,
             efficiency_dispatch=0.95,
             cyclic_state_of_charge=True,
             marginal_cost=0.01,
+            capital_cost=cap_cost if extendable else 0.0,
         )
-        print(f"  → batteri {zone}: {p_nom:.0f} MW / {max_h:.0f}h ({p_nom*max_h/1e3:.1f} GWh)")
+        mode = f" (extendable ≤{p_nom:.0f} MW)" if extendable else ""
+        print(f"  → batteri {zone}: {p_nom:.0f} MW / {max_h:.0f}h "
+              f"({p_nom*max_h/1e3:.1f} GWh){mode}, "
+              f"overnight {overnight_mw/1e3:.0f} €/kW, "
+              f"annual.kap {overnight_mw*(_crf(life, r)+fom)/1e3:.0f} €/kW/år")
 
 
 def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict) -> None:
@@ -470,6 +493,69 @@ def _add_market_connections(
 # ---------------------------------------------------------------------------
 # Extra LP-constraints
 # ---------------------------------------------------------------------------
+
+def oc_budget_constraint(cfg: dict, zones, budget_eur: float, equality: bool = False):
+    """Returnerar en extra_functionality-callback som begränsar overnight-kostnaden
+    för tillkommande VRE + batteri i givna zoner:
+
+        Σ overnight_i × (p_nom_i − existing_i)  ≤  budget_eur   (equality=False)
+        Σ overnight_i × (p_nom_i − existing_i)  =  budget_eur   (equality=True)
+
+    equality=True TVINGAR fram exakt budget_eur i utgift (kombineras med kapital=0
+    i målfunktionen) → ren dispatcheffekt, inte lönsamhetsval.
+
+    Gäller extendable wind_onshore/wind_offshore/solar (existing = p_nom_min,
+    den fasta golvkapaciteten) samt extendable batterier (existing = 0).
+    Overnight för VRE = overnight_eur_per_w × 1e6 (€/MW); för batteri =
+    (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1e3 (€/MW).
+    """
+    VRE   = {"wind_onshore", "wind_offshore", "solar"}
+    zones = set(zones)
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        m     = n.model
+        gp    = m.variables["Generator-p_nom"]
+        gdim  = gp.dims[0]
+        terms = []
+        rhs   = float(budget_eur)
+
+        gext = n.generators[n.generators.p_nom_extendable]
+        for name, gen in gext.iterrows():
+            if gen.bus in zones and gen.carrier in VRE:
+                oc = cfg["costs"][gen.carrier]["overnight_eur_per_w"] * 1e6
+                terms.append(oc * gp.sel({gdim: name}))
+                rhs += oc * float(gen.p_nom_min)        # flytta existing till RHS
+
+        if "StorageUnit-p_nom" in m.variables:
+            sp   = m.variables["StorageUnit-p_nom"]
+            sdim = sp.dims[0]
+            bc   = cfg["costs"]["battery"]
+            sext = n.storage_units[n.storage_units.p_nom_extendable]
+            for name, su in sext.iterrows():
+                if su.bus in zones and su.carrier == "battery":
+                    oc = (bc["power_eur_per_kw"]
+                          + su.max_hours * bc["energy_eur_per_kwh"]) * 1e3
+                    terms.append(oc * sp.sel({sdim: name}))
+                    rhs += oc * float(su.p_nom_min)     # = 0
+
+        if not terms:
+            print("  Varning: OC-budget — inga extendable VRE/batteri i zonerna, "
+                  "ingen constraint lades till")
+            return
+
+        expr = terms[0]
+        for t in terms[1:]:
+            expr = expr + t
+        if equality:
+            m.add_constraints(expr == rhs, name="vre_battery_oc_budget")
+        else:
+            m.add_constraints(expr <= rhs, name="vre_battery_oc_budget")
+        op = "=" if equality else "≤"
+        print(f"  → OC-budget aktiv: Σ overnight×Δp_nom {op} {budget_eur/1e9:.2f} mdr€ "
+              f"över {len(terms)} enheter i {', '.join(sorted(zones))}")
+
+    return _extra_functionality
+
 
 def hydro_soc_initial_constraint(cfg: dict):
     """Returnerar en extra_functionality-callback som fixerar hydro SOC vid t=0.
