@@ -268,7 +268,12 @@ def save_results(n, label: str) -> None:
     if wv is not None and wv.shape[1] > 0:
         wv.to_csv(out / "water_value.csv")
 
+    # Vätgaslager-SOC (Store) + H2-buspriser, om H2 finns
+    if len(n.stores) > 0:
+        n.stores_t.e.to_csv(out / "h2_store_soc.csv")
+
     # thermal dispatch finns nu i dispatch_generators.csv (carrier="thermal")
+    # elektrolysör/turbin-flöden finns i flows.csv (links_t.p0)
 
     print(f"  → resultat sparade i {out}/")
 
@@ -501,6 +506,11 @@ def main() -> None:
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
+    parser.add_argument("--add-h2", action="append", default=[], metavar="ZON:DEMAND:EL:STORE[:TURB]",
+                        help="Lägg till vätgassystem i en zon (fasta storlekar): baslast DEMAND MW_H2, "
+                             "elektrolysör EL MW_el, lager STORE MWh, valfri turbin TURB MW_el. "
+                             "T.ex. 'SE-S:500:1000:50000:300'. Kostnader från costs.hydrogen. "
+                             "Kan anges flera gånger.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -536,6 +546,22 @@ def main() -> None:
             sys.exit(1)
         pmin = float(parts[2]) if len(parts) == 3 else 1.0
         extra_nuclear.append((parts[0].strip(), float(parts[1]), pmin))
+
+    hydrogen_overrides = {}
+    for spec in args.add_h2:
+        parts = spec.split(":")
+        if len(parts) not in (4, 5):
+            print(f"Ogiltigt --add-h2 format: '{spec}' (förväntat ZON:DEMAND:EL:STORE[:TURB])")
+            sys.exit(1)
+        zone = parts[0].strip()
+        hz = {
+            "demand_mw":    float(parts[1]),
+            "electrolyser": {"p_nom_mw": float(parts[2]), "extendable": False},
+            "store":        {"e_nom_mwh": float(parts[3]), "extendable": False},
+        }
+        if len(parts) == 5 and float(parts[4]) > 0:
+            hz["turbine"] = {"p_nom_mw": float(parts[4]), "extendable": False}
+        hydrogen_overrides[zone] = hz
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
@@ -619,6 +645,7 @@ def main() -> None:
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
     if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
+    for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
@@ -657,7 +684,8 @@ def main() -> None:
                       voll=args.voll,
                       batteries=batteries,
                       battery_extendable=args.battery_extendable,
-                      extra_nuclear=extra_nuclear)
+                      extra_nuclear=extra_nuclear,
+                      hydrogen_overrides=hydrogen_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
     extra_callbacks = []

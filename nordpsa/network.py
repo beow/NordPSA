@@ -65,6 +65,7 @@ def build_network(
     batteries:               list | None = None,
     battery_extendable:      bool = False,
     extra_nuclear:           list | None = None,
+    hydrogen_overrides:      dict | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -114,6 +115,7 @@ def build_network(
     _add_market_connections(n, cfg, market_prices)
     _add_batteries(n, batteries, ccfg, r, n_years, extendable=battery_extendable)
     _add_extra_nuclear(n, extra_nuclear, ccfg)
+    _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
 
     return n
 
@@ -344,6 +346,100 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict)
         )
         mode = "must-run baslast" if p_min >= 0.999 else f"dispatchbar (p_min={p_min})"
         print(f"  → ny kärnkraft {zone}: {p_nom:.0f} MW ({mode}, MC {mc} EUR/MWh)")
+
+
+def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
+                  n_years: float, overrides: dict | None = None) -> None:
+    """Bygger valfria vätgassystem per zon (power-to-X):
+
+        elbuss → Link(elektrolys, η_el) → Bus(H2) → Store(lager, e_cyclic)
+        Bus(H2) → Load(baslast, fast MW) + Generator(slack, hög MC)
+        Bus(H2) → Link(turbin, η_turb) → elbuss     (valfri)
+
+    Zon-konfiguration från cfg['hydrogen'] sammanslaget med `overrides` (CLI, har
+    företräde). Teknikkostnader/verkningsgrader från cfg['costs']['hydrogen'].
+    Allt i MWh (LHV). Hoppar tyst över om inget H2 konfigurerats.
+
+    Enheter: elektrolysör-p_nom i MW_el (bus0=el). Turbin specas i MW_el_ut men
+    PyPSA-p_nom (bus0=H2) = p_el/η_turb, capital_cost skalas med η_turb → kostnad
+    per kW_el ut. Icke-extendable komponenter får capital_cost=0.
+    """
+    h2_zones = dict(cfg.get("hydrogen") or {})
+    if overrides:
+        h2_zones.update(overrides)   # CLI har företräde
+    if not h2_zones:
+        return
+
+    hc       = cfg["costs"]["hydrogen"]
+    el_c, tb_c, st_c = hc["electrolyser"], hc["turbine"], hc["store"]
+    mc_slack = hc.get("slack_eur_per_mwh", MC_SLACK)
+    el_pmin  = hc.get("electrolyser_p_min_pu", 0.0)
+
+    for car in ("H2", "electrolyser", "H2 turbine", "H2 store", "H2 slack"):
+        if car not in n.carriers.index:
+            n.add("Carrier", car)
+
+    def ann_kw(c):   # annualiserad €/MW (overnight i €/kW)
+        return c["overnight_eur_per_kw"] * 1e3 * (_crf(c["lifetime_years"], r) + c["fom_fraction"]) * n_years
+    def ann_kwh(c):  # annualiserad €/MWh (overnight i €/kWh)
+        return c["overnight_eur_per_kwh"] * 1e3 * (_crf(c["lifetime_years"], r) + c["fom_fraction"]) * n_years
+
+    for zone, zc in h2_zones.items():
+        if zone not in n.buses.index:
+            print(f"  Varning: H2-zon {zone} saknas — hoppar över")
+            continue
+        h2bus = f"{zone} H2"
+        n.add("Bus", h2bus, carrier="H2")
+
+        # Elektrolys: bus0=el, bus1=H2; p_nom i MW_el
+        elc     = zc.get("electrolyser", {})
+        el_ext  = bool(elc.get("extendable", False))
+        el_pnom = float(elc.get("p_nom_mw", 0.0))
+        n.add("Link", f"{zone} electrolyser",
+              bus0=zone, bus1=h2bus, carrier="electrolyser",
+              efficiency=el_c["efficiency"],
+              p_nom=el_pnom, p_nom_extendable=el_ext,
+              p_nom_min=0.0 if el_ext else el_pnom,
+              p_min_pu=el_pmin,
+              capital_cost=ann_kw(el_c) if el_ext else 0.0)
+
+        # Lager: Store på H2-bussen (energi fri från effekt; e_cyclic: start=slut)
+        stc    = zc.get("store", {})
+        st_ext = bool(stc.get("extendable", False))
+        e_nom  = float(stc.get("e_nom_mwh", 0.0))
+        n.add("Store", f"{zone} H2 store",
+              bus=h2bus, carrier="H2 store",
+              e_nom=e_nom, e_nom_extendable=st_ext,
+              e_nom_min=0.0 if st_ext else e_nom,
+              e_cyclic=True,
+              capital_cost=ann_kwh(st_c) if st_ext else 0.0)
+
+        # Baslast (konstant MW) + slack (omött H2)
+        demand = float(zc.get("demand_mw", 0.0))
+        n.add("Load", f"{zone} H2 load", bus=h2bus, p_set=demand)
+        n.add("Generator", f"{zone} H2 slack",
+              bus=h2bus, carrier="H2 slack",
+              p_nom=1e6, marginal_cost=mc_slack)
+
+        # Valfri turbin: bus0=H2, bus1=el; config p_nom i MW_el_ut → p_nom(H2)=el/η
+        tbc      = zc.get("turbine")
+        turb_txt = "ingen turbin"
+        if tbc:
+            eta    = tb_c["efficiency"]
+            tb_ext = bool(tbc.get("extendable", False))
+            p_el   = float(tbc.get("p_nom_mw", 0.0))
+            p_h2   = p_el / eta if eta > 0 else 0.0
+            n.add("Link", f"{zone} H2 turbine",
+                  bus0=h2bus, bus1=zone, carrier="H2 turbine",
+                  efficiency=eta,
+                  p_nom=p_h2, p_nom_extendable=tb_ext,
+                  p_nom_min=0.0 if tb_ext else p_h2,
+                  capital_cost=(ann_kw(tb_c) * eta) if tb_ext else 0.0)
+            turb_txt = f"turbin {p_el:.0f} MW_el (η={eta})"
+
+        print(f"  → H2 {zone}: last {demand:.0f} MW, "
+              f"elektrolys {el_pnom:.0f} MW_el{' ext' if el_ext else ''} (η={el_c['efficiency']}), "
+              f"lager {e_nom:.0f} MWh{' ext' if st_ext else ''}, {turb_txt}")
 
 
 def _add_nuclear(

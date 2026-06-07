@@ -153,6 +153,25 @@ costs:
     lifetime_years:     15
     fom_fraction:       0.025
 
+  # Vätgas (power-to-X). Elektrolys (el→H2), Store-lager (energi €/kWh, effekt via
+  # länkar), valfri turbin (H2→el). Allt i MWh LHV. overnight: el/turbin €/kW,
+  # lager €/kWh. efficiency = verkningsgrad (LHV). Defaults ~DEA 2030, kalibreras.
+  hydrogen:
+    electrolyser: {overnight_eur_per_kw: 600, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.68}
+    turbine:      {overnight_eur_per_kw: 500, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.45}
+    store:        {overnight_eur_per_kwh: 2,  lifetime_years: 30, fom_fraction: 0.02}
+    slack_eur_per_mwh:    3000     # omött H2 / dyr import — sista utväg
+    electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
+
+# Vätgassystem per zon (opt-in). Utelämna = ingen H2. CLI-motsvarighet: --add-h2.
+# Exempel (avkommentera för att aktivera):
+# hydrogen:
+#   SE-S:
+#     demand_mw: 500
+#     electrolyser: {p_nom_mw: 1000, extendable: true}
+#     store:        {e_nom_mwh: 50000, extendable: false}
+#     turbine:      {p_nom_mw: 300, extendable: false}   # utelämna = ingen turbin
+
 # Solver
 solver:
   name: highs
