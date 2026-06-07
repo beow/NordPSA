@@ -1,0 +1,25 @@
+# Årlig total värmeefterfrågan (utrymmesvärme + tappvarmvatten) per land, TWh/år.
+# Kalibrerar den normaliserade When2Heat-profilen (FORMEN är robust/härledd;
+# NIVÅN nedan är förankrad i nationell statistik men med olika konfidens — se noter).
+#
+# Förankrat 2026-06-07 mot nationell statistik (bostäder + lokaler/tjänst,
+# rumsvärme + varmvatten). Bostadsdelen är väl belagd; tjänstesektorns värmeandel
+# är delvis UPPSKATTAD (statistiken redovisar ofta total energi, ej bara värme).
+#
+#   SE 77  — Energimyndigheten 2023: småhus 29.7 + flerbostad 29.1 + lokaler 17.5
+#            ≈ 76.3 (≈77 TWh 2019). VÄL BELAGD.
+#   FI 72  — Statistikcentralen: bostäder rumsvärme 44 + varmvatten 10 = 54;
+#            tjänstesektor ~18 (uppskattad, dh 'övriga byggnader' + el/olja). MEDEL.
+#   NO 53  — SSB/NVE Energibruksrapporten: bostäder ~36 (≈75% av 47.5 TWh);
+#            tjänst ~17 (uppskattad värmeandel av 36 TWh totalt). MEDEL.
+#   DK 50  — Energistyrelsen (Energistatistik): bostäder+tjänst rumsvärme+varmvatten,
+#            ~50 TWh. APPROXIMATIV (ren totalsiffra ej bekräftad i källsökning).
+#
+# Splittas till zoner via befolkningsandel (SE→SE-N/SE-S, NO→NO-N/NO-S).
+# Byt värde → profilen skalas om linjärt (formen oförändrad).
+
+heat_annual_twh:
+  "SE": 77
+  "NO": 53   # OBS: citat krävs — YAML tolkar annars NO som boolean false
+  "DK": 50
+  "FI": 72

@@ -1,4 +1,4 @@
-.PHONY: env fetch fetch-ec fetch-nve build solve results all
+.PHONY: env fetch fetch-ec fetch-nve fetch-openmeteo build build-heat solve results all
 
 env:
 	conda env create -f environment.yml
@@ -15,8 +15,14 @@ fetch-ec:
 fetch-nve:
 	python scripts/fetch_nve.py
 
+fetch-openmeteo:
+	python scripts/fetch_openmeteo.py
+
 build:
 	python scripts/build_inputs.py
+
+build-heat:
+	python scripts/build_heat.py
 
 solve:
 	python scripts/run_model.py
