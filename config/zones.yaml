@@ -152,6 +152,7 @@ costs:
     power_eur_per_kw:   150
     lifetime_years:     15
     fom_fraction:       0.025
+    p_nom_max_mw:       50000   # tak per zon för expanderbara batterier
 
   # Vätgas (power-to-X). Elektrolys (el→H2), Store-lager (energi €/kWh, effekt via
   # länkar), valfri turbin (H2→el). Allt i MWh LHV. overnight: el/turbin €/kW,

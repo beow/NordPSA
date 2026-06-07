@@ -63,7 +63,6 @@ def build_network(
     soc_initial_override:    dict | None = None,
     voll:                    bool = False,
     batteries:               list | None = None,
-    battery_extendable:      bool = False,
     extra_nuclear:           list | None = None,
     hydrogen_overrides:      dict | None = None,
 ) -> pypsa.Network:
@@ -113,7 +112,7 @@ def build_network(
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
-    _add_batteries(n, batteries, ccfg, r, n_years, extendable=battery_extendable)
+    _add_batteries(n, batteries, ccfg, r, n_years)
     _add_extra_nuclear(n, extra_nuclear, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
 
@@ -272,18 +271,18 @@ def _add_hydro(
 
 
 def _add_batteries(n: pypsa.Network, batteries: list | None,
-                   ccfg: dict, r: float, n_years: float,
-                   extendable: bool = False) -> None:
+                   ccfg: dict, r: float, n_years: float) -> None:
     """Lägger till batterier som StorageUnit (carrier 'battery').
 
-    batteries: lista av (zon, p_nom_mw, max_hours). Round-trip ~90% (0.95×0.95),
-    kan ladda (p_min_pu=-1), cyklisk SOC, litet marginalkostnad för att bryta
-    degeneracy. Inget inflöde.
+    batteries: lista av (zon, p_nom_mw, max_hours, extendable). Round-trip ~90%
+    (0.95×0.95), kan ladda (p_min_pu=-1), cyklisk SOC, litet marginalkostnad för
+    att bryta degeneracy. Inget inflöde. Varaktigheten (max_hours) är fast — vid
+    extendable optimeras bara effekten (p_nom), energi = p_nom × max_hours.
 
     Kostnad delas i effektdel (€/kW på p_nom) + energidel (€/kWh × max_hours).
     overnight €/MW = (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1000.
-    Annualiseras med batteriets egen livslängd (kort, ~15 år) och FOM.
-    Om extendable=True optimerar modellen effekten 0..p_nom (varaktighet fast).
+    Annualiseras med batteriets egen livslängd (kort, ~15 år) och FOM. Fast
+    batteri (extendable=False) får capital_cost=0; extendable får finit p_nom_max.
     """
     if not batteries:
         return
@@ -292,7 +291,8 @@ def _add_batteries(n: pypsa.Network, batteries: list | None,
     p_kw    = bc["power_eur_per_kw"]
     life    = bc["lifetime_years"]
     fom     = bc["fom_fraction"]
-    for zone, p_nom, max_h in batteries:
+    pmax    = float(bc.get("p_nom_max_mw", 50000))
+    for zone, p_nom, max_h, ext in batteries:
         if zone not in n.buses.index:
             print(f"  Varning: batteri-zon {zone} saknas — hoppar över")
             continue
@@ -302,20 +302,19 @@ def _add_batteries(n: pypsa.Network, batteries: list | None,
             "StorageUnit", f"{zone} battery",
             bus=zone,
             carrier="battery",
-            p_nom=p_nom,
-            p_nom_extendable=extendable,
-            p_nom_min=0.0 if extendable else p_nom,
-            p_nom_max=p_nom if extendable else float("inf"),
+            p_nom=0.0 if ext else p_nom,
+            p_nom_extendable=ext,
+            p_nom_min=0.0 if ext else p_nom,
+            p_nom_max=pmax if ext else float("inf"),
             max_hours=max_h,
             efficiency_store=0.95,
             efficiency_dispatch=0.95,
             cyclic_state_of_charge=True,
             marginal_cost=0.01,
-            capital_cost=cap_cost if extendable else 0.0,
+            capital_cost=cap_cost if ext else 0.0,
         )
-        mode = f" (extendable ≤{p_nom:.0f} MW)" if extendable else ""
-        print(f"  → batteri {zone}: {p_nom:.0f} MW / {max_h:.0f}h "
-              f"({p_nom*max_h/1e3:.1f} GWh){mode}, "
+        mode = f"extendable ≤{pmax:.0f} MW" if ext else f"fast {p_nom:.0f} MW"
+        print(f"  → batteri {zone}: {mode} / {max_h:.0f}h, "
               f"overnight {overnight_mw/1e3:.0f} €/kW, "
               f"annual.kap {overnight_mw*(_crf(life, r)+fom)/1e3:.0f} €/kW/år")
 

@@ -488,6 +488,11 @@ def main() -> None:
                         help="Gör --add-battery investerbart: modellen optimerar effekten "
                              "0..MW (varaktighet fast) mot batterikostnad i config. "
                              "Utan flaggan är batteriet fast (dispatch-tillägg).")
+    parser.add_argument("--battery", nargs="+", default=None, metavar="DURATION [ZON:MW ...]",
+                        help="Batterier med given varaktighet (t.ex. '4h'). Utan zoner: "
+                             "expanderbart 4h-batteri i VARJE zon (modellen optimerar effekten). "
+                             "Med zoner (t.ex. '4h SE-S:5000 SE-N:2000'): fasta storlekar i de "
+                             "angivna zonerna, 0 i övriga. Varaktigheten är fast (StorageUnit).")
     parser.add_argument("--expand-vre", action="append", default=[], metavar="ZON",
                         help="Gör wind_onshore/wind_offshore/solar i ZON investerbara "
                              "(oavsett --no-expansion). Kan anges flera gånger. Kombinera "
@@ -534,13 +539,29 @@ def main() -> None:
     soc_band = _parse_band(args.soc_band, "--soc-band") if args.soc_band else None
     soc_terminal_band = _parse_band(args.soc_terminal_band, "--soc-terminal-band") if args.soc_terminal_band else None
 
+    # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
     batteries = []
-    for spec in args.add_battery:
+    for spec in args.add_battery:   # bakåtkompatibel: --add-battery + --battery-extendable
         parts = spec.split(":")
         if len(parts) != 3:
             print(f"Ogiltigt --add-battery format: '{spec}' (förväntat ZON:MW:HOURS)")
             sys.exit(1)
-        batteries.append((parts[0].strip(), float(parts[1]), float(parts[2])))
+        batteries.append((parts[0].strip(), float(parts[1]), float(parts[2]),
+                          bool(args.battery_extendable)))
+    # --battery DURATION [ZON:MW ...]: utan zoner = expanderbart i ALLA zoner;
+    # med zoner = fasta storlekar i de angivna, 0 i övriga. (Zoner expanderas
+    # efter att cfg lästs in.)
+    battery_hours = None
+    battery_fixed = None   # None = global expandable; list = fasta (zon, mw)
+    if args.battery:
+        battery_hours = float(str(args.battery[0]).rstrip("hH"))
+        rest = ":".join(args.battery[1:])
+        if rest:
+            toks = [t for t in rest.split(":") if t != ""]
+            if len(toks) % 2 != 0:
+                print(f"Ogiltigt --battery zonformat: '{rest}' (förväntat ZON:MW:ZON:MW ...)")
+                sys.exit(1)
+            battery_fixed = [(toks[i].strip(), float(toks[i + 1])) for i in range(0, len(toks), 2)]
 
     extra_nuclear = []
     for spec in args.add_nuclear:
@@ -580,6 +601,13 @@ def main() -> None:
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
+
+    # Expandera --battery nu när zonlistan är känd
+    if battery_hours is not None:
+        if battery_fixed is None:          # global: expanderbart i varje zon
+            batteries += [(z, 0.0, battery_hours, True) for z in cfg["zones"]]
+        else:                              # fasta storlekar i angivna zoner
+            batteries += [(z, mw, battery_hours, False) for z, mw in battery_fixed]
 
     # Extra last: nollställ alltid config-värden; applicera --extra-load om givet
     cfg["additional_load_mw"] = {}
@@ -655,6 +683,7 @@ def main() -> None:
     if args.voll:                       flags.append("voll")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
+    if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
     for z in args.expand_vre:           flags.append(f"expand-vre-{z}")
     if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
@@ -699,7 +728,6 @@ def main() -> None:
                       cyclic_soc=cyclic_soc,
                       voll=args.voll,
                       batteries=batteries,
-                      battery_extendable=args.battery_extendable,
                       extra_nuclear=extra_nuclear,
                       hydrogen_overrides=hydrogen_overrides or None)
 
