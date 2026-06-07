@@ -511,6 +511,10 @@ def main() -> None:
                              "elektrolysör EL MW_el, lager STORE MWh, valfri turbin TURB MW_el. "
                              "T.ex. 'SE-S:500:1000:50000:300'. Kostnader från costs.hydrogen. "
                              "Kan anges flera gånger.")
+    parser.add_argument("--add-h2-ext", action="append", default=[], metavar="ZON:DEMAND",
+                        help="Investerbart vätgassystem (extendable elektrolys + lager, INGEN turbin): "
+                             "baslast DEMAND MW_H2, modellen dimensionerar elektrolysör och lager mot "
+                             "costs.hydrogen. T.ex. 'SE-N:1000'. Kan anges flera gånger.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -562,6 +566,17 @@ def main() -> None:
         if len(parts) == 5 and float(parts[4]) > 0:
             hz["turbine"] = {"p_nom_mw": float(parts[4]), "extendable": False}
         hydrogen_overrides[zone] = hz
+
+    for spec in args.add_h2_ext:
+        parts = spec.split(":")
+        if len(parts) != 2:
+            print(f"Ogiltigt --add-h2-ext format: '{spec}' (förväntat ZON:DEMAND)")
+            sys.exit(1)
+        hydrogen_overrides[parts[0].strip()] = {
+            "demand_mw":    float(parts[1]),
+            "electrolyser": {"p_nom_mw": 0.0, "extendable": True},
+            "store":        {"e_nom_mwh": 0.0, "extendable": True},
+        }
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
@@ -646,6 +661,7 @@ def main() -> None:
     if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
+    for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""

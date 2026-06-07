@@ -399,11 +399,13 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
         elc     = zc.get("electrolyser", {})
         el_ext  = bool(elc.get("extendable", False))
         el_pnom = float(elc.get("p_nom_mw", 0.0))
+        el_pmax = float(elc.get("p_nom_max_mw", 50000.0))
         n.add("Link", f"{zone} electrolyser",
               bus0=zone, bus1=h2bus, carrier="electrolyser",
               efficiency=el_c["efficiency"],
               p_nom=el_pnom, p_nom_extendable=el_ext,
               p_nom_min=0.0 if el_ext else el_pnom,
+              p_nom_max=el_pmax if el_ext else float("inf"),
               p_min_pu=el_pmin,
               capital_cost=ann_kw(el_c) if el_ext else 0.0)
 
@@ -412,10 +414,12 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
         st_ext    = bool(stc.get("extendable", False))
         e_nom     = float(stc.get("e_nom_mwh", 0.0))
         st_overn  = float(stc.get("overnight_eur_per_kwh", st_by_zone.get(zone, st_base)))
+        st_emax   = float(stc.get("e_nom_max_mwh", 1e7))
         n.add("Store", f"{zone} H2 store",
               bus=h2bus, carrier="H2 store",
               e_nom=e_nom, e_nom_extendable=st_ext,
               e_nom_min=0.0 if st_ext else e_nom,
+              e_nom_max=st_emax if st_ext else float("inf"),
               e_cyclic=True,
               capital_cost=ann_kwh(st_overn, st_c) if st_ext else 0.0)
 
