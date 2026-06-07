@@ -413,7 +413,7 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
         st_ext    = bool(stc.get("extendable", False))
         e_nom     = float(stc.get("e_nom_mwh", 0.0))
         st_overn  = float(stc.get("overnight_eur_per_kwh", st_by_zone.get(zone, st_base)))
-        st_emax   = float(stc.get("e_nom_max_mwh", 1e7))
+        st_emax   = float(stc.get("e_nom_max_mwh", st_c.get("e_nom_max_mwh", 1e7)))
         n.add("Store", f"{zone} H2 store",
               bus=h2bus, carrier="H2 store",
               e_nom=e_nom, e_nom_extendable=st_ext,

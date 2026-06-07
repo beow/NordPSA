@@ -196,6 +196,7 @@ costs:
         DK: 0.5                         # saltdomer → saltkavern
       lifetime_years: 30
       fom_fraction:   0.02
+      e_nom_max_mwh:  500000            # 500 GWh tak per zon för expanderbart lager
     slack_eur_per_mwh:    3000     # omött H2 / dyr import — sista utväg
     electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
 
@@ -214,4 +215,4 @@ solver:
   threads: 16
   solver: ipm          # interior point method — skalbar för stora LP
   run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
-  ipm_optimality_tolerance: 1e-6
+  ipm_optimality_tolerance: 1e-5   # lossad från 1e-6 → färre iterationer (expansion: sista decimalen i p_nom är brus)
