@@ -155,11 +155,21 @@ costs:
 
   # Vätgas (power-to-X). Elektrolys (el→H2), Store-lager (energi €/kWh, effekt via
   # länkar), valfri turbin (H2→el). Allt i MWh LHV. overnight: el/turbin €/kW,
-  # lager €/kWh. efficiency = verkningsgrad (LHV). Defaults ~DEA 2030, kalibreras.
+  # lager €/kWh. efficiency = verkningsgrad (LHV). Kalibrerat mot DEA 2030
+  # (Technology Data, korsverifierat mot PyPSA technology-data), 2026-06-07.
   hydrogen:
-    electrolyser: {overnight_eur_per_kw: 600, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.68}
-    turbine:      {overnight_eur_per_kw: 500, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.45}
-    store:        {overnight_eur_per_kwh: 2,  lifetime_years: 30, fom_fraction: 0.02}
+    # Alkalisk elektrolysör, 100 MW-skala (DEA 2030: 575 €/kW, 66% LHV, FOM 4%)
+    electrolyser: {overnight_eur_per_kw: 575, lifetime_years: 25, fom_fraction: 0.04, efficiency: 0.66}
+    # Vätgas-OCGT som peaker (DEA OCGT 2030: 435 €/kW, 41% el-verkningsgrad)
+    turbine:      {overnight_eur_per_kw: 435, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.41}
+    # Lager per zon enligt geologi: default bergrum/ståltank (urberg, DEA ~5 €/kWh);
+    # zoner med saltdomer (DK) får billig saltkavern (DEA ~0.5 €/kWh).
+    store:
+      overnight_eur_per_kwh: 5          # default: bergrum/ståltank (SE/NO/FI urberg)
+      overnight_eur_per_kwh_by_zone:    # geologiska undantag
+        DK: 0.5                         # saltdomer → saltkavern
+      lifetime_years: 30
+      fom_fraction:   0.02
     slack_eur_per_mwh:    3000     # omött H2 / dyr import — sista utväg
     electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
 

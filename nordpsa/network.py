@@ -381,8 +381,12 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
 
     def ann_kw(c):   # annualiserad €/MW (overnight i €/kW)
         return c["overnight_eur_per_kw"] * 1e3 * (_crf(c["lifetime_years"], r) + c["fom_fraction"]) * n_years
-    def ann_kwh(c):  # annualiserad €/MWh (overnight i €/kWh)
-        return c["overnight_eur_per_kwh"] * 1e3 * (_crf(c["lifetime_years"], r) + c["fom_fraction"]) * n_years
+    def ann_kwh(overnight, c):  # annualiserad €/MWh (overnight i €/kWh, per zon)
+        return overnight * 1e3 * (_crf(c["lifetime_years"], r) + c["fom_fraction"]) * n_years
+
+    # Lagerkostnad per zon: zon-block > geologiska undantag > default
+    st_base    = st_c["overnight_eur_per_kwh"]
+    st_by_zone = st_c.get("overnight_eur_per_kwh_by_zone") or {}
 
     for zone, zc in h2_zones.items():
         if zone not in n.buses.index:
@@ -404,15 +408,16 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
               capital_cost=ann_kw(el_c) if el_ext else 0.0)
 
         # Lager: Store på H2-bussen (energi fri från effekt; e_cyclic: start=slut)
-        stc    = zc.get("store", {})
-        st_ext = bool(stc.get("extendable", False))
-        e_nom  = float(stc.get("e_nom_mwh", 0.0))
+        stc       = zc.get("store", {})
+        st_ext    = bool(stc.get("extendable", False))
+        e_nom     = float(stc.get("e_nom_mwh", 0.0))
+        st_overn  = float(stc.get("overnight_eur_per_kwh", st_by_zone.get(zone, st_base)))
         n.add("Store", f"{zone} H2 store",
               bus=h2bus, carrier="H2 store",
               e_nom=e_nom, e_nom_extendable=st_ext,
               e_nom_min=0.0 if st_ext else e_nom,
               e_cyclic=True,
-              capital_cost=ann_kwh(st_c) if st_ext else 0.0)
+              capital_cost=ann_kwh(st_overn, st_c) if st_ext else 0.0)
 
         # Baslast (konstant MW) + slack (omött H2)
         demand = float(zc.get("demand_mw", 0.0))
@@ -439,7 +444,7 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
 
         print(f"  → H2 {zone}: last {demand:.0f} MW, "
               f"elektrolys {el_pnom:.0f} MW_el{' ext' if el_ext else ''} (η={el_c['efficiency']}), "
-              f"lager {e_nom:.0f} MWh{' ext' if st_ext else ''}, {turb_txt}")
+              f"lager {e_nom:.0f} MWh{' ext' if st_ext else ''} ({st_overn:g} €/kWh), {turb_txt}")
 
 
 def _add_nuclear(
