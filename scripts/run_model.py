@@ -523,6 +523,10 @@ def main() -> None:
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
+    parser.add_argument("--market-elasticity", action="store_true",
+                        help="Pris-elastisk kontinentgräns (trappa): stora nordiska flöden "
+                             "flyttar gränspriset. S_export/S_import per gräns från "
+                             "config market_elasticity. Rekommenderas för expansionskörningar.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -627,6 +631,10 @@ def main() -> None:
         cfg["costs"]["hydro"]["spill_cost_eur_per_mwh"] = args.spill_cost
         print(f"  → hydro spill_cost = {args.spill_cost} EUR/MWh")
 
+    if args.market_elasticity:
+        cfg.setdefault("market_elasticity", {})["enabled"] = True
+        print("  → pris-elastisk kontinentgräns (trappa) aktiv")
+
     if args.effective_ntc:
         eff = cfg.get("market_connections_effective_mw", {})
         for mc in cfg.get("market_connections", []):
@@ -676,6 +684,7 @@ def main() -> None:
     if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
+    if args.market_elasticity:          flags.append("market-elasticity")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")

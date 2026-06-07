@@ -75,6 +75,31 @@ market_connections_effective_mw:
   NO NL:    620
   NO GB:   1450
 
+# Pris-elasticitet vid kontinentgränserna — UNDERLAG för pristrappa i expansion.
+# EJ INKOPPLAT ÄNNU (ingen kod läser detta; enabled=false).
+# S = prisspread (€/MWh) vid full NTC: hur mycket gränspriset rör sig när Norden
+# pressar flödet. Empiriskt förankrat i 2023-2025 prisspread per gräns (median av
+# |P_utland − P_nord| när gränsen binder, dvs spread öppnar). Asymmetriskt:
+# export ≫ import eftersom Norden är strukturellt billig (dumpar i dyr grannmarknad).
+# VARNING: 2023-2025 var gaskris-era → kontinenten strukturellt dyr; S_export i
+# överkant. Skala ner (t.ex. ×0.6) eller använd framtidsprisbana för framåtblickande
+# scenarier. Nyckel = market_connections-namn.
+market_elasticity:
+  enabled: false
+  n_tiers: 3                              # steg per riktning
+  offset_profile: [0.1667, 0.5, 0.8333]   # {1/6,1/2,5/6}·S (mittpunkts-approximation)
+  spread_eur_per_mwh:        # per gräns: export-spread / import-spread (€/MWh vid full NTC)
+    FI EE:   {export: 59, import: 15}
+    SE-S LT: {export: 44, import:  6}
+    SE-S PL: {export: 64, import: 10}
+    SE-S DE: {export: 50, import:  7}
+    DK DE:   {export: 16, import:  6}
+    DK NL:   {export: 21, import:  5}
+    DK GB:   {export: 28, import: 13}
+    NO DE:   {export: 38, import: 16}
+    NO NL:   {export: 38, import: 14}
+    NO GB:   {export: 44, import: 15}
+
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
