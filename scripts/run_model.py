@@ -511,6 +511,10 @@ def main() -> None:
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
+    parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
+                        help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
+                             "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
+                             "Energi-motsvarighet till --add-nuclear men variabel. Kan anges flera gånger.")
     parser.add_argument("--add-h2", action="append", default=[], metavar="ZON:DEMAND:EL:STORE[:TURB]",
                         help="Lägg till vätgassystem i en zon (fasta storlekar): baslast DEMAND MW_H2, "
                              "elektrolysör EL MW_el, lager STORE MWh, valfri turbin TURB MW_el. "
@@ -575,6 +579,14 @@ def main() -> None:
             sys.exit(1)
         pmin = float(parts[2]) if len(parts) == 3 else 1.0
         extra_nuclear.append((parts[0].strip(), float(parts[1]), pmin))
+
+    extra_wind = []
+    for spec in args.add_wind:
+        parts = spec.split(":")
+        if len(parts) != 2:
+            print(f"Ogiltigt --add-wind format: '{spec}' (förväntat ZON:MW)")
+            sys.exit(1)
+        extra_wind.append((parts[0].strip(), float(parts[1])))
 
     hydrogen_overrides = {}
     for spec in args.add_h2:
@@ -698,6 +710,7 @@ def main() -> None:
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
     if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
+    for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
@@ -738,6 +751,7 @@ def main() -> None:
                       voll=args.voll,
                       batteries=batteries,
                       extra_nuclear=extra_nuclear,
+                      extra_wind=extra_wind,
                       hydrogen_overrides=hydrogen_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)

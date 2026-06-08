@@ -64,6 +64,7 @@ def build_network(
     voll:                    bool = False,
     batteries:               list | None = None,
     extra_nuclear:           list | None = None,
+    extra_wind:              list | None = None,
     hydrogen_overrides:      dict | None = None,
 ) -> pypsa.Network:
     """
@@ -114,6 +115,7 @@ def build_network(
     _add_market_connections(n, cfg, market_prices)
     _add_batteries(n, batteries, ccfg, r, n_years)
     _add_extra_nuclear(n, extra_nuclear, ccfg)
+    _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
 
     return n
@@ -345,6 +347,39 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict)
         )
         mode = "must-run baslast" if p_min >= 0.999 else f"dispatchbar (p_min={p_min})"
         print(f"  → ny kärnkraft {zone}: {p_nom:.0f} MW ({mode}, MC {mc} EUR/MWh)")
+
+
+def _add_extra_wind(n: pypsa.Network, extra_wind: list | None,
+                    vre_profiles: pd.DataFrame, ccfg: dict) -> None:
+    """Lägger till NY landbaserad vindkraft (Generator, carrier 'wind_onshore').
+
+    extra_wind: lista av (zon, p_nom_mw). Använder samma CF-profil som zonens
+    befintliga wind_onshore ({zon}_wind_onshore). Namnges '{zon} wind_new'.
+    Icke-extendable (dispatch). MC = wind_onshore VOM. Energi-motsvarighet till
+    --add-nuclear men variabel (curtailas vid överskott).
+    """
+    if not extra_wind:
+        return
+    mc = ccfg["wind_onshore"]["vom_eur_per_mwh"]
+    for zone, p_nom in extra_wind:
+        if zone not in n.buses.index:
+            print(f"  Varning: vind-zon {zone} saknas — hoppar över")
+            continue
+        col = f"{zone}_wind_onshore"
+        if col not in vre_profiles.columns:
+            print(f"  Varning: ingen vindprofil {col} — hoppar över")
+            continue
+        n.add(
+            "Generator", f"{zone} wind_new",
+            bus=zone,
+            carrier="wind_onshore",
+            p_nom=p_nom,
+            p_nom_extendable=False,
+            p_max_pu=vre_profiles[col],
+            marginal_cost=mc,
+        )
+        cf = vre_profiles[col].mean()
+        print(f"  → ny vind {zone}: {p_nom:.0f} MW (CF {cf:.3f}, MC {mc} EUR/MWh)")
 
 
 def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
