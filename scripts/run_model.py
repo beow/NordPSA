@@ -263,33 +263,47 @@ def solve(n, cfg: dict, log_path: Path | None = None,
     return status == "ok"
 
 
-def save_results(n, label: str) -> None:
+def extract_results(n) -> dict:
+    """Alla resultat-tidsserier ur ett löst nätverk → {namn: DataFrame}.
+
+    EN sanningskälla för BÅDA körvägarna (standard + rullande horisont): lägg till
+    en rad här så dyker resultatet upp i båda automatiskt. Nyckel = filnamn (utan
+    .csv). None/tomma DataFrames hoppas tyst över vid sparning.
+
+    Obs: hydro_soc/dispatch_hydro innehåller ALLA storage units (även batteri).
+    water_value (dual på lagringsbalansen) kräver assign_all_duals=True i optimize.
+    """
+    out = {
+        "dispatch_generators": n.generators_t.p,
+        "dispatch_hydro":      n.storage_units_t.p,
+        "hydro_soc":           n.storage_units_t.state_of_charge,          # inkl. batteri-SOC
+        "hydro_spill":         n.storage_units_t.spill,
+        "flows":               n.links_t.p0,
+        "prices":              n.buses_t.marginal_price,
+        "water_value":         n.storage_units_t.get("mu_energy_balance"),  # dual = vattenvärde
+    }
+    if len(n.stores) > 0:
+        out["h2_store_soc"] = n.stores_t.e
+    return out
+
+
+def save_results_dict(results: dict, label: str) -> None:
+    """Sparar {namn: DataFrame} som platta CSV:er (namn.csv). Hoppar över None/tomma.
+    Delas av standard- och rullande-vägen."""
     out = RESULTS_DIR / label
     out.mkdir(parents=True, exist_ok=True)
-
-    n.export_to_netcdf(out / "network.nc")
-
-    # Platta csv-filer för enkel inspektion
-    n.generators_t.p.to_csv(out / "dispatch_generators.csv")
-    n.storage_units_t.p.to_csv(out / "dispatch_hydro.csv")
-    n.storage_units_t.state_of_charge.to_csv(out / "hydro_soc.csv")
-    n.storage_units_t.spill.to_csv(out / "hydro_spill.csv")
-    n.links_t.p0.to_csv(out / "flows.csv")
-    n.buses_t.marginal_price.to_csv(out / "prices.csv")
-
-    # Vattenvärde = dual på lagringsbalansen (EUR/MWh), om assignad
-    wv = n.storage_units_t.get("mu_energy_balance")
-    if wv is not None and wv.shape[1] > 0:
-        wv.to_csv(out / "water_value.csv")
-
-    # Vätgaslager-SOC (Store) + H2-buspriser, om H2 finns
-    if len(n.stores) > 0:
-        n.stores_t.e.to_csv(out / "h2_store_soc.csv")
-
-    # thermal dispatch finns nu i dispatch_generators.csv (carrier="thermal")
-    # elektrolysör/turbin-flöden finns i flows.csv (links_t.p0)
-
+    for name, df in results.items():
+        if df is not None and getattr(df, "shape", (0, 0))[1] > 0:
+            df.to_csv(out / f"{name}.csv")
     print(f"  → resultat sparade i {out}/")
+
+
+def save_results(n, label: str) -> None:
+    """Standard-vägen: nätverk (.nc) + alla CSV:er via extract_results-registryt."""
+    out = RESULTS_DIR / label
+    out.mkdir(parents=True, exist_ok=True)
+    n.export_to_netcdf(out / "network.nc")
+    save_results_dict(extract_results(n), label)
 
 
 # ---------------------------------------------------------------------------
@@ -337,18 +351,6 @@ def get_terminal_lambdas(
     }
 
 
-def save_rolling_results(results: dict, label: str) -> None:
-    out = RESULTS_DIR / label
-    out.mkdir(parents=True, exist_ok=True)
-    results["gen"].to_csv(out / "dispatch_generators.csv")
-    results["hydro_p"].to_csv(out / "dispatch_hydro.csv")
-    results["soc"].to_csv(out / "hydro_soc.csv")
-    results["spill"].to_csv(out / "hydro_spill.csv")
-    results["flows"].to_csv(out / "flows.csv")
-    results["prices"].to_csv(out / "prices.csv")
-    print(f"  → resultat sparade i {out}/")
-
-
 def rolling_horizon_solve(
     cfg:        dict,
     inputs:     dict,
@@ -390,7 +392,7 @@ def rolling_horizon_solve(
     out_dir = RESULTS_DIR / label
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    all_dfs: dict = {k: [] for k in ("prices", "gen", "hydro_p", "soc", "spill", "flows")}
+    acc: dict = {}   # {resultatnamn: [DataFrame per fönster]}
 
     for i, win_snaps in enumerate(windows):
         print(f"\nFönster {i+1}/{n_win}: {win_snaps[0].date()} – {win_snaps[-1].date()}"
@@ -421,6 +423,7 @@ def rolling_horizon_solve(
             solver_name=scfg["name"],
             solver_options=dict(solver_opts, log_file=str(log_path)),
             extra_functionality=extra_func,
+            assign_all_duals=True,   # → water_value (mu_energy_balance) per fönster
         )
         print(f"  Status: {status} / {condition}")
 
@@ -435,14 +438,10 @@ def rolling_horizon_solve(
             if su in soc_t.columns:
                 soc_carry[zone] = float(soc_t[su].iloc[-1])
 
-        all_dfs["prices"].append(n.buses_t.marginal_price)
-        all_dfs["gen"].append(n.generators_t.p)
-        all_dfs["hydro_p"].append(n.storage_units_t.p)
-        all_dfs["soc"].append(soc_t)
-        all_dfs["spill"].append(n.storage_units_t.spill)
-        all_dfs["flows"].append(n.links_t.p0)
+        for k, df in extract_results(n).items():
+            acc.setdefault(k, []).append(df)
 
-    save_rolling_results({k: pd.concat(v) for k, v in all_dfs.items()}, label)
+    save_results_dict({k: pd.concat(v) for k, v in acc.items()}, label)
     return True
 
 
