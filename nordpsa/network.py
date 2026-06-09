@@ -65,6 +65,7 @@ def build_network(
     batteries:               list | None = None,
     extra_nuclear:           list | None = None,
     extra_wind:              list | None = None,
+    reservoir_to_ror:        dict | None = None,
     hydrogen_overrides:      dict | None = None,
 ) -> pypsa.Network:
     """
@@ -108,7 +109,7 @@ def build_network(
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
-               zone_prices=zone_prices)
+               zone_prices=zone_prices, reservoir_to_ror=reservoir_to_ror)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
@@ -206,6 +207,7 @@ def _add_hydro(
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
+    reservoir_to_ror:     dict | None = None,
 ) -> None:
     mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -242,6 +244,28 @@ def _add_hydro(
             params = hydro_params[zone]
             annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
             inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
+
+        # ADDITIV curtailbar must-run-likt RoR, dimensionerad som FRAC × inflöde
+        # (carrier hydro, MC 0, p_min_pu=0 → genererar närhelst pris≥0, curtailar överskott).
+        # Profilen följer inflödet → toppar i vårflod → flödar marknaden → sänker vårgolvet.
+        # Reservoarens inflöde lämnas ORÖRT (ej bevarande) → ingen vinter-kannibalisering;
+        # representerar verklighetens saknade must-run/spill-drivna negativ-pris-energi.
+        f_ror = (reservoir_to_ror or {}).get(zone, 0.0)
+        if f_ror > 0:
+            ror_synth = f_ror * inflow
+            p_nom_ror = float(ror_synth.max())
+            if p_nom_ror > 1.0:
+                pu_ror = (ror_synth / p_nom_ror).clip(0, 1)
+                n.add(
+                    "Generator", f"{zone} hydro_ror_synth",
+                    bus=zone,
+                    carrier="hydro",
+                    p_nom=p_nom_ror,
+                    p_nom_extendable=False,
+                    p_min_pu=0.0,
+                    p_max_pu=pu_ror,
+                    marginal_cost=0.0,
+                )
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True

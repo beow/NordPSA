@@ -500,6 +500,11 @@ def main() -> None:
                         help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
                              "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
                              "observerad reservoarnivå. Komma-separera flera eller upprepa flaggan.")
+    parser.add_argument("--reservoir-to-ror", action="append", default=[], metavar="ZON:FRAC",
+                        help="Lägg till ADDITIV curtailbar must-run-likt run-of-river dimensionerad som "
+                             "FRAC × inflöde (MC 0, profil följer inflödet), t.ex. 'SE-N:0.3,NO-N:0.3,FI:0.3'. "
+                             "Reservoarinflödet lämnas orört → flödar vårflod-marknaden, sänker vårgolvet utan "
+                             "vinter-kannibalisering. Komma-separera flera eller upprepa flaggan.")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -595,6 +600,18 @@ def main() -> None:
             z = parts[0].strip()
             soc_pin_start[z] = float(parts[1])
             soc_pin_end[z] = float(parts[2])
+
+    reservoir_to_ror = {}
+    for spec in args.reservoir_to_ror:
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            parts = item.split(":")
+            if len(parts) != 2:
+                print(f"Ogiltigt --reservoir-to-ror format: '{item}' (förväntat ZON:FRAC)")
+                sys.exit(1)
+            reservoir_to_ror[parts[0].strip()] = float(parts[1])
 
     # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
     batteries = []
@@ -770,6 +787,7 @@ def main() -> None:
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
     if soc_terminal_offset:             flags.append("soc-offset-" + "_".join(f"{z}{int(o*100)}" for z, o in soc_terminal_offset.items()))
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
+    if reservoir_to_ror:                flags.append("ror-" + "_".join(f"{z}{int(f*100)}" for z, f in reservoir_to_ror.items()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -809,6 +827,7 @@ def main() -> None:
                       extra_nuclear=extra_nuclear,
                       extra_wind=extra_wind,
                       soc_initial_override=soc_pin_start or None,
+                      reservoir_to_ror=reservoir_to_ror or None,
                       hydrogen_overrides=hydrogen_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
