@@ -28,6 +28,7 @@ from nordpsa.network import (
     hydro_soc_initial_constraint,
     hydro_soc_band_constraint,
     hydro_soc_terminal_band_constraint,
+    hydro_soc_terminal_offset_constraint,
     hydro_terminal_value,
     oc_budget_constraint,
     _annualized_cost,
@@ -197,6 +198,7 @@ def solve(n, cfg: dict, log_path: Path | None = None,
           lambda_per_zone: dict | None = None,
           soc_band: tuple[float, float] | None = None,
           soc_terminal_band: tuple[float, float] | None = None,
+          soc_terminal_offset: dict | None = None,
           extra_callbacks: list | None = None) -> bool:
     scfg    = cfg["solver"]
     solver  = scfg["name"]
@@ -205,7 +207,12 @@ def solve(n, cfg: dict, log_path: Path | None = None,
     if log_path is not None:
         options["log_file"] = str(log_path)
 
-    if soc_terminal_band is not None:
+    if soc_terminal_offset:
+        # Icke-cyklisk: start=config-mål, slut pinnas till mål − offset per zon.
+        callbacks = [hydro_soc_terminal_offset_constraint(cfg, soc_terminal_offset)]
+        print("  → SOC terminal-offset (icke-cyklisk, netto-tömning): "
+              + ", ".join(f"{z} −{o*100:.0f}pp" for z, o in soc_terminal_offset.items()))
+    elif soc_terminal_band is not None:
         # Icke-cyklisk: start sätts av state_of_charge_initial, slut binds till band.
         callbacks = [hydro_soc_terminal_band_constraint(cfg, soc_terminal_band[0], soc_terminal_band[1])]
         print(f"  → SOC terminal-band: start=config, slut∈[{soc_terminal_band[0]*100:.0f}%, "
@@ -478,6 +485,10 @@ def main() -> None:
     parser.add_argument("--soc-terminal-band", default=None, metavar="LOW,HIGH",
                         help="Icke-cyklisk: start = config hydro_soc_initial, slut flyter i [LOW,HIGH] "
                              "av kapacitet (t.ex. '0.6,0.8'). Tillåter netto-uttömning över horisonten.")
+    parser.add_argument("--soc-terminal-offset", action="append", default=[], metavar="ZON:PP",
+                        help="Icke-cyklisk: pinna slut-SOC till (mål − PP procentenheter) per zon, "
+                             "t.ex. 'SE-N:20' (sluta 20 pp lägre). Komma-separera flera ('SE-N:20,NO-N:20') "
+                             "eller upprepa flaggan. Netto-tömning → sänker vattenvärde/prisgolv (kalibreringsratt).")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -546,6 +557,18 @@ def main() -> None:
 
     soc_band = _parse_band(args.soc_band, "--soc-band") if args.soc_band else None
     soc_terminal_band = _parse_band(args.soc_terminal_band, "--soc-terminal-band") if args.soc_terminal_band else None
+
+    soc_terminal_offset = {}
+    for spec in args.soc_terminal_offset:
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            parts = item.split(":")
+            if len(parts) != 2:
+                print(f"Ogiltigt --soc-terminal-offset format: '{item}' (förväntat ZON:PP)")
+                sys.exit(1)
+            soc_terminal_offset[parts[0].strip()] = float(parts[1]) / 100.0   # pp → frac
 
     # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
     batteries = []
@@ -715,6 +738,7 @@ def main() -> None:
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
+    if soc_terminal_offset:             flags.append("soc-offset-" + "_".join(f"{z}{int(o*100)}" for z, o in soc_terminal_offset.items()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -741,7 +765,7 @@ def main() -> None:
         return
 
     # Icke-cyklisk om terminalvärde ELLER terminal-band används (start≠slut tillåts)
-    cyclic_soc = not (args.hydro_terminal_value or soc_terminal_band is not None)
+    cyclic_soc = not (args.hydro_terminal_value or soc_terminal_band is not None or soc_terminal_offset)
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
@@ -799,6 +823,7 @@ def main() -> None:
                lambda_per_zone=lambda_per_zone,
                soc_band=soc_band,
                soc_terminal_band=soc_terminal_band,
+               soc_terminal_offset=soc_terminal_offset or None,
                extra_callbacks=extra_callbacks)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")
