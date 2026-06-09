@@ -29,6 +29,7 @@ from nordpsa.network import (
     hydro_soc_band_constraint,
     hydro_soc_terminal_band_constraint,
     hydro_soc_terminal_offset_constraint,
+    hydro_soc_terminal_pin_constraint,
     hydro_terminal_value,
     oc_budget_constraint,
     _annualized_cost,
@@ -199,6 +200,7 @@ def solve(n, cfg: dict, log_path: Path | None = None,
           soc_band: tuple[float, float] | None = None,
           soc_terminal_band: tuple[float, float] | None = None,
           soc_terminal_offset: dict | None = None,
+          soc_pin_end: dict | None = None,
           extra_callbacks: list | None = None) -> bool:
     scfg    = cfg["solver"]
     solver  = scfg["name"]
@@ -207,7 +209,12 @@ def solve(n, cfg: dict, log_path: Path | None = None,
     if log_path is not None:
         options["log_file"] = str(log_path)
 
-    if soc_terminal_offset:
+    if soc_pin_end:
+        # Icke-cyklisk: start = soc_initial_override (faktisk), slut pinnas till faktisk fraktion.
+        callbacks = [hydro_soc_terminal_pin_constraint(cfg, soc_pin_end)]
+        print("  → SOC-pin (icke-cyklisk, faktiska ändpunkter): "
+              + ", ".join(f"{z} slut {f*100:.1f}%" for z, f in soc_pin_end.items()))
+    elif soc_terminal_offset:
         # Icke-cyklisk: start=config-mål, slut pinnas till mål − offset per zon.
         callbacks = [hydro_soc_terminal_offset_constraint(cfg, soc_terminal_offset)]
         print("  → SOC terminal-offset (icke-cyklisk, netto-tömning): "
@@ -489,6 +496,10 @@ def main() -> None:
                         help="Icke-cyklisk: pinna slut-SOC till (mål − PP procentenheter) per zon, "
                              "t.ex. 'SE-N:20' (sluta 20 pp lägre). Komma-separera flera ('SE-N:20,NO-N:20') "
                              "eller upprepa flaggan. Netto-tömning → sänker vattenvärde/prisgolv (kalibreringsratt).")
+    parser.add_argument("--soc-pin", action="append", default=[], metavar="ZON:START:END",
+                        help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
+                             "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
+                             "observerad reservoarnivå. Komma-separera flera eller upprepa flaggan.")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -570,6 +581,21 @@ def main() -> None:
                 sys.exit(1)
             soc_terminal_offset[parts[0].strip()] = float(parts[1]) / 100.0   # pp → frac
 
+    soc_pin_start = {}   # zon → start-fraktion (→ soc_initial_override)
+    soc_pin_end = {}     # zon → slut-fraktion (→ terminal-pin callback)
+    for spec in args.soc_pin:
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            parts = item.split(":")
+            if len(parts) != 3:
+                print(f"Ogiltigt --soc-pin format: '{item}' (förväntat ZON:START:END)")
+                sys.exit(1)
+            z = parts[0].strip()
+            soc_pin_start[z] = float(parts[1])
+            soc_pin_end[z] = float(parts[2])
+
     # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
     batteries = []
     for spec in args.add_battery:   # bakåtkompatibel: --add-battery + --battery-extendable
@@ -640,6 +666,10 @@ def main() -> None:
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
+
+    # --soc-pin: start-fraktion → MWh (soc_initial_override förväntas i MWh, ej fraktion)
+    soc_pin_start = {z: f * cfg["zones"][z]["hydro_p_nom_mw"] * cfg["zones"][z]["hydro_max_hours"]
+                     for z, f in soc_pin_start.items()}
 
     # Expandera --battery nu när zonlistan är känd
     if battery_hours is not None:
@@ -739,6 +769,7 @@ def main() -> None:
     if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
     if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
     if soc_terminal_offset:             flags.append("soc-offset-" + "_".join(f"{z}{int(o*100)}" for z, o in soc_terminal_offset.items()))
+    if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -765,7 +796,8 @@ def main() -> None:
         return
 
     # Icke-cyklisk om terminalvärde ELLER terminal-band används (start≠slut tillåts)
-    cyclic_soc = not (args.hydro_terminal_value or soc_terminal_band is not None or soc_terminal_offset)
+    cyclic_soc = not (args.hydro_terminal_value or soc_terminal_band is not None
+                      or soc_terminal_offset or soc_pin_end)
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
@@ -776,6 +808,7 @@ def main() -> None:
                       batteries=batteries,
                       extra_nuclear=extra_nuclear,
                       extra_wind=extra_wind,
+                      soc_initial_override=soc_pin_start or None,
                       hydrogen_overrides=hydrogen_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
@@ -824,6 +857,7 @@ def main() -> None:
                soc_band=soc_band,
                soc_terminal_band=soc_terminal_band,
                soc_terminal_offset=soc_terminal_offset or None,
+               soc_pin_end=soc_pin_end or None,
                extra_callbacks=extra_callbacks)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")

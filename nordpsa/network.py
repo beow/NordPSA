@@ -901,6 +901,42 @@ def hydro_soc_terminal_offset_constraint(cfg: dict, offsets: dict):
     return _extra_functionality
 
 
+def hydro_soc_terminal_pin_constraint(cfg: dict, end_fracs: dict):
+    """Returnerar en extra_functionality-callback som pinnar slut-SOC till
+    end_frac × kapacitet per zon (icke-cyklisk drift).
+
+    Zoner utan angivet end_frac pinnas till config-mål (hydro_soc_initial), så att
+    de förblir start=slut (cyklikt). Avsedd att kombineras med soc_initial_override
+    så att BÅDA ändpunkterna låses till FAKTISKA reservoarnivåer (kalibrering mot
+    observerad fyllnadsgrad). end_fracs: dict {zon: slut-fraktion av kapacitet}.
+    """
+    targets = {}
+    for zone, zcfg in cfg["zones"].items():
+        frac = zcfg.get("hydro_soc_initial", None)
+        if frac is None:
+            continue
+        p_nom = zcfg.get("hydro_p_nom_mw", 0)
+        max_h = zcfg.get("hydro_max_hours", 0)
+        if p_nom == 0:
+            continue
+        cap = p_nom * max_h
+        targets[f"{zone} hydro"] = end_fracs.get(zone, frac) * cap
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not targets:
+            return
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        tT = snapshots[-1]
+        for su_name, term_mwh in targets.items():
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=tT) == term_mwh,
+                name=f"soc_terminal_pin-{su_name}",
+            )
+
+    return _extra_functionality
+
+
 def hydro_terminal_value(cfg: dict, lambda_per_zone: Dict[str, float]):
     """Returnerar en extra_functionality-callback som lägger till terminalvärde.
 
