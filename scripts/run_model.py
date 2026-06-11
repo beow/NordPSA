@@ -21,16 +21,10 @@ pd.options.future.infer_string = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nordpsa.hydro import load_annual_hydro_production
 from nordpsa.network import (
     build_network,
-    hydro_annual_production_constraints,
     hydro_soc_initial_constraint,
-    hydro_soc_band_constraint,
-    hydro_soc_terminal_band_constraint,
-    hydro_soc_terminal_offset_constraint,
     hydro_soc_terminal_pin_constraint,
-    hydro_terminal_value,
     oc_budget_constraint,
     _annualized_cost,
 )
@@ -206,11 +200,6 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
 # ---------------------------------------------------------------------------
 
 def solve(n, cfg: dict, log_path: Path | None = None,
-          restricted_yearly_hydro: bool = False,
-          lambda_per_zone: dict | None = None,
-          soc_band: tuple[float, float] | None = None,
-          soc_terminal_band: tuple[float, float] | None = None,
-          soc_terminal_offset: dict | None = None,
           soc_pin_end: dict | None = None,
           extra_callbacks: list | None = None) -> bool:
     scfg    = cfg["solver"]
@@ -225,32 +214,8 @@ def solve(n, cfg: dict, log_path: Path | None = None,
         callbacks = [hydro_soc_terminal_pin_constraint(cfg, soc_pin_end)]
         print("  → SOC-pin (icke-cyklisk, faktiska ändpunkter): "
               + ", ".join(f"{z} slut {f*100:.1f}%" for z, f in soc_pin_end.items()))
-    elif soc_terminal_offset:
-        # Icke-cyklisk: start=config-mål, slut pinnas till mål − offset per zon.
-        callbacks = [hydro_soc_terminal_offset_constraint(cfg, soc_terminal_offset)]
-        print("  → SOC terminal-offset (icke-cyklisk, netto-tömning): "
-              + ", ".join(f"{z} −{o*100:.0f}pp" for z, o in soc_terminal_offset.items()))
-    elif soc_terminal_band is not None:
-        # Icke-cyklisk: start sätts av state_of_charge_initial, slut binds till band.
-        callbacks = [hydro_soc_terminal_band_constraint(cfg, soc_terminal_band[0], soc_terminal_band[1])]
-        print(f"  → SOC terminal-band: start=config, slut∈[{soc_terminal_band[0]*100:.0f}%, "
-              f"{soc_terminal_band[1]*100:.0f}%] (icke-cyklisk)")
-    elif soc_band is not None:
-        callbacks = [hydro_soc_band_constraint(cfg, soc_band[0], soc_band[1])]
-        print(f"  → SOC-band aktivt: [{soc_band[0]*100:.0f}%, {soc_band[1]*100:.0f}%] "
-              f"av kapacitet (flytande start=slut)")
     else:
         callbacks = [hydro_soc_initial_constraint(cfg)]
-    if restricted_yearly_hydro:
-        hydro_zones = [z for z, zc in cfg["zones"].items()
-                       if zc.get("hydro_p_nom_mw", 0) > 0]
-        annual_prod = load_annual_hydro_production(hydro_zones)
-        callbacks.append(hydro_annual_production_constraints(cfg, annual_prod))
-        print(f"  → årsvis hydrocap aktiv för: {', '.join(annual_prod)}")
-    if lambda_per_zone:
-        callbacks.append(hydro_terminal_value(cfg, lambda_per_zone))
-        for zone, lam in lambda_per_zone.items():
-            print(f"  → terminalvärde {zone}: λ={lam:.1f} EUR/MWh")
     if extra_callbacks:
         callbacks.extend(extra_callbacks)
 
@@ -318,147 +283,6 @@ def save_results(n, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Rullande horisont
-# ---------------------------------------------------------------------------
-
-def slice_inputs(inputs: dict, snapshots: pd.DatetimeIndex) -> dict:
-    """Skär alla tidsserier i inputs till givna snapshots."""
-    out = {}
-    for key in ("load", "vre_profiles", "nuclear_profile", "thermal_profile"):
-        out[key] = inputs[key].reindex(snapshots)
-    out["market_prices"] = {
-        bzn: s.reindex(snapshots) for bzn, s in inputs["market_prices"].items()
-    }
-    out["vre_noms"]     = inputs["vre_noms"]
-    out["hydro_params"] = inputs["hydro_params"]
-    hl = inputs.get("heat_load")
-    out["heat_load"] = hl.reindex(snapshots) if hl is not None else None
-    return out
-
-
-def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int):
-    """Delar upp snapshots i sekventiella fönster av window_steps tidssteg."""
-    n = len(snapshots)
-    for s in range(0, n, window_steps):
-        yield snapshots[s : min(s + window_steps, n)]
-
-
-def get_terminal_lambdas(
-    cfg:             dict,
-    market_prices:   dict,
-    t_last:          pd.Timestamp,
-    lookahead_steps: int,
-) -> dict:
-    """λ per hydro-zon = framåtriktat medelpris av DE-LU nästa fönster."""
-    de_lu = market_prices.get("DE-LU")
-    if de_lu is None:
-        lam = 60.0
-    else:
-        idx   = de_lu.index.get_indexer([t_last], method="nearest")[0]
-        ahead = de_lu.iloc[idx : idx + lookahead_steps]
-        lam   = float(ahead.mean()) if len(ahead) > 0 else float(de_lu.mean())
-    return {
-        zone: lam
-        for zone, zcfg in cfg["zones"].items()
-        if zcfg.get("hydro_p_nom_mw", 0) > 0
-    }
-
-
-def rolling_horizon_solve(
-    cfg:        dict,
-    inputs:     dict,
-    snapshots:  pd.DatetimeIndex,
-    args,
-    resolution: int,
-    label:      str,
-) -> bool:
-    steps_per_week = (7 * 24) // resolution
-    window_steps   = args.rolling_weeks * steps_per_week
-    windows        = list(rolling_windows(snapshots, window_steps))
-    n_win          = len(windows)
-    scfg           = cfg["solver"]
-    solver_opts    = {k: v for k, v in scfg.items() if k != "name"}
-
-    print(f"Rullande horisont: {args.rolling_weeks} veckor/fönster"
-          f" ({window_steps} tidssteg), {n_win} fönster totalt")
-
-    # Fast terminalvärde λ (override) om angivet, annars framåtblickande DE-LU
-    lambda_override = None
-    if getattr(args, "terminal_lambda", None):
-        hydro_zones = [z for z, zc in cfg["zones"].items() if zc.get("hydro_p_nom_mw", 0) > 0]
-        if ":" in args.terminal_lambda:
-            lambda_override = {z.strip(): float(v) for z, v in
-                               (pair.split(":") for pair in args.terminal_lambda.split(","))}
-        else:
-            lambda_override = {z: float(args.terminal_lambda) for z in hydro_zones}
-        print(f"  → fast terminal-λ: {lambda_override}")
-
-    # Initial SOC från zones.yaml
-    soc_carry: dict = {}
-    for zone, zcfg in cfg["zones"].items():
-        p_nom = zcfg.get("hydro_p_nom_mw", 0)
-        max_h = zcfg.get("hydro_max_hours", 0)
-        if p_nom > 0:
-            frac = zcfg.get("hydro_soc_initial", 0.5)
-            soc_carry[zone] = frac * p_nom * max_h
-
-    out_dir = RESULTS_DIR / label
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    acc: dict = {}   # {resultatnamn: [DataFrame per fönster]}
-
-    for i, win_snaps in enumerate(windows):
-        print(f"\nFönster {i+1}/{n_win}: {win_snaps[0].date()} – {win_snaps[-1].date()}"
-              f"  ({len(win_snaps)} tidssteg)")
-
-        win_inputs = slice_inputs(inputs, win_snaps)
-        n = build_network(
-            cfg, win_snaps, **win_inputs,
-            normalize_inflow=args.normalized_inflow_profiles,
-            actual_inflow=not args.parametric_inflow,
-            cyclic_soc=False,
-            soc_initial_override=soc_carry,
-        )
-
-        if lambda_override is not None:
-            lam_per_zone = lambda_override
-        else:
-            lam_per_zone = get_terminal_lambdas(
-                cfg, inputs["market_prices"], win_snaps[-1], window_steps
-            )
-        tv_cb = hydro_terminal_value(cfg, lam_per_zone)
-
-        def extra_func(n, snaps, _cb=tv_cb):
-            _cb(n, snaps)
-
-        log_path = out_dir / f"highs_w{i+1:02d}.log"
-        status, condition = n.optimize(
-            solver_name=scfg["name"],
-            solver_options=dict(solver_opts, log_file=str(log_path)),
-            extra_functionality=extra_func,
-            assign_all_duals=True,   # → water_value (mu_energy_balance) per fönster
-        )
-        print(f"  Status: {status} / {condition}")
-
-        if status != "ok":
-            print("  Lösning misslyckades — avbryter")
-            return False
-
-        # SOC carry-over till nästa fönster
-        soc_t = n.storage_units_t.state_of_charge
-        for zone in list(soc_carry):
-            su = f"{zone} hydro"
-            if su in soc_t.columns:
-                soc_carry[zone] = float(soc_t[su].iloc[-1])
-
-        for k, df in extract_results(n).items():
-            acc.setdefault(k, []).append(df)
-
-    save_results_dict({k: pd.concat(v) for k, v in acc.items()}, label)
-    return True
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -475,48 +299,14 @@ def main() -> None:
                         help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
-    parser.add_argument("--normalized-inflow-profiles", action="store_true",
-                        help="Normera inflödesprofilen per år mot faktisk vattenkraftproduktion")
-    parser.add_argument("--parametric-inflow", action="store_true",
-                        help="Använd parametrisk inflödesfunktion (Gauss+cosinus) istf faktiska "
-                             "NVE/ENTSO-E-profiler. Standard: faktiska profiler används.")
-    parser.add_argument("--restricted-yearly-hydro", action="store_true",
-                        help="LP-caps: begränsa hydrodispatch per zon och år till faktisk nivå")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
-    parser.add_argument("--rolling-horizon", action="store_true",
-                        help="Lös med rullande horisont + terminalvärde (fixar konstant vattenvärde)")
-    parser.add_argument("--rolling-weeks", type=int, default=4,
-                        help="Fönsterstorlek i veckor för rullande horisont (standard: 4)")
-    parser.add_argument("--terminal-lambda", default=None, metavar="VAL|Z:val,...",
-                        help="Fast terminalvärde λ (EUR/MWh) i rullande horisont istället för "
-                             "framåtblickande DE-LU-medel. Enskilt ('11') eller per zon "
-                             "('NO-N:11,NO-S:2.8,SE-N:12,SE-S:1.6,FI:11'). Sätt till extraherade vattenvärden.")
-    parser.add_argument("--hydro-terminal-value", action="store_true",
-                        help="Vattenvärde via terminalvillkor -λ*SOC[T] (λ=medel zonpris) istf cyklisk SOC")
-    parser.add_argument("--link-scale", action="append", default=[], metavar="Z0,Z1,FACTOR",
-                        help="Skala NTC för länk Z0↔Z1 med FACTOR (t.ex. 'SE-N,SE-S,0.5'). Kan anges flera gånger.")
     parser.add_argument("--voll", action="store_true",
                         help="Lägg till VOLL-slack (3000 EUR/MWh) i ALLA zoner — ger losslastmått och förhindrar dualexplosion")
-    parser.add_argument("--soc-band", default=None, metavar="LOW,HIGH",
-                        help="Tillåt cyklisk SOC start=slut att flyta inom [LOW,HIGH] av kapacitet "
-                             "(t.ex. '0.6,0.8') istället för fast hydro_soc_initial-nivå")
-    parser.add_argument("--soc-terminal-band", default=None, metavar="LOW,HIGH",
-                        help="Icke-cyklisk: start = config hydro_soc_initial, slut flyter i [LOW,HIGH] "
-                             "av kapacitet (t.ex. '0.6,0.8'). Tillåter netto-uttömning över horisonten.")
-    parser.add_argument("--soc-terminal-offset", action="append", default=[], metavar="ZON:PP",
-                        help="Icke-cyklisk: pinna slut-SOC till (mål − PP procentenheter) per zon, "
-                             "t.ex. 'SE-N:20' (sluta 20 pp lägre). Komma-separera flera ('SE-N:20,NO-N:20') "
-                             "eller upprepa flaggan. Netto-tömning → sänker vattenvärde/prisgolv (kalibreringsratt).")
     parser.add_argument("--soc-pin", action="append", default=[], metavar="ZON:START:END",
                         help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
                              "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
                              "observerad reservoarnivå. Komma-separera flera eller upprepa flaggan.")
-    parser.add_argument("--reservoir-to-ror", action="append", default=[], metavar="ZON:FRAC",
-                        help="Lägg till ADDITIV curtailbar must-run-likt run-of-river dimensionerad som "
-                             "FRAC × inflöde (MC 0, profil följer inflödet), t.ex. 'SE-N:0.3,NO-N:0.3,FI:0.3'. "
-                             "Reservoarinflödet lämnas orört → flödar vårflod-marknaden, sänker vårgolvet utan "
-                             "vinter-kannibalisering. Komma-separera flera eller upprepa flaggan.")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -580,28 +370,6 @@ def main() -> None:
                              "Appliceras efter --effective-ntc om båda anges.")
     args = parser.parse_args()
 
-    def _parse_band(spec, name):
-        parts = spec.split(",")
-        if len(parts) != 2:
-            print(f"Ogiltigt {name} format: '{spec}' (förväntat LOW,HIGH)")
-            sys.exit(1)
-        return (float(parts[0]), float(parts[1]))
-
-    soc_band = _parse_band(args.soc_band, "--soc-band") if args.soc_band else None
-    soc_terminal_band = _parse_band(args.soc_terminal_band, "--soc-terminal-band") if args.soc_terminal_band else None
-
-    soc_terminal_offset = {}
-    for spec in args.soc_terminal_offset:
-        for item in spec.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            parts = item.split(":")
-            if len(parts) != 2:
-                print(f"Ogiltigt --soc-terminal-offset format: '{item}' (förväntat ZON:PP)")
-                sys.exit(1)
-            soc_terminal_offset[parts[0].strip()] = float(parts[1]) / 100.0   # pp → frac
-
     soc_pin_start = {}   # zon → start-fraktion (→ soc_initial_override)
     soc_pin_end = {}     # zon → slut-fraktion (→ terminal-pin callback)
     for spec in args.soc_pin:
@@ -616,18 +384,6 @@ def main() -> None:
             z = parts[0].strip()
             soc_pin_start[z] = float(parts[1])
             soc_pin_end[z] = float(parts[2])
-
-    reservoir_to_ror = {}
-    for spec in args.reservoir_to_ror:
-        for item in spec.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            parts = item.split(":")
-            if len(parts) != 2:
-                print(f"Ogiltigt --reservoir-to-ror format: '{item}' (förväntat ZON:FRAC)")
-                sys.exit(1)
-            reservoir_to_ror[parts[0].strip()] = float(parts[1])
 
     # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
     batteries = []
@@ -762,35 +518,14 @@ def main() -> None:
             print(f"  → kontinentkablar skalade ×{factor}: "
                   f"{len(cfg.get('market_connections', []))} kablar")
 
-    for spec in args.link_scale:
-        parts = spec.split(",")
-        if len(parts) != 3:
-            print(f"Ogiltigt --link-scale format: '{spec}' (förväntat Z0,Z1,FACTOR)")
-            sys.exit(1)
-        z0, z1, factor = parts[0].strip(), parts[1].strip(), float(parts[2])
-        scaled = False
-        for link in cfg["links"]:
-            if (link[0] == z0 and link[1] == z1) or (link[0] == z1 and link[1] == z0):
-                link[2] = link[2] * factor
-                print(f"  → NTC {link[0]}↔{link[1]}: {link[2]/factor:.0f} → {link[2]:.0f} MW (×{factor})")
-                scaled = True
-        if not scaled:
-            print(f"Varning: ingen länk hittades för {z0}↔{z1}")
-
     flags = []
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     if args.no_expansion:               flags.append("no-expansion")
-    if args.normalized_inflow_profiles: flags.append("normalized-inflow")
-    if args.parametric_inflow:          flags.append("parametric-inflow")
-    if args.restricted_yearly_hydro:    flags.append("restricted-hydro")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
     if args.market_elasticity:          flags.append("market-elasticity")
     if args.add_heat:                   flags.append("heat")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
-    if args.hydro_terminal_value:       flags.append("tv-hydro")
-    if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
-    for spec in args.link_scale:        flags.append(f"link-scale-{spec.replace(',','_')}")
     if args.voll:                       flags.append("voll")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
@@ -803,11 +538,7 @@ def main() -> None:
     for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
-    if soc_band:                        flags.append(f"soc-band-{soc_band[0]:.2f}-{soc_band[1]:.2f}")
-    if soc_terminal_band:               flags.append(f"soc-term-band-{soc_terminal_band[0]:.2f}-{soc_terminal_band[1]:.2f}")
-    if soc_terminal_offset:             flags.append("soc-offset-" + "_".join(f"{z}{int(o*100)}" for z, o in soc_terminal_offset.items()))
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
-    if reservoir_to_ror:                flags.append("ror-" + "_".join(f"{z}{int(f*100)}" for z, f in reservoir_to_ror.items()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -825,29 +556,17 @@ def main() -> None:
         if args.year:
             label = f"res{res}h_{args.year}"
 
-    if args.rolling_horizon:
-        ok = rolling_horizon_solve(cfg, inputs, snapshots, args, res, label)
-        if not ok:
-            print("Rullande horisont misslyckades")
-            sys.exit(1)
-        print("Klart!")
-        return
-
-    # Icke-cyklisk om terminalvärde ELLER terminal-band används (start≠slut tillåts)
-    cyclic_soc = not (args.hydro_terminal_value or soc_terminal_band is not None
-                      or soc_terminal_offset or soc_pin_end)
+    # Icke-cyklisk om SOC-ändpunkterna pinnas (--soc-pin); annars cyklisk
+    cyclic_soc = not soc_pin_end
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
-                      normalize_inflow=args.normalized_inflow_profiles,
-                      actual_inflow=not args.parametric_inflow,
                       cyclic_soc=cyclic_soc,
                       voll=args.voll,
                       batteries=batteries,
                       extra_nuclear=extra_nuclear,
                       extra_wind=extra_wind,
                       soc_initial_override=soc_pin_start or None,
-                      reservoir_to_ror=reservoir_to_ror or None,
                       hydrogen_overrides=hydrogen_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
@@ -876,26 +595,12 @@ def main() -> None:
             extra_callbacks.append(
                 oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
 
-    # Terminalvärde: λ per hydro-zon = medel zonpris över hela perioden
-    lambda_per_zone = None
-    if args.hydro_terminal_value:
-        lambda_per_zone = {
-            zone: float(inputs["market_prices"][zone].mean())
-            for zone, zcfg in cfg["zones"].items()
-            if zcfg.get("hydro_p_nom_mw", 0) > 0 and zone in inputs["market_prices"]
-        }
-
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
     (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
 
     n.sanitize()
     ok = solve(n, cfg, log_path=log_path,
-               restricted_yearly_hydro=args.restricted_yearly_hydro,
-               lambda_per_zone=lambda_per_zone,
-               soc_band=soc_band,
-               soc_terminal_band=soc_terminal_band,
-               soc_terminal_offset=soc_terminal_offset or None,
                soc_pin_end=soc_pin_end or None,
                extra_callbacks=extra_callbacks)
     if not ok:

@@ -18,7 +18,7 @@ import pandas as pd
 import pypsa
 import yaml
 
-from nordpsa.hydro import compute_annual_scales, inflow_timeseries, load_nve_inflow, load_nve_ror
+from nordpsa.hydro import inflow_timeseries, load_nve_inflow, load_nve_ror
 
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
@@ -57,15 +57,13 @@ def build_network(
     thermal_profile:         pd.DataFrame,
     hydro_params:            dict,
     market_prices:           Dict[str, pd.Series],
-    normalize_inflow:        bool = False,
-    actual_inflow:           bool = False,
+    actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
     soc_initial_override:    dict | None = None,
     voll:                    bool = False,
     batteries:               list | None = None,
     extra_nuclear:           list | None = None,
     extra_wind:              list | None = None,
-    reservoir_to_ror:        dict | None = None,
     hydrogen_overrides:      dict | None = None,
     heat_load:               pd.DataFrame | None = None,
 ) -> pypsa.Network:
@@ -119,10 +117,10 @@ def build_network(
     _add_loads(n, load)
     _add_slack(n, cfg, all_zones=voll)
     _add_thermal(n, thermal_profile)
-    _add_hydro(n, cfg, hydro_params, snapshots, ccfg, normalize_inflow,
+    _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
-               zone_prices=zone_prices, reservoir_to_ror=reservoir_to_ror)
+               zone_prices=zone_prices)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
@@ -216,12 +214,10 @@ def _add_hydro(
     hydro_params:         dict,
     snapshots:            pd.DatetimeIndex,
     ccfg:                 dict,
-    normalize_inflow:     bool = False,
-    actual_inflow:        bool = False,
+    actual_inflow:        bool = True,
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
-    reservoir_to_ror:     dict | None = None,
 ) -> None:
     mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -256,30 +252,7 @@ def _add_hydro(
                 max_h   = cap_mwh / p_nom
         else:
             params = hydro_params[zone]
-            annual_scales = compute_annual_scales(zone, params) if normalize_inflow else None
-            inflow = inflow_timeseries(params, snapshots, annual_scales=annual_scales)
-
-        # ADDITIV curtailbar must-run-likt RoR, dimensionerad som FRAC × inflöde
-        # (carrier hydro, MC 0, p_min_pu=0 → genererar närhelst pris≥0, curtailar överskott).
-        # Profilen följer inflödet → toppar i vårflod → flödar marknaden → sänker vårgolvet.
-        # Reservoarens inflöde lämnas ORÖRT (ej bevarande) → ingen vinter-kannibalisering;
-        # representerar verklighetens saknade must-run/spill-drivna negativ-pris-energi.
-        f_ror = (reservoir_to_ror or {}).get(zone, 0.0)
-        if f_ror > 0:
-            ror_synth = f_ror * inflow
-            p_nom_ror = float(ror_synth.max())
-            if p_nom_ror > 1.0:
-                pu_ror = (ror_synth / p_nom_ror).clip(0, 1)
-                n.add(
-                    "Generator", f"{zone} hydro_ror_synth",
-                    bus=zone,
-                    carrier="hydro",
-                    p_nom=p_nom_ror,
-                    p_nom_extendable=False,
-                    p_min_pu=0.0,
-                    p_max_pu=pu_ror,
-                    marginal_cost=0.0,
-                )
+            inflow = inflow_timeseries(params, snapshots)
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True
@@ -905,123 +878,6 @@ def hydro_soc_initial_constraint(cfg: dict):
     return _extra_functionality
 
 
-def hydro_soc_band_constraint(cfg: dict, low_frac: float, high_frac: float):
-    """Returnerar en extra_functionality-callback som tillåter SOC[t0] att flyta
-    inom ett band [low_frac, high_frac] × kapacitet istället för en fast nivå.
-
-    Med cyclic_state_of_charge=True gäller SOC[0]==SOC[-1], så bandet styr den
-    gemensamma start/slut-nivån. Kapaciteten = config p_nom × max_hours (bevaras
-    även när reservoar-p_nom reduceras av run-of-river-uppdelningen).
-    """
-    bands = {}  # {"{zone} hydro": (low_mwh, high_mwh)}
-    for zone, zcfg in cfg["zones"].items():
-        if zcfg.get("hydro_soc_initial", None) is None:
-            continue
-        p_nom = zcfg.get("hydro_p_nom_mw", 0)
-        max_h = zcfg.get("hydro_max_hours", 0)
-        if p_nom == 0:
-            continue
-        cap = p_nom * max_h
-        bands[f"{zone} hydro"] = (low_frac * cap, high_frac * cap)
-
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        if not bands:
-            return
-        m = n.model
-        soc = m.variables["StorageUnit-state_of_charge"]
-        t0 = snapshots[0]
-        for su_name, (low_mwh, high_mwh) in bands.items():
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=t0) >= low_mwh,
-                name=f"soc_band_lo-{su_name}",
-            )
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=t0) <= high_mwh,
-                name=f"soc_band_hi-{su_name}",
-            )
-
-    return _extra_functionality
-
-
-def hydro_soc_terminal_band_constraint(cfg: dict, low_frac: float, high_frac: float):
-    """Returnerar en extra_functionality-callback som binder SOC vid SISTA tidssteget
-    till ett band [low_frac, high_frac] × kapacitet.
-
-    Avsedd för icke-cyklisk drift (cyclic_state_of_charge=False): startnivån sätts av
-    state_of_charge_initial (config hydro_soc_initial), och slutnivån tillåts flyta
-    inom bandet — start ≠ slut tillåts. Modellen kan därmed netto-tömma (eller fylla)
-    lagret en gång över horisonten, begränsat av bandet.
-    """
-    bands = {}
-    for zone, zcfg in cfg["zones"].items():
-        if zcfg.get("hydro_soc_initial", None) is None:
-            continue
-        p_nom = zcfg.get("hydro_p_nom_mw", 0)
-        max_h = zcfg.get("hydro_max_hours", 0)
-        if p_nom == 0:
-            continue
-        cap = p_nom * max_h
-        bands[f"{zone} hydro"] = (low_frac * cap, high_frac * cap)
-
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        if not bands:
-            return
-        m = n.model
-        soc = m.variables["StorageUnit-state_of_charge"]
-        tT = snapshots[-1]
-        for su_name, (low_mwh, high_mwh) in bands.items():
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=tT) >= low_mwh,
-                name=f"soc_terminal_lo-{su_name}",
-            )
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=tT) <= high_mwh,
-                name=f"soc_terminal_hi-{su_name}",
-            )
-
-    return _extra_functionality
-
-
-def hydro_soc_terminal_offset_constraint(cfg: dict, offsets: dict):
-    """Returnerar en extra_functionality-callback som pinnar SOC vid SISTA tidssteget
-    till (mål − offset) × kapacitet per zon.
-
-    Icke-cyklisk drift (cyclic_state_of_charge=False): startnivån sätts av
-    state_of_charge_initial (config hydro_soc_initial = mål), slutet pinnas till
-    mål − offset. offset>0 = tillåten NETTO-TÖMNING över horisonten → mindre vatten-
-    knapphet → lägre vattenvärde/prisgolv (kalibreringsratt). Zoner utan angiven offset
-    pinnas till mål (start=slut, som cykliskt).
-
-    offsets: dict {zon: offset_frac}, t.ex. {'SE-N': 0.20} = sluta 20 pp lägre än start.
-    """
-    targets = {}
-    for zone, zcfg in cfg["zones"].items():
-        frac = zcfg.get("hydro_soc_initial", None)
-        if frac is None:
-            continue
-        p_nom = zcfg.get("hydro_p_nom_mw", 0)
-        max_h = zcfg.get("hydro_max_hours", 0)
-        if p_nom == 0:
-            continue
-        cap = p_nom * max_h
-        term_frac = max(0.0, frac - offsets.get(zone, 0.0))
-        targets[f"{zone} hydro"] = term_frac * cap
-
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        if not targets:
-            return
-        m = n.model
-        soc = m.variables["StorageUnit-state_of_charge"]
-        tT = snapshots[-1]
-        for su_name, term_mwh in targets.items():
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=tT) == term_mwh,
-                name=f"soc_terminal_offset-{su_name}",
-            )
-
-    return _extra_functionality
-
-
 def hydro_soc_terminal_pin_constraint(cfg: dict, end_fracs: dict):
     """Returnerar en extra_functionality-callback som pinnar slut-SOC till
     end_frac × kapacitet per zon (icke-cyklisk drift).
@@ -1057,72 +913,3 @@ def hydro_soc_terminal_pin_constraint(cfg: dict, end_fracs: dict):
 
     return _extra_functionality
 
-
-def hydro_terminal_value(cfg: dict, lambda_per_zone: Dict[str, float]):
-    """Returnerar en extra_functionality-callback som lägger till terminalvärde.
-
-    Lägger till  -λ × SOC[T]  i LP-målfunktionen per hydro-zon.
-    Belönar modellen för att hålla vatten vid fönstrets sista tidssteg,
-    vilket ger ett realistiskt vattenvärde i rullande horisont-optimering.
-
-    lambda_per_zone: {zone: EUR/MWh} — typiskt observerat marknadspris.
-    """
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        m = n.model
-        soc = m.variables["StorageUnit-state_of_charge"]
-        t_last = snapshots[-1]
-        for zone in cfg["zones"]:
-            lam = lambda_per_zone.get(zone, 0.0)
-            if lam <= 0.0:
-                continue
-            su_name = f"{zone} hydro"
-            if su_name not in n.storage_units.index:
-                continue
-            # Addera belöningsterm: hämta befintligt mål, lägg till -λ×SOC[T], sätt om
-            term    = -lam * soc.sel(name=su_name, snapshot=t_last)
-            new_obj = m.objective.expression + term
-            m.add_objective(new_obj, overwrite=True)
-    return _extra_functionality
-
-
-def hydro_annual_production_constraints(
-    cfg:               dict,
-    annual_production: Dict[str, Dict[int, float]],
-) -> Callable:
-    """Returnerar en extra_functionality-callback som lägger till LP-caps:
-
-    sum(p_dispatch[zone hydro, t] * dt_h  for t in year)  <=  actual_MWh[zone][year]
-
-    Förhindrar att optimeraren omfördelar vatten mellan år.
-    Används av --restricted_yearly_hydro.
-    """
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        if not annual_production:
-            return
-        m = n.model
-        p = m.variables["StorageUnit-p_dispatch"]
-        weights = n.snapshot_weightings["generators"]
-
-        for zone, year_limits in annual_production.items():
-            su_name = f"{zone} hydro"
-            if su_name not in n.storage_units.index:
-                continue
-            for year, limit_mwh in year_limits.items():
-                mask = snapshots.year == year
-                if not mask.any():
-                    continue
-                year_snaps = snapshots[mask]
-                # Vikter som DataArray (1D snapshot) — xarray broadcastar mot
-                # linopy-variabelns 2D (snapshot × name) utan fel
-                w_da = xr.DataArray(
-                    weights.loc[year_snaps].values,
-                    dims=["snapshot"],
-                    coords={"snapshot": year_snaps},
-                )
-                dispatch = p.sel(name=su_name, snapshot=year_snaps)
-                m.add_constraints(
-                    (dispatch * w_da).sum() <= limit_mwh,
-                    name=f"annual_hydro_cap-{su_name}-{year}",
-                )
-
-    return _extra_functionality

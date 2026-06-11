@@ -117,50 +117,6 @@ def fit_and_save_all(zones: list[str]) -> Dict[str, Dict[str, float]]:
     return all_params
 
 
-def compute_annual_scales(zone: str, params: Dict[str, float]) -> Dict[int, float]:
-    """
-    Beräknar skalningsfaktorer actual_MWh[year] / model_MWh[year] per år.
-    Används av --normalized_inflow_profiles för att normera inflödets årsvolym
-    mot faktisk vattenkraftproduktion utan att ändra säsongsprofilen.
-    """
-    scales: Dict[int, float] = {}
-    for year in YEARS:
-        path = RAW_DIR / f"production_{zone}_{year}.parquet"
-        if not path.exists():
-            scales[year] = 1.0
-            continue
-        df = pd.read_parquet(path)
-        df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
-        actual_mwh = float(df.set_index("timestampUTC")["hydro"].fillna(0).sum())
-
-        ts_year   = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h", tz="UTC")
-        model_mwh = float(np.maximum(
-            _model(ts_year.dayofyear.values.astype(float), **params), 0.0
-        ).sum())
-        scales[year] = actual_mwh / model_mwh if model_mwh > 0 else 1.0
-    return scales
-
-
-def load_annual_hydro_production(zones: list[str]) -> Dict[str, Dict[int, float]]:
-    """
-    Returnerar faktisk vattenkraftproduktion (MWh) per zon och år.
-    Används av --restricted_yearly_hydro som takvärden i LP-constraints.
-    """
-    result: Dict[str, Dict[int, float]] = {}
-    for zone in zones:
-        year_totals: Dict[int, float] = {}
-        for year in YEARS:
-            path = RAW_DIR / f"production_{zone}_{year}.parquet"
-            if not path.exists():
-                continue
-            df = pd.read_parquet(path)
-            df["timestampUTC"] = pd.to_datetime(df["timestampUTC"], utc=True)
-            year_totals[year] = float(df.set_index("timestampUTC")["hydro"].fillna(0).sum())
-        if year_totals:
-            result[zone] = year_totals
-    return result
-
-
 def load_nve_inflow(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:
     """
     Laddar NVE faktisk veckovist inflöde (MW) och expanderar till snapshot-index
