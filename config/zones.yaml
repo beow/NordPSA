@@ -119,9 +119,12 @@ heat:
   hp_vom_eur_per_mwh: 0.5
   store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh)
   slack_eur_per_mwh: 3000
-  zones:                            # SE-tal KALIBRERADE mot EM-bränslemix 2024 (ENBART SE; NO≈0; DK/FI senare)
+  zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
     SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80}   # HP/panna dim. för ~6.7%/0.8%
     SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600}
+    # DK: levererat ~30 TWh; el-panna-DOMINANT (4% panna / 1% VP), COP 4, must-run 0.25 (avfall 22%+sol 3%);
+    #     KVV-dominant i verkligheten (förenkling: dispatchbar bio). el-panna 400 MW (faktablad).
+    DK:   {dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 4.0, mustrun_share: 0.25}
 
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
@@ -238,4 +241,4 @@ solver:
   threads: 16
   solver: ipm          # interior point method — skalbar för stora LP
   run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
-  ipm_optimality_tolerance: 1e-5   # lossad från 1e-6 → färre iterationer (expansion: sista decimalen i p_nom är brus)
+  ipm_optimality_tolerance: 1e-4   # lossad (1e-6→1e-5→1e-4) → färre iterationer (expansion: sista decimalen i p_nom är brus)

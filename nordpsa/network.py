@@ -548,7 +548,9 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         if zone not in n.buses.index:
             print(f"  Varning: heat-zon {zone} saknar AC-buss — hoppar över")
             continue
-        zc   = zcfg.get(zone, {})
+        zc       = zcfg.get(zone, {})
+        zone_cop = float(zc.get("cop", cop))                 # per-zon COP (DK 4 ≠ SE 3)
+        zone_mr  = float(zc.get("mustrun_share", mr_share))  # per-zon must-run-andel (DK 0.25 ≠ SE 0.41)
         hb   = f"{zone} heat"
         peak = float(dh.max())
         n.add("Bus", hb, carrier="heat")
@@ -561,11 +563,11 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
               efficiency=0.99, p_nom=float(zc.get("elboiler_mw", 0.0)), marginal_cost=elb_vom + el_tax)
         # Stor-VP: AC → heat, COP (p_nom i MW_el).  MC = vom + elskatt (per MWh el)
         n.add("Link", f"{zone} heat hp", bus0=zone, bus1=hb, carrier="heat hp",
-              efficiency=cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom + el_tax)
-        # Must-run avfall/restvärme/rökgaskond (~0 MC): levererar mr_share × behovet varje
+              efficiency=zone_cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom + el_tax)
+        # Must-run avfall/restvärme/rökgaskond (~0 MC): levererar zone_mr × behovet varje
         # timme (alltid först i meritordningen) → avlastar el-/bio-behovet och AC-lasten.
-        if mr_share > 0:
-            pu = (mr_share * dh / peak).clip(lower=0.0, upper=1.0) if peak > 0 else 0.0
+        if zone_mr > 0:
+            pu = (zone_mr * dh / peak).clip(lower=0.0, upper=1.0) if peak > 0 else 0.0
             n.add("Generator", f"{zone} heat mustrun", bus=hb, carrier="heat mustrun",
                   p_nom=peak, p_min_pu=pu, p_max_pu=pu, marginal_cost=mr_vom)
         # Bio/KVV: dispatchbar grundförsörjning på heat-bussen (konkurrerande MC)
@@ -575,8 +577,8 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         n.add("Generator", f"{zone} heat slack", bus=hb, carrier="heat slack",
               p_nom=1e6, marginal_cost=mc_slack)
         print(f"  → Heat {zone}: FV-behov topp {peak:.0f} MW_th, VP {zc.get('hp_el_mw',0):.0f} "
-              f"MW_el (COP {cop}), el-panna {zc.get('elboiler_mw',0):.0f} MW, bio MC {bio_vom}, "
-              f"lager {st_hours*peak:.0f} MWh")
+              f"MW_el (COP {zone_cop:g}), el-panna {zc.get('elboiler_mw',0):.0f} MW, must-run "
+              f"{zone_mr:.0%}, bio MC {bio_vom}, lager {st_hours*peak:.0f} MWh")
 
 
 def _add_nuclear(
