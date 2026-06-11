@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source ~/miniconda3/etc/profile.d/conda.sh *)",
+      "Bash(conda activate *)",
+      "Bash(jupyter nbconvert --to script --stdout *)",
+      "Bash(wl-paste *)"
+    ]
+  }
+}
