@@ -561,11 +561,13 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
     el_tax   = float(hcfg.get("el_tax_eur_per_mwh", 0.0))   # energiskatt per MWh el (på Link-p0)
     elb_vom  = float(hcfg.get("elboiler_vom_eur_per_mwh", 0.5))
     hp_vom   = float(hcfg.get("hp_vom_eur_per_mwh", 0.5))
+    mr_share = float(hcfg.get("mustrun_share", 0.0))        # avfall/restvärme (~0 MC, must-run)
+    mr_vom   = float(hcfg.get("mustrun_vom_eur_per_mwh", 0.0))
     st_hours = float(hcfg.get("store_hours", 6))
     mc_slack = float(hcfg.get("slack_eur_per_mwh", MC_SLACK))
     zcfg     = hcfg.get("zones") or {}
 
-    for car in ("heat", "heat chp", "heat elboiler", "heat hp", "heat store", "heat slack"):
+    for car in ("heat", "heat mustrun", "heat chp", "heat elboiler", "heat hp", "heat store", "heat slack"):
         if car not in n.carriers.index:
             n.add("Carrier", car)
 
@@ -587,7 +589,13 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         # Stor-VP: AC → heat, COP (p_nom i MW_el).  MC = vom + elskatt (per MWh el)
         n.add("Link", f"{zone} heat hp", bus0=zone, bus1=hb, carrier="heat hp",
               efficiency=cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom + el_tax)
-        # Bio/KVV/avfall: grundförsörjning på heat-bussen (konkurrerande MC)
+        # Must-run avfall/restvärme/rökgaskond (~0 MC): levererar mr_share × behovet varje
+        # timme (alltid först i meritordningen) → avlastar el-/bio-behovet och AC-lasten.
+        if mr_share > 0:
+            pu = (mr_share * dh / peak).clip(lower=0.0, upper=1.0) if peak > 0 else 0.0
+            n.add("Generator", f"{zone} heat mustrun", bus=hb, carrier="heat mustrun",
+                  p_nom=peak, p_min_pu=pu, p_max_pu=pu, marginal_cost=mr_vom)
+        # Bio/KVV: dispatchbar grundförsörjning på heat-bussen (konkurrerande MC)
         n.add("Generator", f"{zone} heat chp", bus=hb, carrier="heat chp",
               p_nom=peak * 1.2, marginal_cost=bio_vom)
         # Slack (omött värme) för feasibility
