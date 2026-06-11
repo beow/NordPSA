@@ -112,6 +112,7 @@ heat:
   enabled: false
   cop: 3.0                          # stor-VP COP (konstant tills v. temp-beroende)
   bio_vom_eur_per_mwh: 30.0         # bio/KVV/avfall marginalkostnad (termiskt) — sätter el-tröskeln
+  el_tax_eur_per_mwh: 35.0          # energiskatt på el (~0.39 SEK/kWh) på FV-el (panna+VP) → per MWh el
   elboiler_vom_eur_per_mwh: 0.5
   hp_vom_eur_per_mwh: 0.5
   store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh)

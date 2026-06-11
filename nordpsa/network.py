@@ -558,6 +558,7 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         return
     cop      = float(hcfg.get("cop", 3.0))
     bio_vom  = float(hcfg.get("bio_vom_eur_per_mwh", 30.0))
+    el_tax   = float(hcfg.get("el_tax_eur_per_mwh", 0.0))   # energiskatt per MWh el (på Link-p0)
     elb_vom  = float(hcfg.get("elboiler_vom_eur_per_mwh", 0.5))
     hp_vom   = float(hcfg.get("hp_vom_eur_per_mwh", 0.5))
     st_hours = float(hcfg.get("store_hours", 6))
@@ -580,12 +581,12 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         # Ackumulator (termiskt lager, e_cyclic)
         n.add("Store", f"{zone} heat store", bus=hb, carrier="heat store",
               e_nom=st_hours * peak, e_cyclic=True)
-        # El-panna: AC → heat, η≈1
+        # El-panna: AC → heat, η≈1.  MC = vom + elskatt (per MWh el, dvs på p0)
         n.add("Link", f"{zone} heat elboiler", bus0=zone, bus1=hb, carrier="heat elboiler",
-              efficiency=0.99, p_nom=float(zc.get("elboiler_mw", 0.0)), marginal_cost=elb_vom)
-        # Stor-VP: AC → heat, COP (p_nom i MW_el)
+              efficiency=0.99, p_nom=float(zc.get("elboiler_mw", 0.0)), marginal_cost=elb_vom + el_tax)
+        # Stor-VP: AC → heat, COP (p_nom i MW_el).  MC = vom + elskatt (per MWh el)
         n.add("Link", f"{zone} heat hp", bus0=zone, bus1=hb, carrier="heat hp",
-              efficiency=cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom)
+              efficiency=cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom + el_tax)
         # Bio/KVV/avfall: grundförsörjning på heat-bussen (konkurrerande MC)
         n.add("Generator", f"{zone} heat chp", bus=hb, carrier="heat chp",
               p_nom=peak * 1.2, marginal_cost=bio_vom)
