@@ -100,6 +100,26 @@ market_elasticity:
     NO NL:   {export: 38, import: 14}
     NO GB:   {export: 44, import: 15}
 
+# Fjärrvärmesektor (v3 "1 buss + laster"): bara FJÄRRVÄRME får en optimeringsnod
+# (där flexibiliteten bor). Per zon: heat-Bus + Load(FV-värmebehov, termiskt, profil ur
+# heat_load.parquet skalad till dh_demand_twh) + Store(ackumulator) + Link el-panna (η≈1)
+# + Link stor-VP (COP) + Generator bio/KVV (konkurrerande MC) + slack.
+# DUBBELRÄKNING: el_input_twh = dagens el IN i FV (el-panna+VP) som redan ligger i eSett-
+# lasten → dras bort ur AC-lasten (proportionellt mot värmeprofilen), bussen återinför
+# elen endogent. Aktivera med --add-heat. SE-tal: demand=EM 45 TWh (SE-S 40/SE-N 5);
+# el_input ~3-4 TWh ANTAGANDE (förfinas mot EM-bränslemix). Byggnads-VP+industri = laster.
+heat:
+  enabled: false
+  cop: 3.0                          # stor-VP COP (konstant tills v. temp-beroende)
+  bio_vom_eur_per_mwh: 30.0         # bio/KVV/avfall marginalkostnad (termiskt) — sätter el-tröskeln
+  elboiler_vom_eur_per_mwh: 0.5
+  hp_vom_eur_per_mwh: 0.5
+  store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh)
+  slack_eur_per_mwh: 3000
+  zones:                            # ENBART SE tillsvidare (NO≈0 FV; DK/FI senare)
+    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.4, hp_el_mw:  200, elboiler_mw:  400}
+    SE-S: {dh_demand_twh: 40.0, el_input_twh: 3.0, hp_el_mw: 1500, elboiler_mw: 3000}
+
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:

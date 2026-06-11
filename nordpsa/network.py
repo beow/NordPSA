@@ -67,6 +67,7 @@ def build_network(
     extra_wind:              list | None = None,
     reservoir_to_ror:        dict | None = None,
     hydrogen_overrides:      dict | None = None,
+    heat_load:               pd.DataFrame | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -99,6 +100,18 @@ def build_network(
     fom   = ccfg["fom_fraction"]
     n_years = len(snapshots) * dt_h / 8760.0
 
+    # Fjärrvärme: bygg FV-värmebehovsprofiler + DRA BORT dagens FV-el ur AC-lasten
+    # (dubbelräkning) innan _add_loads. Värmekomponenterna byggs i _add_heat (slutet).
+    heat_demand = _heat_demand_profiles(cfg, heat_load, snapshots, dt_h, n_years)
+    if heat_demand:
+        load = load.copy()
+        hz = cfg["heat"]["zones"]
+        for zone, dh in heat_demand.items():
+            el_twh = float(hz.get(zone, {}).get("el_input_twh", 0.0))
+            dh_e   = float(dh.sum() * dt_h)
+            if el_twh > 0 and dh_e > 0 and zone in load.columns:
+                load[zone] = load[zone] - dh * (el_twh * 1e6 * n_years / dh_e)
+
     zone_prices = {z: market_prices[z] for z in cfg["zones"] if z in market_prices}
 
     _add_buses(n, cfg)
@@ -118,6 +131,7 @@ def build_network(
     _add_extra_nuclear(n, extra_nuclear, ccfg)
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
+    _add_heat(n, cfg, heat_demand)
 
     return n
 
@@ -507,6 +521,80 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
         print(f"  → H2 {zone}: last {demand:.0f} MW, "
               f"elektrolys {el_pnom:.0f} MW_el{' ext' if el_ext else ''} (η={el_c['efficiency']}), "
               f"lager {e_nom:.0f} MWh{' ext' if st_ext else ''} ({st_overn:g} €/kWh), {turb_txt}")
+
+
+def _heat_demand_profiles(cfg, heat_load, snapshots, dt_h, n_years) -> dict:
+    """FV-värmebehovsprofiler (termiskt MW) per zon = byggnadsvärmeprofilen
+    (heat_load.parquet) skalad så zonens årsenergi = dh_demand_twh. Tom dict om
+    värmesektorn ej aktiverad eller heat_load saknas."""
+    hcfg = cfg.get("heat") or {}
+    if not hcfg.get("enabled") or heat_load is None:
+        return {}
+    out = {}
+    for zone, zc in (hcfg.get("zones") or {}).items():
+        if zone not in heat_load.columns:
+            print(f"  Varning: heat-zon {zone} saknas i heat_load — hoppar över")
+            continue
+        prof = heat_load[zone].reindex(snapshots).ffill().clip(lower=0)
+        ann  = float(prof.sum() * dt_h / 1e6 / n_years)   # TWh/år i profilen
+        target = float(zc.get("dh_demand_twh", 0.0))
+        out[zone] = prof * (target / ann) if ann > 0 else prof * 0.0
+    return out
+
+
+def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
+    """Fjärrvärmebuss per zon (v3 "1 buss + laster"):
+
+        AC → Link(el-panna, η≈1)  ┐
+        AC → Link(stor-VP, COP)   ┝→ Bus(heat) → Load(FV-behov) + Store(ackumulator)
+        Generator(bio/KVV, MC)    ┘                              + Generator(slack)
+
+    Flexen: optimeraren väljer el (panna/VP) när elen är billig vs bio annars, och
+    laddar ackumulatorn. heat_demand = termiska behovsprofiler (från _heat_demand_
+    profiles). Dagens FV-el är redan bortdragen ur AC-lasten i build_network.
+    """
+    hcfg = cfg.get("heat") or {}
+    if not hcfg.get("enabled") or not heat_demand:
+        return
+    cop      = float(hcfg.get("cop", 3.0))
+    bio_vom  = float(hcfg.get("bio_vom_eur_per_mwh", 30.0))
+    elb_vom  = float(hcfg.get("elboiler_vom_eur_per_mwh", 0.5))
+    hp_vom   = float(hcfg.get("hp_vom_eur_per_mwh", 0.5))
+    st_hours = float(hcfg.get("store_hours", 6))
+    mc_slack = float(hcfg.get("slack_eur_per_mwh", MC_SLACK))
+    zcfg     = hcfg.get("zones") or {}
+
+    for car in ("heat", "heat chp", "heat elboiler", "heat hp", "heat store", "heat slack"):
+        if car not in n.carriers.index:
+            n.add("Carrier", car)
+
+    for zone, dh in heat_demand.items():
+        if zone not in n.buses.index:
+            print(f"  Varning: heat-zon {zone} saknar AC-buss — hoppar över")
+            continue
+        zc   = zcfg.get(zone, {})
+        hb   = f"{zone} heat"
+        peak = float(dh.max())
+        n.add("Bus", hb, carrier="heat")
+        n.add("Load", f"{zone} heat load", bus=hb, p_set=dh)
+        # Ackumulator (termiskt lager, e_cyclic)
+        n.add("Store", f"{zone} heat store", bus=hb, carrier="heat store",
+              e_nom=st_hours * peak, e_cyclic=True)
+        # El-panna: AC → heat, η≈1
+        n.add("Link", f"{zone} heat elboiler", bus0=zone, bus1=hb, carrier="heat elboiler",
+              efficiency=0.99, p_nom=float(zc.get("elboiler_mw", 0.0)), marginal_cost=elb_vom)
+        # Stor-VP: AC → heat, COP (p_nom i MW_el)
+        n.add("Link", f"{zone} heat hp", bus0=zone, bus1=hb, carrier="heat hp",
+              efficiency=cop, p_nom=float(zc.get("hp_el_mw", 0.0)), marginal_cost=hp_vom)
+        # Bio/KVV/avfall: grundförsörjning på heat-bussen (konkurrerande MC)
+        n.add("Generator", f"{zone} heat chp", bus=hb, carrier="heat chp",
+              p_nom=peak * 1.2, marginal_cost=bio_vom)
+        # Slack (omött värme) för feasibility
+        n.add("Generator", f"{zone} heat slack", bus=hb, carrier="heat slack",
+              p_nom=1e6, marginal_cost=mc_slack)
+        print(f"  → Heat {zone}: FV-behov topp {peak:.0f} MW_th, VP {zc.get('hp_el_mw',0):.0f} "
+              f"MW_el (COP {cop}), el-panna {zc.get('elboiler_mw',0):.0f} MW, bio MC {bio_vom}, "
+              f"lager {st_hours*peak:.0f} MWh")
 
 
 def _add_nuclear(

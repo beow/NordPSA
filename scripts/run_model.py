@@ -148,8 +148,15 @@ def load_inputs(cfg: dict) -> dict:
     with open(CONFIG_PATH.parent / "hydro_params.yaml") as f:
         hydro_params = yaml.safe_load(f)
 
+    # Fjärrvärme-värmebehov (valfritt; gitignorerad, byggs av scripts/build_heat.py)
+    heat_path = PROC_DIR / "heat_load.parquet"
+    heat_load = pd.read_parquet(heat_path) if heat_path.exists() else None
+
     # Sätt UTC-index och ta bort timezone (PyPSA kräver tz-naivt)
-    for df in (load_df, vre, nuclear, thermal, prices_df):
+    dfs = [load_df, vre, nuclear, thermal, prices_df]
+    if heat_load is not None:
+        dfs.append(heat_load)
+    for df in dfs:
         df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
 
     market_prices = {col: prices_df[col] for col in prices_df.columns}
@@ -158,6 +165,7 @@ def load_inputs(cfg: dict) -> dict:
         load=load_df, vre_profiles=vre, vre_noms=vre_noms,
         nuclear_profile=nuclear, thermal_profile=thermal,
         hydro_params=hydro_params, market_prices=market_prices,
+        heat_load=heat_load,
     )
 
 
@@ -187,6 +195,9 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
     }
     out["vre_noms"]     = inputs["vre_noms"]
     out["hydro_params"] = inputs["hydro_params"]
+    hl = inputs.get("heat_load")
+    out["heat_load"] = (hl.resample(freq).mean().reindex(snapshots).ffill()
+                        if hl is not None else None)
     return out
 
 
@@ -320,6 +331,8 @@ def slice_inputs(inputs: dict, snapshots: pd.DatetimeIndex) -> dict:
     }
     out["vre_noms"]     = inputs["vre_noms"]
     out["hydro_params"] = inputs["hydro_params"]
+    hl = inputs.get("heat_load")
+    out["heat_load"] = hl.reindex(snapshots) if hl is not None else None
     return out
 
 
@@ -557,6 +570,10 @@ def main() -> None:
                         help="Pris-elastisk kontinentgräns (trappa): stora nordiska flöden "
                              "flyttar gränspriset. S_export/S_import per gräns från "
                              "config market_elasticity. Rekommenderas för expansionskörningar.")
+    parser.add_argument("--add-heat", action="store_true",
+                        help="Aktivera fjärrvärmesektorn (config heat): per-zon heat-buss "
+                             "(FV-behov + ackumulator + el-panna + stor-VP + bio/KVV). Drar bort "
+                             "dagens FV-el ur AC-lasten. Kräver data/processed/heat_load.parquet.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -714,6 +731,9 @@ def main() -> None:
 
     if args.market_elasticity:
         cfg.setdefault("market_elasticity", {})["enabled"] = True
+
+    if args.add_heat:
+        cfg.setdefault("heat", {})["enabled"] = True
         print("  → pris-elastisk kontinentgräns (trappa) aktiv")
 
     if args.effective_ntc:
@@ -766,6 +786,7 @@ def main() -> None:
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
     if args.market_elasticity:          flags.append("market-elasticity")
+    if args.add_heat:                   flags.append("heat")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.hydro_terminal_value:       flags.append("tv-hydro")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
