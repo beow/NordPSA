@@ -116,7 +116,7 @@ def build_network(
     _add_links(n, cfg)
     _add_loads(n, load)
     _add_slack(n, cfg, all_zones=voll)
-    _add_thermal(n, thermal_profile)
+    _add_thermal(n, thermal_profile, cfg)
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
@@ -130,6 +130,7 @@ def build_network(
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
     _add_heat(n, cfg, heat_demand)
+    _add_chp(n, cfg, heat_demand)
 
     return n
 
@@ -181,14 +182,22 @@ def _add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False) -> None:
         )
 
 
-def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame) -> None:
+def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame, cfg: dict | None = None) -> None:
     """Termisk must-run som fast Generator (p_min_pu = p_max_pu = profil).
 
     Dispatch är helt given av data — optimeraren har inget val.
     Zoner utan termisk produktion (max = 0) hoppas över.
+
+    Zoner med KVV-config (heat.zones[z].chp) får sin termisk-el reducerad med
+    share_of_thermal → den delen produceras endogent av bakpress-KVV (se _add_chp),
+    så att KVV-elen inte dubbelräknas.
     """
+    hz = ((cfg or {}).get("heat") or {}).get("zones") or {}
     for zone in thermal_profile.columns:
         profile = thermal_profile[zone].clip(lower=0)
+        chp = (hz.get(zone, {}) or {}).get("chp")
+        if chp:
+            profile = profile * (1.0 - float(chp.get("share_of_thermal", 1.0)))
         p_nom = float(profile.max())
         if p_nom == 0:
             continue
@@ -570,15 +579,59 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
             pu = (zone_mr * dh / peak).clip(lower=0.0, upper=1.0) if peak > 0 else 0.0
             n.add("Generator", f"{zone} heat mustrun", bus=hb, carrier="heat mustrun",
                   p_nom=peak, p_min_pu=pu, p_max_pu=pu, marginal_cost=mr_vom)
-        # Bio/KVV: dispatchbar grundförsörjning på heat-bussen (konkurrerande MC)
-        n.add("Generator", f"{zone} heat chp", bus=hb, carrier="heat chp",
-              p_nom=peak * 1.2, marginal_cost=bio_vom)
+        # Bio/KVV dispatchbar grundförsörjning. Om zonen har KVV-config (chp) ger
+        # bakpress-KVV-länken (_add_chp) värmen i stället → hoppa över heat-only-gen.
+        if not zc.get("chp"):
+            n.add("Generator", f"{zone} heat chp", bus=hb, carrier="heat chp",
+                  p_nom=peak * 1.2, marginal_cost=bio_vom)
         # Slack (omött värme) för feasibility
         n.add("Generator", f"{zone} heat slack", bus=hb, carrier="heat slack",
               p_nom=1e6, marginal_cost=mc_slack)
         print(f"  → Heat {zone}: FV-behov topp {peak:.0f} MW_th, VP {zc.get('hp_el_mw',0):.0f} "
               f"MW_el (COP {zone_cop:g}), el-panna {zc.get('elboiler_mw',0):.0f} MW, must-run "
               f"{zone_mr:.0%}, bio MC {bio_vom}, lager {st_hours*peak:.0f} MWh")
+
+
+def _add_chp(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
+    """Bakpress-KVV per zon (för zoner med heat.zones[z].chp):
+
+        Bus(chp fuel) ─Generator(bränsle, MC=fuel_vom)─┐
+                                                       └─Link(KVV)─► bus1=AC (el, η_el)
+                                                                   └► bus2=heat (värme, η_heat)
+
+    Fast el:värme-ratio (bakpress). Optimeraren kör KVV när elpris·η_el + värme-skuggpris·
+    η_heat − fuel_vom > 0. Ersätter zonens heat-only `heat chp` (värmen kommer nu från bus2)
+    OCH zonens must-run-termisk-el (reducerad i _add_thermal med share_of_thermal) — KVV-elen
+    blir endogen. p_nom (MW_fuel) dimensioneras så KVV ensam kan täcka det dispatchbara
+    värmebehovet (behov − must-run).
+    """
+    hcfg = cfg.get("heat") or {}
+    if not hcfg.get("enabled") or not heat_demand:
+        return
+    zcfg = hcfg.get("zones") or {}
+    if "chp fuel" not in n.carriers.index:
+        n.add("Carrier", "chp fuel")
+    for zone, dh in heat_demand.items():
+        chp = (zcfg.get(zone, {}) or {}).get("chp")
+        if not chp or zone not in n.buses.index:
+            continue
+        eta_el   = float(chp.get("eta_el", 0.28))
+        eta_heat = float(chp.get("eta_heat", 0.52))
+        fuel_vom = float(chp.get("fuel_vom", 22.0))
+        mr       = float(zcfg[zone].get("mustrun_share", hcfg.get("mustrun_share", 0.0)))
+        peak     = float(dh.max())
+        # Bränsle-p_nom så η_heat × p_nom ≥ dispatchbart värmebehov (behov − must-run)
+        p_nom_fuel = (peak * (1.0 - mr)) / eta_heat * 1.2 if eta_heat > 0 else 0.0
+        fbus = f"{zone} chp fuel"
+        n.add("Bus", fbus, carrier="chp fuel")
+        n.add("Generator", f"{zone} chp fuel", bus=fbus, carrier="chp fuel",
+              p_nom=1e7, marginal_cost=fuel_vom)
+        n.add("Link", f"{zone} chp",
+              bus0=fbus, bus1=zone, bus2=f"{zone} heat", carrier="heat chp",
+              efficiency=eta_el, efficiency2=eta_heat, p_nom=p_nom_fuel)
+        print(f"  → CHP {zone}: bakpress η_el={eta_el} η_heat={eta_heat} (c={eta_el/eta_heat:.2f}), "
+              f"fuel MC {fuel_vom}, p_nom {p_nom_fuel:.0f} MW_fuel "
+              f"(→ ≤{p_nom_fuel*eta_el:.0f} MW_el / ≤{p_nom_fuel*eta_heat:.0f} MW_th)")
 
 
 def _add_nuclear(
