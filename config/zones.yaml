@@ -132,6 +132,12 @@ heat:
     #     c=eta_el/eta_heat≈0.48 (DK ~10 TWh el / ~21 TWh värme). Första version — kalibreras.
     DK:   {dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 4.0, mustrun_share: 0.25,
            chp: {eta_el: 0.26, eta_heat: 0.54, fuel_vom: 22.0, share_of_thermal: 1.0}}
+    # FI (Finsk Energi "District heating 2024", first version): konsumtion 32.7 TWh; VP/återvinning 7.8 TWh (~22%,
+    #   FI elektrifierar hårt); KVV-andel 37% (ner från 76%), DH-KVV-el 4.5 TWh. NYCKEL: FI-thermal (12.3 TWh i
+    #   modellen) domineras av INDUSTRI-KVV (skogsbruk) → share_of_thermal 0.37 (bara DH-KVV endogen, ~4.5 TWh;
+    #   industri-KVV ~7.8 stannar must-run). c aggregerat lågt (DH-KVV + värme-bara-pannor). KALIBRERAS.
+    FI:   {dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15,
+           chp: {eta_el: 0.16, eta_heat: 0.76, fuel_vom: 22.0, share_of_thermal: 0.37}}
 
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
