@@ -16,6 +16,7 @@ from pathlib import Path
 # LABEL = "run82_wind_ses_9893_1h"
 # LABEL = "run84_socpin_senose_1h"
 LABEL = "run94_elasticity_1h"          # 1h-baseline: elasticitet + hydrogolv-komp
+LABEL2 = None   # sätt till en annan körning (t.ex. 'run95_elasticity_3h') för att jämföra mot DEN i stället för faktiskt
 ROOT = Path('..').resolve()
 sys.path.insert(0, str(ROOT))
 
