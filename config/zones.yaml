@@ -262,7 +262,9 @@ costs:
 # Ankarna styr AMPLITUDEN på cykeln, inte vattenvärdets nivå (nivån sätts av
 # energibudgeten som förut). Per-zon-override: zones: {SE-N: {v_empty_eur_mwh: ...}}
 hydro_water_value:
-  n_tranches: 5
+  n_tranches: 5            # default; överstyr per körning med --wv-tranches. Test (run110 N=5 vs run111 N=10):
+                          # fler hinkar ger ingen mätbar förbättring (platåerna = prisgolvs-jämvikt, ej hinkartefakt)
+                          # men ~4× lösningstid på full baseline. Kurvparametrarna är n-oberoende (kontinuerlig V samplad i mittpunkter).
   v_empty_eur_mwh: 60    # ankare vid tom reservoar (OBS: platshållare, kalibreras)
   v_full_eur_mwh: 0      # ankare vid full
   shape: 1.5             # konvexitet (1 = linjär, >1 = brantare nära tom)

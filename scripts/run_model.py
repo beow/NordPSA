@@ -373,6 +373,10 @@ def main() -> None:
     parser.add_argument("--wv-scale", type=float, default=None, metavar="FACTOR",
                         help="Skala V(SOC)-kurvans amplitud (kalibrering, default 1.0). "
                              "Kräver --water-value-curve.")
+    parser.add_argument("--wv-tranches", type=int, default=None, metavar="N",
+                        help="Antal hinkar i V(SOC)-kurvan (default config 5). Fler = finare "
+                             "SOC-upplösning men långsammare; kurvparametrarna är n-oberoende "
+                             "(samma kontinuerliga kurva, finare sampling). Kräver --water-value-curve.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -501,8 +505,11 @@ def main() -> None:
         cfg.setdefault("hydro_water_value", {})["enabled"] = True
         if args.wv_scale is not None:
             cfg["hydro_water_value"]["scale"] = args.wv_scale
+        if args.wv_tranches is not None:
+            cfg["hydro_water_value"]["n_tranches"] = args.wv_tranches
         print("  → SOC-beroende vattenvärde V(SOC) aktivt"
-              + (f" (scale={args.wv_scale})" if args.wv_scale is not None else ""))
+              + (f", scale={args.wv_scale}" if args.wv_scale is not None else "")
+              + (f", n_tranches={args.wv_tranches}" if args.wv_tranches is not None else ""))
 
     if args.add_heat:
         cfg.setdefault("heat", {})["enabled"] = True
@@ -555,7 +562,9 @@ def main() -> None:
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
-    if args.water_value_curve:          flags.append("wv-curve" + (f"-x{args.wv_scale}" if args.wv_scale is not None else ""))
+    if args.water_value_curve:          flags.append("wv-curve"
+                                            + (f"-x{args.wv_scale}" if args.wv_scale is not None else "")
+                                            + (f"-n{args.wv_tranches}" if args.wv_tranches is not None else ""))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
