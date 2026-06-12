@@ -647,7 +647,7 @@ def _add_nuclear(
     mc         = tcfg["vom_eur_per_mwh"]
     extendable = tcfg["extendable"]
     cap_cost   = _annualized_cost(
-        tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, fom_fraction
+        tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
     ) * n_years
 
     for zone, zcfg in cfg["zones"].items():
@@ -695,7 +695,7 @@ def _add_vre(
             mc         = tcfg["vom_eur_per_mwh"]
             extendable = tcfg["extendable"]
             cap_cost   = _annualized_cost(
-                tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, fom_fraction
+                tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
             ) * n_years
 
             p_nom = vre_noms.get(zone, {}).get(nom_key, 0)
@@ -733,7 +733,7 @@ def _add_gas(
     mc         = tcfg["vom_eur_per_mwh"]
     extendable = tcfg["extendable"]
     cap_cost   = _annualized_cost(
-        tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, fom_fraction
+        tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
     ) * n_years
 
     p_nom_max = tcfg.get("p_nom_max_mw", np.inf)

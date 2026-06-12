@@ -175,30 +175,34 @@ costs:
     p_nom_max_mw: 20000    # max utbyggnad per zon
 
   wind_onshore:
-    overnight_eur_per_w: 1.2
-    lifetime_years: 25
-    vom_eur_per_mwh: 1.5
+    overnight_eur_per_w: 1.2      # DEA ~1.04-1.13 ✓
+    lifetime_years: 30            # DEA-kalib (var 25)
+    vom_eur_per_mwh: 1.6          # DEA
+    fom_fraction: 0.011           # DEA ~12.6 €/kW/år (global 2% = 24 var ~2× för högt → hindrade vind)
     extendable: true
     p_nom_max_mw: 50000
 
   wind_offshore:
-    overnight_eur_per_w: 2.5
-    lifetime_years: 25
+    overnight_eur_per_w: 2.2      # DEA ~1.9-2.3 inkl nät (var 2.5)
+    lifetime_years: 30            # DEA-kalib (var 25)
     vom_eur_per_mwh: 3.0
+    fom_fraction: 0.018           # DEA ~40 €/kW/år
     extendable: true
     p_nom_max_mw: 50000
 
   solar:
-    overnight_eur_per_w: 0.5
-    lifetime_years: 30
+    overnight_eur_per_w: 0.40     # DEA ~0.40 utility (var 0.5, ~25% högt)
+    lifetime_years: 35            # DEA-kalib (var 30)
     vom_eur_per_mwh: 1.0
+    fom_fraction: 0.019           # DEA ~7.5 €/kW/år
     extendable: true
     p_nom_max_mw: 50000
 
   gas:
-    overnight_eur_per_w: 2.0
-    lifetime_years: 40
-    vom_eur_per_mwh: 100.0
+    overnight_eur_per_w: 0.45     # OCGT (var 2.0, 2-4× för högt); peaker → VOM dominerar
+    lifetime_years: 30            # (var 40)
+    vom_eur_per_mwh: 100.0        # bränsle + CO2-proxy
+    fom_fraction: 0.04            # OCGT ~18 €/kW/år
     extendable: true
     p_nom_max_mw: 20000
 
