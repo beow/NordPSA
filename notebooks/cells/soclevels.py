@@ -31,7 +31,7 @@ for ax in axes.flat[len(hydro_zones):]:
 plt.suptitle('Reservoarnivåer 2024', y=1.01)
 plt.tight_layout()
 
-# --- spill (infogad) ---
+# --- infogad ---
 
 # Spill — hur mycket vatten spills?
 total_spill = spill.sum()
