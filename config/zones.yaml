@@ -120,8 +120,12 @@ heat:
   store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh)
   slack_eur_per_mwh: 3000
   zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
-    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80}   # HP/panna dim. för ~6.7%/0.8%
-    SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600}
+    # chp: bakpress-KVV, c=eta_el/eta_heat≈0.45 (svensk KVV värmefokuserad). SE-S CHP-el ~8.6 TWh
+    # (korrigerar thermal-under-rep 5→~8 ≈ verklig SE-S-KVV); SE-N ~1 ≈ thermal. share_of_thermal 1.0.
+    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80,
+           chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}   # HP/panna ~6.7%/0.8%
+    SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600,
+           chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}
     # DK: levererat ~30 TWh; el-panna-DOMINANT (4% panna / 1% VP), COP 4, must-run 0.25 (avfall 22%+sol 3%).
     #     chp: bakpress-KVV (multi-output Link bränsle→el+värme). Ersätter heat-only-bio + DK must-run-termisk
     #     (share_of_thermal 1.0 → all DK-termisk endogen via KVV; korrigerar under-rep. ~3 vs ~10 TWh).
