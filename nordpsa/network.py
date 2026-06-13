@@ -190,13 +190,15 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame, cfg: dict | No
 
     Zoner med KVV-config (heat.zones[z].chp) får sin termisk-el reducerad med
     share_of_thermal → den delen produceras endogent av bakpress-KVV (se _add_chp),
-    så att KVV-elen inte dubbelräknas.
+    så att KVV-elen inte dubbelräknas. ENDAST när värmesektorn är aktiv (heat.enabled);
+    annars behålls full must-run-termik (_add_chp lägger ju ej tillbaka KVV utan heat).
     """
+    heat_on = bool(((cfg or {}).get("heat") or {}).get("enabled"))
     hz = ((cfg or {}).get("heat") or {}).get("zones") or {}
     for zone in thermal_profile.columns:
         profile = thermal_profile[zone].clip(lower=0)
         chp = (hz.get(zone, {}) or {}).get("chp")
-        if chp:
+        if chp and heat_on:
             profile = profile * (1.0 - float(chp.get("share_of_thermal", 1.0)))
         p_nom = float(profile.max())
         if p_nom == 0:
