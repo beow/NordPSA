@@ -477,6 +477,15 @@ def main() -> None:
         for tech in cfg.get("costs", {}):
             if isinstance(cfg["costs"][tech], dict):
                 cfg["costs"][tech]["extendable"] = False
+    else:
+        # Expansionskörningar modellerar framtida system → post-utbyggnads-NTC
+        # (t.ex. Aurora SE-N–FI). Dispatch behåller historiska värden i cfg["links"].
+        overrides = {(z0, z1): p for z0, z1, p in cfg.get("links_expansion_overrides", [])}
+        for link in cfg.get("links", []):
+            new = overrides.get((link[0], link[1]))
+            if new is not None and link[2] != new:
+                print(f"  → expansion-NTC: {link[0]}-{link[1]} {link[2]} → {new} MW")
+                link[2] = new
 
     if args.no_market:
         cfg["market_connections"] = []

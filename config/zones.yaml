@@ -144,12 +144,19 @@ heat:
 links:
   - [NO-N, SE-N,  1600]
   - [SE-N, SE-S,  7300]
-  - [SE-N, FI,    1839]
+  - [SE-N, FI,    1200]   # pre-Aurora (historisk; Aurora live slutet 2025 höjde till ~2000)
   - [NO-N, NO-S,  1300]
   - [NO-S, SE-S,  2120]
   - [NO-S, DK,    1681]
   - [SE-S, DK,    2015]
   - [SE-S, FI,    1200]
+
+# Tidsdimension via körtyp: dispatch (--no-expansion) modellerar historiska 2023-2025
+# och använder NTC ovan; expansionskörningar modellerar framtida system och får
+# post-utbyggnads-NTC nedan (appliceras i run_model.py när expansion är på).
+# Aurora-linjen (SE-N–FI) togs i drift slutet 2025: 1200 (historisk) → 2000 (expansion).
+links_expansion_overrides:
+  - [SE-N, FI,    2000]   # Aurora post-go-live
 
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
 # Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
