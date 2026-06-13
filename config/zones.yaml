@@ -252,34 +252,6 @@ costs:
 #     store:        {e_nom_mwh: 50000, extendable: false}
 #     turbine:      {p_nom_mw: 300, extendable: false}   # utelämna = ingen turbin
 
-# SOC-beroende vattenvärde V(SOC) (aktiveras med --water-value-curve).
-# Lagrad hydroenergi får ett marginalvärde som avtar konvext med fyllnaden:
-#   V(m) = v_full + (v_empty − v_full)·(1−m)^shape,  m = fyllnadsgrad 0–1
-# Kurvan noll-centreras vid neutral_frac (positiv under, negativ över — krävs
-# för cyklisk SOC) och EUR/MWh-ankarna fördelas över ramp_hours hold-tid till
-# per-timme-värden. Dualen teleskoperar: vattenvärdet faller framåt i tiden vid
-# låg SOC och stiger vid hög → säsongscykel (max tidig vinter, min vid vårflod).
-# Ankarna styr AMPLITUDEN på cykeln, inte vattenvärdets nivå (nivån sätts av
-# energibudgeten som förut). Per-zon-override: zones: {SE-N: {v_empty_eur_mwh: ...}}
-hydro_water_value:
-  n_tranches: 5            # default; överstyr per körning med --wv-tranches. Test (run110 N=5 vs run111 N=10):
-                          # fler hinkar ger ingen mätbar förbättring (platåerna = prisgolvs-jämvikt, ej hinkartefakt)
-                          # men ~4× lösningstid på full baseline. Kurvparametrarna är n-oberoende (kontinuerlig V samplad i mittpunkter).
-  v_empty_eur_mwh: 60    # ankare vid tom reservoar (OBS: platshållare, kalibreras)
-  v_full_eur_mwh: 0      # ankare vid full
-  shape: 1.5             # konvexitet (1 = linjär, >1 = brantare nära tom)
-  neutral_frac: 0.6      # fyllnadsgrad där kurvan korsar 0 (≈ tidsmedel-SOC)
-  ramp_hours: 4380       # hold-tid (halvår) som ankarna fördelas över
-  # Kalibrering iter 2 (run110): neutral_frac per zon ≈ observerad medel-fyllnad
-  # (minskar nivådrift + toppstraff-tid → spill), halverad amplitud i vattenrika
-  # SE-S/NO-S (run109: NO-S-spill 46 TWh, rå nordbias +3 vs run95).
-  zones:
-    SE-N: {neutral_frac: 0.70}
-    SE-S: {neutral_frac: 0.60, v_empty_eur_mwh: 30}
-    NO-N: {neutral_frac: 0.70}
-    NO-S: {neutral_frac: 0.72, v_empty_eur_mwh: 30}
-    FI:   {neutral_frac: 0.65}
-
 # Solver
 solver:
   name: highs

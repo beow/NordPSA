@@ -25,7 +25,6 @@ from nordpsa.network import (
     build_network,
     hydro_soc_initial_constraint,
     hydro_soc_terminal_pin_constraint,
-    hydro_water_value_curve,
     oc_budget_constraint,
     _annualized_cost,
 )
@@ -365,18 +364,6 @@ def main() -> None:
                         help="Aktivera fjärrvärmesektorn (config heat): per-zon heat-buss "
                              "(FV-behov + ackumulator + el-panna + stor-VP + bio/KVV). Drar bort "
                              "dagens FV-el ur AC-lasten. Kräver data/processed/heat_load.parquet.")
-    parser.add_argument("--water-value-curve", action="store_true",
-                        help="SOC-beroende vattenvärde V(SOC): tranche-belöning på lagrad "
-                             "hydroenergi (config hydro_water_value) → säsongsvarierande "
-                             "vattenvärde (max tidig vinter, min vid vårflod) i stället för "
-                             "platt. Cyklisk SOC behålls.")
-    parser.add_argument("--wv-scale", type=float, default=None, metavar="FACTOR",
-                        help="Skala V(SOC)-kurvans amplitud (kalibrering, default 1.0). "
-                             "Kräver --water-value-curve.")
-    parser.add_argument("--wv-tranches", type=int, default=None, metavar="N",
-                        help="Antal hinkar i V(SOC)-kurvan (default config 5). Fler = finare "
-                             "SOC-upplösning men långsammare; kurvparametrarna är n-oberoende "
-                             "(samma kontinuerliga kurva, finare sampling). Kräver --water-value-curve.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -501,16 +488,6 @@ def main() -> None:
     if args.market_elasticity:
         cfg.setdefault("market_elasticity", {})["enabled"] = True
 
-    if args.water_value_curve:
-        cfg.setdefault("hydro_water_value", {})["enabled"] = True
-        if args.wv_scale is not None:
-            cfg["hydro_water_value"]["scale"] = args.wv_scale
-        if args.wv_tranches is not None:
-            cfg["hydro_water_value"]["n_tranches"] = args.wv_tranches
-        print("  → SOC-beroende vattenvärde V(SOC) aktivt"
-              + (f", scale={args.wv_scale}" if args.wv_scale is not None else "")
-              + (f", n_tranches={args.wv_tranches}" if args.wv_tranches is not None else ""))
-
     if args.add_heat:
         cfg.setdefault("heat", {})["enabled"] = True
         print("  → pris-elastisk kontinentgräns (trappa) aktiv")
@@ -562,9 +539,6 @@ def main() -> None:
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
-    if args.water_value_curve:          flags.append("wv-curve"
-                                            + (f"-x{args.wv_scale}" if args.wv_scale is not None else "")
-                                            + (f"-n{args.wv_tranches}" if args.wv_tranches is not None else ""))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -597,8 +571,6 @@ def main() -> None:
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
     extra_callbacks = []
-    if args.water_value_curve:
-        extra_callbacks.append(hydro_water_value_curve(cfg))
     if args.expand_vre:
         n_years = len(snapshots) * res / 8760.0
         forced  = (args.expand_budget_musd is not None
