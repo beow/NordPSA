@@ -18,6 +18,17 @@ results-CSV:er → andra celler (t.ex. compareprice) kan kalla den för valfri k
 """
 import numpy as np
 
+# ── Inställning ──────────────────────────────────────────────────────────────
+# WV-kompensationen är giltig BARA när vattenvärdet är ett lågt/platt/icke-bindande
+# golv (baseline-regim). I knapphets-/importberoende-/expansionsscenarier stiger WV
+# legitimt (hydro blir marginell prissättare mot dyr import) och då RADERAR
+# kompensationen den verkliga prissignalen (ΔWV ≈ Δpris, se project_wv_comp_validity).
+# Sätt NO_WV_COMP=True i sådana scenarier → wv_adjusted/calw/calw2 returnerar RÅpriser
+# oförändrade, så alla downstream-celler (pricetable, compareprice, ...) jobbar på
+# råpris utan egna ändringar.
+NO_WV_COMP = False
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Reservoarens BUDPRIS = vattenvärde + rörlig kostnad (VOM). När reservoaren är marginell blir
 # alltså zonpriset = WV + VOM (ej WV exakt). Vi ankrar metriken på det budpriset; då räcker en
 # minimal tolerans (toleranskänsligheten försvinner: ankrat på WV+VOM ger SE-N run121 6.7/7.2/8.5%
@@ -34,6 +45,8 @@ def wv_adjusted(label):
     returneras råpriserna."""
     base = ROOT / 'results' / label
     pr = pd.read_csv(base / 'prices.csv', index_col=0, parse_dates=True)
+    if NO_WV_COMP:                       # kompensation avstängd → råpriser
+        return pr.copy()
     wv_path = base / 'water_value.csv'
     if not wv_path.exists():
         return pr.copy()
@@ -49,6 +62,14 @@ def wv_adjusted(label):
 # Korrigerade priser för LABEL (och LABEL2 om satt) — tillgängliga för andra celler.
 calw  = wv_adjusted(LABEL)
 calw2 = wv_adjusted(LABEL2) if LABEL2 else None
+
+if NO_WV_COMP:
+    print("⚠️  NO_WV_COMP=True — WV-kompensation AVSTÄNGD. calw/calw2 = RÅpriser "
+          "(downstream-celler visar råpris).")
+    print("    Använd detta i knapphets-/import-/expansionsscenarier där WV stiger "
+          "legitimt (se project_wv_comp_validity).")
+    print("    WV-diagnostiken nedan visar ändå golvets storlek — det är den som "
+          "motiverar avstängningen.\n")
 
 if water_value is None:
     print("Ingen water_value.csv — kör med assign_all_duals för hydrogolv-kompensation.")

@@ -27,7 +27,8 @@ if USE_CALW and _calw is None:
 
 # Modellsidan: kompenserat eller rått
 model = _calw if USE_CALW else prices
-mtag  = 'komp' if USE_CALW else 'rå'
+# calw/calw2 är RÅpriser om hydrocomp kördes med NO_WV_COMP=True → spegla i taggen
+mtag  = ('rå' if globals().get('NO_WV_COMP', False) else 'komp') if USE_CALW else 'rå'
 
 # Referenssidan
 if LABEL2:
