@@ -66,6 +66,8 @@ def build_network(
     extra_wind:              list | None = None,
     hydrogen_overrides:      dict | None = None,
     heat_load:               pd.DataFrame | None = None,
+    ev_profiles:             pd.DataFrame | None = None,
+    ev_overrides:            dict | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -129,8 +131,9 @@ def build_network(
     _add_extra_nuclear(n, extra_nuclear, ccfg)
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
-    _add_heat(n, cfg, heat_demand)
+    _add_heat(n, cfg, heat_demand, r, n_years)
     _add_chp(n, cfg, heat_demand)
+    _add_ev(n, cfg, ev_profiles, ev_overrides, snapshots, dt_h, n_years)
 
     return n
 
@@ -526,7 +529,8 @@ def _heat_demand_profiles(cfg, heat_load, snapshots, dt_h, n_years) -> dict:
     return out
 
 
-def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
+def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict,
+              r: float = 0.06, n_years: float = 1.0) -> None:
     """Fjärrvärmebuss per zon (v3 "1 buss + laster"):
 
         AC → Link(el-panna, η≈1)  ┐
@@ -548,6 +552,14 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
     mr_share = float(hcfg.get("mustrun_share", 0.0))        # avfall/restvärme (~0 MC, must-run)
     mr_vom   = float(hcfg.get("mustrun_vom_eur_per_mwh", 0.0))
     st_hours = float(hcfg.get("store_hours", 6))
+    # Värmelager: fast (store_hours×topplast) ELLER investerbart mot TES-kostnad
+    # (--heat-store-ext → heat.store_extendable). Termiskt grop-/tanklager är billigt.
+    st_ext   = bool(hcfg.get("store_extendable", False))
+    st_overn = float(hcfg.get("store_overnight_eur_per_kwh", 0.5))   # €/kWh_th
+    st_life  = int(hcfg.get("store_lifetime_years", 40))
+    st_fom   = float(hcfg.get("store_fom_fraction", 0.01))
+    st_emax  = float(hcfg.get("store_e_nom_max_mwh", 1e8))
+    st_cap   = st_overn * 1e3 * (_crf(st_life, r) + st_fom) * n_years if st_ext else 0.0
     mc_slack = float(hcfg.get("slack_eur_per_mwh", MC_SLACK))
     zcfg     = hcfg.get("zones") or {}
 
@@ -566,9 +578,14 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         peak = float(dh.max())
         n.add("Bus", hb, carrier="heat")
         n.add("Load", f"{zone} heat load", bus=hb, p_set=dh)
-        # Ackumulator (termiskt lager, e_cyclic)
-        n.add("Store", f"{zone} heat store", bus=hb, carrier="heat store",
-              e_nom=st_hours * peak, e_cyclic=True)
+        # Ackumulator (termiskt lager, e_cyclic): fast eller investerbart mot TES-kostnad
+        if st_ext:
+            n.add("Store", f"{zone} heat store", bus=hb, carrier="heat store",
+                  e_nom=0.0, e_nom_extendable=True, e_nom_min=0.0, e_nom_max=st_emax,
+                  e_cyclic=True, capital_cost=st_cap)
+        else:
+            n.add("Store", f"{zone} heat store", bus=hb, carrier="heat store",
+                  e_nom=st_hours * peak, e_cyclic=True)
         # El-panna: AC → heat, η≈1.  MC = vom + elskatt (per MWh el, dvs på p0)
         n.add("Link", f"{zone} heat elboiler", bus0=zone, bus1=hb, carrier="heat elboiler",
               efficiency=0.99, p_nom=float(zc.get("elboiler_mw", 0.0)), marginal_cost=elb_vom + el_tax)
@@ -634,6 +651,66 @@ def _add_chp(n: pypsa.Network, cfg: dict, heat_demand: dict) -> None:
         print(f"  → CHP {zone}: bakpress η_el={eta_el} η_heat={eta_heat} (c={eta_el/eta_heat:.2f}), "
               f"fuel MC {fuel_vom}, p_nom {p_nom_fuel:.0f} MW_fuel "
               f"(→ ≤{p_nom_fuel*eta_el:.0f} MW_el / ≤{p_nom_fuel*eta_heat:.0f} MW_th)")
+
+
+def _add_ev(n: pypsa.Network, cfg: dict, ev_profiles, ev_overrides,
+            snapshots, dt_h: float, n_years: float) -> None:
+    """Fordonsladdning (smart charging) per zon och fordonsklass.
+
+    Per zon z och klass c ∈ {car, heavy}:
+        AC-buss z ─Link(charger, AC→EV, p_max_pu=avail)─► Bus(z EV c)
+        Bus(z EV c) ─► Load(körbehov)  +  Store(flottbatteri, e_min_pu=minsoc)
+                    ◄─ Generator(slack, omött mobilitet)
+
+    Bara smart laddning (ingen V2G). Antal fordon per zon från ev_overrides (CLI);
+    per-fordon-tal från cfg['ev']['classes']; profiler (drive/avail/minsoc) per klass
+    från ev_profiles. Flottan är exogen → Store ej extendable. Körprofilen skalas till
+    årsmål (N × annual_mwh) som _heat_demand_profiles. Laddar-Link p_max_pu = inkopplings-
+    tillgänglighet; Store e_min_pu = körbarhets-/avgångsgolv."""
+    ecfg = cfg.get("ev") or {}
+    if not ecfg.get("enabled") or ev_profiles is None or not ev_overrides:
+        return
+    classes  = ecfg.get("classes") or {}
+    mc_slack = float(ecfg.get("slack_eur_per_mwh", MC_SLACK))
+
+    for car in ("EV battery", "EV charger", "EV slack"):
+        if car not in n.carriers.index:
+            n.add("Carrier", car)
+
+    def _prof(col):
+        return ev_profiles[col].reindex(snapshots).ffill().fillna(0.0)
+
+    for zone, counts in ev_overrides.items():
+        if zone not in n.buses.index:
+            print(f"  Varning: EV-zon {zone} saknar AC-buss — hoppar över")
+            continue
+        for c, klass in classes.items():
+            n_veh = float(counts.get(c, 0))
+            if n_veh <= 0:
+                continue
+            eff   = float(klass.get("charge_efficiency", 0.9))
+            e_nom = n_veh * float(klass["battery_kwh"]) / 1e3    # MWh (flottbatteri)
+            p_chg = n_veh * float(klass["charger_kw"])  / 1e3    # MW (max samtidig laddeffekt)
+
+            drive = _prof(f"{c}_drive").clip(lower=0)
+            avail = _prof(f"{c}_avail").clip(0, 1)
+            msoc  = _prof(f"{c}_minsoc").clip(0, 1)
+            ann   = float(drive.sum() * dt_h / 1e6 / n_years)    # TWh av råformen
+            tgt   = n_veh * float(klass["annual_mwh"]) / 1e6     # TWh-mål
+            drive = drive * (tgt / ann) if ann > 0 else drive * 0.0
+
+            evbus = f"{zone} EV {c}"
+            n.add("Bus", evbus, carrier="EV battery")
+            n.add("Store", f"{zone} EV {c} store", bus=evbus, carrier="EV battery",
+                  e_nom=e_nom, e_cyclic=True, e_min_pu=msoc)
+            n.add("Link", f"{zone} EV {c} charger", bus0=zone, bus1=evbus,
+                  carrier="EV charger", efficiency=eff,
+                  p_nom=p_chg, p_max_pu=avail, marginal_cost=0.01)
+            n.add("Load", f"{zone} EV {c} drive", bus=evbus, p_set=drive)
+            n.add("Generator", f"{zone} EV {c} slack", bus=evbus, carrier="EV slack",
+                  p_nom=1e6, marginal_cost=mc_slack)
+            print(f"  → EV {zone}/{c}: {n_veh:.0f} fordon, batteri {e_nom:.0f} MWh, "
+                  f"laddeffekt {p_chg:.0f} MW (η={eff}), körbehov {tgt*1e3:.0f} GWh/år")
 
 
 def _add_nuclear(

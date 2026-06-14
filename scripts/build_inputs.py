@@ -530,6 +530,58 @@ def build_market_prices() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# EV-laddningsprofiler (syntetiska vecka×timme, per fordonsklass)
+# ---------------------------------------------------------------------------
+
+# 24-timmars formmallar (timme 0–23, UTC). PLATSHÅLLARE = nordiska medel, TRIMMA.
+# drive = relativ körenergi (skalas till årsmål i network); avail = andel inkopplad
+# (0–1, → laddar-Link p_max_pu); minsoc = avgångs-/körbarhets-golv (0–1, → Store e_min_pu).
+_EV_SHAPES = {
+    "car": {
+        "drive_wd": [0.2,0.1,0.1,0.1,0.2,0.5,1.5,3.0,2.5,1.2,0.8,0.8,0.9,0.8,0.9,1.5,3.0,3.2,2.0,1.2,0.9,0.7,0.5,0.3],
+        "drive_we": [0.3,0.2,0.1,0.1,0.1,0.2,0.4,0.7,1.2,1.8,2.2,2.4,2.3,2.2,2.1,2.0,1.8,1.6,1.4,1.1,0.9,0.7,0.5,0.4],
+        "avail_wd": [0.95,0.95,0.95,0.95,0.95,0.90,0.70,0.50,0.55,0.60,0.60,0.60,0.60,0.60,0.60,0.55,0.50,0.55,0.70,0.85,0.90,0.92,0.95,0.95],
+        "avail_we": [0.95,0.95,0.95,0.95,0.95,0.95,0.92,0.90,0.85,0.80,0.78,0.78,0.78,0.78,0.80,0.82,0.85,0.88,0.90,0.92,0.93,0.95,0.95,0.95],
+        "minsoc":   [0.45,0.50,0.55,0.62,0.68,0.70,0.68,0.55,0.45,0.40,0.35,0.35,0.35,0.35,0.35,0.38,0.42,0.45,0.45,0.45,0.45,0.45,0.45,0.45],
+    },
+    "heavy": {
+        "drive_wd": [0.1,0.1,0.1,0.1,0.2,0.5,1.5,2.5,3.0,3.0,3.0,2.8,2.5,2.8,3.0,3.0,2.8,2.0,1.2,0.6,0.3,0.2,0.1,0.1],
+        "drive_we": [0.1,0.1,0.1,0.1,0.1,0.2,0.4,0.6,0.8,0.9,1.0,1.0,1.0,1.0,0.9,0.8,0.7,0.5,0.4,0.3,0.2,0.1,0.1,0.1],
+        "avail_wd": [0.90,0.90,0.90,0.90,0.85,0.70,0.40,0.20,0.15,0.15,0.15,0.20,0.25,0.20,0.15,0.15,0.20,0.40,0.70,0.85,0.90,0.90,0.90,0.90],
+        "avail_we": [0.90,0.90,0.90,0.90,0.90,0.85,0.70,0.60,0.50,0.45,0.45,0.45,0.45,0.45,0.50,0.60,0.70,0.80,0.85,0.90,0.90,0.90,0.90,0.90],
+        "minsoc":   [0.60,0.65,0.70,0.75,0.80,0.80,0.70,0.50,0.35,0.30,0.30,0.30,0.30,0.30,0.30,0.30,0.35,0.40,0.45,0.50,0.50,0.55,0.55,0.60],
+    },
+}
+
+
+def build_ev_profiles() -> pd.DataFrame:
+    """Syntetiska EV-profiler per fordonsklass (zon-oberoende vecka×timme-mall).
+
+    Kolumner per klass: {c}_drive (relativ körenergi), {c}_avail (inkopplings-
+    tillgänglighet 0–1), {c}_minsoc (körbarhets-golv 0–1). Skalas/appliceras per zon
+    i network._add_ev. v1: ingen säsongsvariation (vinterräckvidd) — TODO."""
+    print("Bygger EV-profiler (syntetiska vecka×timme) ...")
+    idx  = pd.date_range(PERIOD_START, PERIOD_END, freq="h")
+    hour = idx.hour.to_numpy()
+    wknd = idx.dayofweek.to_numpy() >= 5           # lör/sön
+
+    def _expand(wd, we):
+        return np.where(wknd, np.array(we)[hour], np.array(wd)[hour])
+
+    result = {}
+    for c, s in _EV_SHAPES.items():
+        result[f"{c}_drive"]  = _expand(s["drive_wd"], s["drive_we"])
+        result[f"{c}_avail"]  = _expand(s["avail_wd"], s["avail_we"])
+        result[f"{c}_minsoc"] = np.array(s["minsoc"])[hour]   # samma alla dagar (v1)
+
+    out = pd.DataFrame(result, index=idx)
+    out.index.name = "time"
+    out.to_parquet(PROCESSED_DIR / "ev_profiles.parquet")
+    print(f"  → ev_profiles.parquet  ({len(out)} rader, {len(out.columns)} kolumner)")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -542,5 +594,6 @@ if __name__ == "__main__":
     build_nuclear_profile(cfg)
     build_thermal_profile()
     build_market_prices()
+    build_ev_profiles()
 
     print("\nKlart! Alla indata sparade i data/processed/")

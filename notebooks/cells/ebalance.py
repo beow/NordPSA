@@ -21,14 +21,14 @@ REF_LABEL = globals().get('LABEL2', None)   # referenskörning (delad global), a
 COUNTRY_MAP = {'SE-N': 'SE', 'SE-S': 'SE', 'NO-N': 'NO', 'NO-S': 'NO', 'DK': 'DK', 'FI': 'FI'}
 COUNTRIES   = ['SE', 'NO', 'DK', 'FI', 'Norden']
 SOURCES     = ['hydro', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas', 'slack']
-SHOW_ROWS   = SOURCES + ['prod_twh', 'load_twh', 'h2_elec', 'heat_elec',
+SHOW_ROWS   = SOURCES + ['prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
                          'batt_net', 'kont_export', 'intern_export']
 ROW_LABELS  = {
     'hydro': 'Vattenkraft', 'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
     'wind_offshore': 'Vind offshore', 'solar': 'Sol', 'thermal': 'Termisk (inkl KVV-el)',
     'gas': 'Gas', 'slack': 'Slack (lastskärn.)',
     'prod_twh': 'PRODUKTION TOTALT', 'load_twh': 'Last (konsumtion)', 'h2_elec': 'H2-elektrolys',
-    'heat_elec': 'Värme-el (VP+panna)', 'batt_net': 'Batteri (netto ut)',
+    'heat_elec': 'Värme-el (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
     'kont_export': 'Kont. export', 'intern_export': 'Intern export (NTC)',
 }
 
@@ -77,6 +77,9 @@ def country_balance(res_label):
         r['heat_elec'] = twh(flw.get(f'{zone} heat elboiler', zero).clip(lower=0)
                              + flw.get(f'{zone} heat hp', zero).clip(lower=0))
         r['h2_elec']   = twh(flw.get(f'{zone} electrolyser', zero).clip(lower=0))
+        # EV-laddning (AC → EV-buss via laddar-länk, p0 per fordonsklass)
+        r['ev_elec']   = twh(sum((flw.get(f'{zone} EV {c} charger', zero).clip(lower=0)
+                                  for c in ('car', 'heavy')), zero))
         # Kontinent-export (market-gen: p>0 import, p<0 export → netto export = −Σp)
         r['kont_export'] = -twh(zmkt(zone))
         # Intern export = netto NTC-flöde UT ur zonen (p0 = bus0→bus1)
@@ -113,9 +116,9 @@ tbl.index = [ROW_LABELS[r] for r in SHOW_ROWS]
 tbl.index.name = 'TWh/år (medel 23-25)'
 
 # Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
-#   produktion + batteri − last − H2 − värme-el − kont.export − intern export = 0
+#   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
 BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'load_twh': -1, 'h2_elec': -1,
-                 'heat_elec': -1, 'kont_export': -1, 'intern_export': -1}
+                 'heat_elec': -1, 'ev_elec': -1, 'kont_export': -1, 'intern_export': -1}
 bal_vals = [sum(sgn * data[col][row] for row, sgn in BALANCE_SIGNS.items()) for col in cols]
 bal_vals = [0.0 if abs(v) < 1e-6 else v for v in bal_vals]
 balance  = pd.DataFrame([bal_vals], index=['BALANS (bör ≈ 0)'], columns=cols)

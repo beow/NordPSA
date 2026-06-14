@@ -146,10 +146,16 @@ def load_inputs(cfg: dict) -> dict:
     heat_path = PROC_DIR / "heat_load.parquet"
     heat_load = pd.read_parquet(heat_path) if heat_path.exists() else None
 
+    # EV-laddningsprofiler (valfritt; byggs av build_ev_profiles i build_inputs.py)
+    ev_path     = PROC_DIR / "ev_profiles.parquet"
+    ev_profiles = pd.read_parquet(ev_path) if ev_path.exists() else None
+
     # Sätt UTC-index och ta bort timezone (PyPSA kräver tz-naivt)
     dfs = [load_df, vre, nuclear, thermal, prices_df]
     if heat_load is not None:
         dfs.append(heat_load)
+    if ev_profiles is not None:
+        dfs.append(ev_profiles)
     for df in dfs:
         df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
 
@@ -159,7 +165,7 @@ def load_inputs(cfg: dict) -> dict:
         load=load_df, vre_profiles=vre, vre_noms=vre_noms,
         nuclear_profile=nuclear, thermal_profile=thermal,
         hydro_params=hydro_params, market_prices=market_prices,
-        heat_load=heat_load,
+        heat_load=heat_load, ev_profiles=ev_profiles,
     )
 
 
@@ -192,6 +198,9 @@ def resample_inputs(inputs: dict, snapshots: pd.DatetimeIndex, resolution: int) 
     hl = inputs.get("heat_load")
     out["heat_load"] = (hl.resample(freq).mean().reindex(snapshots).ffill()
                         if hl is not None else None)
+    ev = inputs.get("ev_profiles")
+    out["ev_profiles"] = (ev.resample(freq).mean().reindex(snapshots).ffill()
+                          if ev is not None else None)
     return out
 
 
@@ -392,10 +401,15 @@ def main() -> None:
                              "elektrolysör EL MW_el, lager STORE MWh, valfri turbin TURB MW_el. "
                              "T.ex. 'SE-S:500:1000:50000:300'. Kostnader från costs.hydrogen. "
                              "Kan anges flera gånger.")
-    parser.add_argument("--add-h2-ext", action="append", default=[], metavar="ZON:DEMAND",
+    parser.add_argument("--add-h2-ext", action="append", default=[], metavar="ZON:DEMAND[:STORE_MAX_MWH]",
                         help="Investerbart vätgassystem (extendable elektrolys + lager, INGEN turbin): "
                              "baslast DEMAND MW_H2, modellen dimensionerar elektrolysör och lager mot "
-                             "costs.hydrogen. T.ex. 'SE-N:1000'. Kan anges flera gånger.")
+                             "costs.hydrogen. Valfritt lagertak STORE_MAX_MWH (e_nom_max). "
+                             "T.ex. 'SE-N:1000' eller 'DK:1000:1000000' (≤1 TWh). Kan anges flera gånger.")
+    parser.add_argument("--add-ev", action="append", default=[], metavar="ZON:N_CARS:N_HEAVY",
+                        help="Fordonsladdning (smart charging) i ZON: antal personbilar + tunga "
+                             "fordon, t.ex. 'SE-S:2000000:50000'. Per-fordon-tal + profiler från "
+                             "config.ev / ev_profiles.parquet. Kan anges flera gånger.")
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
@@ -413,6 +427,10 @@ def main() -> None:
                         help="Aktivera fjärrvärmesektorn (config heat): per-zon heat-buss "
                              "(FV-behov + ackumulator + el-panna + stor-VP + bio/KVV). Drar bort "
                              "dagens FV-el ur AC-lasten. Kräver data/processed/heat_load.parquet.")
+    parser.add_argument("--heat-store-ext", action="store_true",
+                        help="Gör värmeackumulatorn investerbar: modellen dimensionerar lagret "
+                             "fritt mot TES-kostnad (config heat.store_overnight_eur_per_kwh) i "
+                             "stället för fast store_hours×topplast. Kräver --add-heat.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -493,14 +511,25 @@ def main() -> None:
 
     for spec in args.add_h2_ext:
         parts = spec.split(":")
-        if len(parts) != 2:
-            print(f"Ogiltigt --add-h2-ext format: '{spec}' (förväntat ZON:DEMAND)")
+        if len(parts) not in (2, 3):
+            print(f"Ogiltigt --add-h2-ext format: '{spec}' (förväntat ZON:DEMAND[:STORE_MAX_MWH])")
             sys.exit(1)
+        store = {"e_nom_mwh": 0.0, "extendable": True}
+        if len(parts) == 3:                       # valfritt lagertak (e_nom_max)
+            store["e_nom_max_mwh"] = float(parts[2])
         hydrogen_overrides[parts[0].strip()] = {
             "demand_mw":    float(parts[1]),
             "electrolyser": {"p_nom_mw": 0.0, "extendable": True},
-            "store":        {"e_nom_mwh": 0.0, "extendable": True},
+            "store":        store,
         }
+
+    ev_overrides = {}
+    for spec in args.add_ev:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            print(f"Ogiltigt --add-ev format: '{spec}' (förväntat ZON:N_CARS:N_HEAVY)")
+            sys.exit(1)
+        ev_overrides[parts[0].strip()] = {"car": float(parts[1]), "heavy": float(parts[2])}
 
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
@@ -548,7 +577,14 @@ def main() -> None:
 
     if args.add_heat:
         cfg.setdefault("heat", {})["enabled"] = True
-        print("  → pris-elastisk kontinentgräns (trappa) aktiv")
+        if args.heat_store_ext:
+            cfg["heat"]["store_extendable"] = True
+        print(f"  → fjärrvärmesektor aktiv"
+              + (" (värmelager extendable mot TES-kostnad)" if args.heat_store_ext else ""))
+
+    if ev_overrides:
+        cfg.setdefault("ev", {})["enabled"] = True
+        print(f"  → fordonsladdning aktiv i {', '.join(ev_overrides)}")
 
     if args.effective_ntc:
         eff = cfg.get("market_connections_effective_mw", {})
@@ -582,7 +618,7 @@ def main() -> None:
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
     if not args.market_elasticity:      flags.append("no-market-elast")
-    if args.add_heat:                   flags.append("heat")
+    if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll:                       flags.append("voll")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
@@ -596,6 +632,7 @@ def main() -> None:
     for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
+    for spec in args.add_ev:            flags.append(f"ev-{spec.replace(':','_')}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
@@ -625,7 +662,8 @@ def main() -> None:
                       extra_nuclear=extra_nuclear,
                       extra_wind=extra_wind,
                       soc_initial_override=soc_pin_start or None,
-                      hydrogen_overrides=hydrogen_overrides or None)
+                      hydrogen_overrides=hydrogen_overrides or None,
+                      ev_overrides=ev_overrides or None)
 
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
     extra_callbacks = []

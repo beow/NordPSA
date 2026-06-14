@@ -117,7 +117,12 @@ heat:
   el_tax_eur_per_mwh: 35.0          # energiskatt på el (~0.39 SEK/kWh) på FV-el (panna+VP) → per MWh el
   elboiler_vom_eur_per_mwh: 0.5
   hp_vom_eur_per_mwh: 0.5
-  store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh)
+  store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh, fast läge)
+  store_extendable: false           # --heat-store-ext slår på (modellen dimensionerar lagret)
+  store_overnight_eur_per_kwh: 0.5  # TES grop-/tanklager (DEA ~0.3-3 €/kWh_th)
+  store_lifetime_years: 40
+  store_fom_fraction: 0.01
+  store_e_nom_max_mwh: 100000000    # ~obegränsat tak (100 TWh_th)
   slack_eur_per_mwh: 3000
   zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
     # chp: bakpress-KVV, c=eta_el/eta_heat≈0.45 (svensk KVV värmefokuserad). SE-S CHP-el ~8.6 TWh
@@ -138,6 +143,15 @@ heat:
     #   industri-KVV ~7.8 stannar must-run). c aggregerat lågt (DH-KVV + värme-bara-pannor). KALIBRERAS.
     FI:   {dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15,
            chp: {eta_el: 0.16, eta_heat: 0.76, fuel_vom: 22.0, share_of_thermal: 0.37}}
+
+# Fordonsladdning (EV smart charging). Antal fordon per zon anges via CLI --add-ev.
+# Per-fordon-tal = PLATSHÅLLARE (nordiska medel) att trimma. Bara smart laddning (ingen V2G).
+ev:
+  enabled: false
+  slack_eur_per_mwh: 3000           # omött mobilitet (sista utväg)
+  classes:
+    car:   {battery_kwh: 60,  annual_mwh: 2.5, charger_kw: 7,   charge_efficiency: 0.90}
+    heavy: {battery_kwh: 400, annual_mwh: 120, charger_kw: 150, charge_efficiency: 0.90}
 
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
