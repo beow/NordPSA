@@ -51,6 +51,10 @@ def marginal_source(ts_str, tol_price=0.6, tol_couple=0.6):
     links = []
     for l in n.links.index:
         b0, b1 = n.links.at[l, 'bus0'], n.links.at[l, 'bus1']
+        # bara transmissionslänkar mellan AC-zoner; hoppa över sektor-länkar
+        # (elektrolysör/värmepump/turbin → H2-/värmebussar som ej är i ZONES)
+        if b0 not in ZONES or b1 not in ZONES:
+            continue
         p0 = n.links_t.p0.at[ts, l]; cap = n.links.at[l, 'p_nom']
         sat = abs(abs(p0) - cap) < 1e-3
         dpr = mp[b1] - mp[b0]
