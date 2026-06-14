@@ -1,5 +1,5 @@
 """hydrocomp — hydrogolv-kompensation. Räknar WV-golvet per hydrozon, korrigerar
-zonpriserna (korrigerat = orginalpris − WV-golv) och tabellerar org/korrigerad
+zonpriserna (korrigerat = orginalpris − momentant WV) och tabellerar org/korrigerad
 prisstatistik plus hur stor andel av tiden vattenvärdesgolvet är marginellt (sätter
 priset) i varje zon.
 
@@ -9,8 +9,12 @@ klistras tillbaka. Skälet: faktiskt-jämförelsen är bara meningsfull för dis
 körningar vars period överlappar verkligheten; för expansion/kontrafaktiska system är
 den missvisande (project_offset_calibration run106).
 
-Förutsätter bootstrap.py (globala: prices, water_value, ZONES, LABEL).
-Producerar global `calw` = DataFrame med korrigerade zonpriser (alla zoner).
+Förutsätter bootstrap.py (globala: prices, water_value, ZONES, LABEL, LABEL2, ROOT, cfg).
+Producerar globala:
+  calw  = korrigerade zonpriser för LABEL  (DataFrame, alla zoner)
+  calw2 = korrigerade zonpriser för LABEL2 (DataFrame) om LABEL2 är satt, annars None
+Helpern wv_adjusted(label) räknar calw för VILKEN körning som helst direkt ur dess
+results-CSV:er → andra celler (t.ex. compareprice) kan kalla den för valfri körning.
 """
 import numpy as np
 
@@ -21,18 +25,40 @@ import numpy as np
 MARG_TOL = 0.2   # EUR/MWh — tight, runt budpriset WV+VOM
 VOM_HYDRO = cfg.get('costs', {}).get('hydro', {}).get('vom_eur_per_mwh', 0.0)
 
+
+def wv_adjusted(label):
+    """Korrigerat zonpris (org − momentant WV) för EN körning, läst direkt ur dess
+    results-CSV:er (prices.csv + water_value.csv). Oberoende av bootstrap → funkar för
+    vilken körning som helst, även LABEL2 som inte är inladdad. Hydrozoner korrigeras
+    per timme; zoner utan reservoar (t.ex. DK) lämnas orörda. Saknas water_value.csv
+    returneras råpriserna."""
+    base = ROOT / 'results' / label
+    pr = pd.read_csv(base / 'prices.csv', index_col=0, parse_dates=True)
+    wv_path = base / 'water_value.csv'
+    if not wv_path.exists():
+        return pr.copy()
+    wvv = pd.read_csv(wv_path, index_col=0, parse_dates=True)
+    out = pr.copy()
+    for z in ZONES:
+        c = f'{z} hydro'
+        if c in wvv.columns:
+            out[z] = pr[z] - wvv[c].reindex(pr.index).fillna(0.0)
+    return out
+
+
+# Korrigerade priser för LABEL (och LABEL2 om satt) — tillgängliga för andra celler.
+calw  = wv_adjusted(LABEL)
+calw2 = wv_adjusted(LABEL2) if LABEL2 else None
+
 if water_value is None:
     print("Ingen water_value.csv — kör med assign_all_duals för hydrogolv-kompensation.")
-    calw = prices.copy()
 else:
-    calw = prices.copy()
     rows = []
     for z in ZONES:
         col = f'{z} hydro'
         has_h = col in water_value.columns
         wv = (water_value[col].reindex(prices.index).fillna(0.0)
               if has_h else pd.Series(0.0, index=prices.index))
-        calw[z] = prices[z] - wv                              # korrigerat = org − momentant WV
         # Partitionering efter pris relativt reservoarens BUDPRIS = WV + VOM (momentant, per timme):
         #   pris < budpris − tol  ⇒ VRE-marg  (under golvet → sol/vind sätter, vattnet lagras)
         #   |pris − budpris| ≤ tol ⇒ golv-marg (reservoaren är marginell prissättare)
@@ -60,3 +86,6 @@ else:
     print(f"  (resten = pris > (WV+VOM) + {MARG_TOL}: kopplad uppåt över granne/kontinent)")
     print(f"  zoner utan reservoar (t.ex. DK) lämnas orörda (WV-golv = saknas)\n")
     print(wvtab.to_string(float_format=lambda v: f'{v:8.2f}', na_rep='   –'))
+
+if calw2 is not None:
+    print(f"\ncalw2 beräknad för LABEL2 = {LABEL2} (korrigerade priser, för pris-jämförelse).")
