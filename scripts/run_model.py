@@ -282,6 +282,45 @@ def save_results(n, label: str) -> None:
     save_results_dict(extract_results(n), label)
 
 
+def _git_commit() -> str:
+    """Aktuell git-commit (kort hash + ev. 'dirty'). Tom sträng om ej git."""
+    import subprocess
+    try:
+        h = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stderr=subprocess.DEVNULL).decode().strip()
+        dirty = subprocess.call(
+            ["git", "diff", "--quiet"],
+            cwd=str(Path(__file__).resolve().parents[1])) != 0
+        return h + (" (dirty)" if dirty else "")
+    except Exception:
+        return ""
+
+
+def write_run_meta(label: str, args, res: int, year, flag_str: str) -> None:
+    """Skriver results/<label>/run_meta.txt: syfte, konfig, full argv, git, tid.
+
+    Görs så fort mappen finns (före lösning) så att även avbrutna/misslyckade
+    körningar är självbeskrivande.
+    """
+    import datetime
+    out = RESULTS_DIR / label / "run_meta.txt"
+    desc = args.desc or "(ingen --desc angiven)"
+    lines = [
+        f"output:      {label}",
+        f"syfte:       {desc}",
+        f"tid:         {datetime.datetime.now().isoformat(timespec='seconds')}",
+        f"git:         {_git_commit() or '(ej git)'}",
+        f"upplösning:  {res}h",
+        f"år:          {year or '2023-2025'}",
+        f"flaggor:     {flag_str.strip().strip('[]') or '(inga)'}",
+        f"argv:        {' '.join(sys.argv)}",
+    ]
+    out.write_text("\n".join(lines) + "\n")
+    print(f"  → run_meta.txt")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -295,6 +334,10 @@ def main() -> None:
     parser.add_argument("--output", default=None,
                         help="Resultatmapp under results/ (t.ex. 'run_v2_spring_flood'). "
                              "Standard: automatiskt namn baserat på upplösning och år.")
+    parser.add_argument("--desc", default=None,
+                        help="Kort fritext om körningens SYFTE (t.ex. 'kandidat för "
+                             "dispatch-baseline med värme och vätgaslast'). Sparas i "
+                             "results/<output>/run_meta.txt.")
     parser.add_argument("--extra-load", type=float, default=0.0,
                         help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
     parser.add_argument("--no-expansion", action="store_true",
@@ -356,10 +399,16 @@ def main() -> None:
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
-    parser.add_argument("--market-elasticity", action="store_true",
-                        help="Pris-elastisk kontinentgräns (trappa): stora nordiska flöden "
-                             "flyttar gränspriset. S_export/S_import per gräns från "
-                             "config market_elasticity. Rekommenderas för expansionskörningar.")
+    # Pris-elastisk kontinentgräns är PÅ som default; --no-market-elast stänger av.
+    # --market-elasticity behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
+    parser.add_argument("--market-elasticity", action="store_true", default=True,
+                        dest="market_elasticity",
+                        help="(default PÅ) Pris-elastisk kontinentgräns (trappa): stora "
+                             "nordiska flöden flyttar gränspriset. S_export/S_import per "
+                             "gräns från config market_elasticity.")
+    parser.add_argument("--no-market-elast", action="store_false",
+                        dest="market_elasticity",
+                        help="Stäng av den pris-elastiska kontinentgränsen (fast gränspris).")
     parser.add_argument("--add-heat", action="store_true",
                         help="Aktivera fjärrvärmesektorn (config heat): per-zon heat-buss "
                              "(FV-behov + ackumulator + el-panna + stor-VP + bio/KVV). Drar bort "
@@ -532,7 +581,7 @@ def main() -> None:
     if args.no_expansion:               flags.append("no-expansion")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
-    if args.market_elasticity:          flags.append("market-elasticity")
+    if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll:                       flags.append("voll")
@@ -607,6 +656,7 @@ def main() -> None:
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
     (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
+    write_run_meta(label, args, res, args.year, flag_str)
 
     n.sanitize()
     ok = solve(n, cfg, log_path=log_path,

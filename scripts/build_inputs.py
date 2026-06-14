@@ -174,7 +174,11 @@ def build_vre_profiles() -> pd.DataFrame:
             return (scaled / p_nom).clip(0, 1), p_nom
 
         onshore_pu,  on_nom  = _normalise(onshore,  fleet_factor=0.70)  # wind_onshore_fleet_factor
-        offshore_pu, off_nom = _normalise(offshore, fleet_factor=0.80)  # wind_offshore_fleet_factor
+        # Offshore: fleet_factor=1.0 → p_nom = p99. Till havs blåser det så jämnt
+        # att p99 i princip ligger PÅ nameplate (DK: p99=2613 ≈ verkligt 2650),
+        # så ingen nedtryckning behövs (till skillnad från onshore). Ger sann
+        # flott-CF som profilmedel (DK 0.41).
+        offshore_pu, off_nom = _normalise(offshore, fleet_factor=1.0)   # wind_offshore_fleet_factor
         solar_pu,    sol_nom = _normalise_solar_by_year(solar, fleet_factor=0.85)
 
         result[f"{zone}_wind_onshore"]  = onshore_pu
@@ -191,6 +195,8 @@ def build_vre_profiles() -> pd.DataFrame:
             f"onshore={on_nom:.0f} MW  offshore={off_nom:.0f} MW  sol={sol_nom:.0f} MW"
         )
 
+    _apply_ninja_offshore(result)
+
     out = _trim(pd.DataFrame(result))
     out.index.name = "time"
     out.to_parquet(PROCESSED_DIR / "vre_profiles.parquet")
@@ -201,6 +207,74 @@ def build_vre_profiles() -> pd.DataFrame:
     print(f"  → vre_pnom.yaml")
 
     return out
+
+
+# Zoner som får syntetiska (ninja) offshore-profiler. DK behåller sin
+# faktiska profil och fungerar som empiriskt kalibreringsankare.
+OFFSHORE_NINJA_ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "FI"]
+
+# Faktor som omvandlar ninjas enskild-plats-CF (modern turbin) till realiserad
+# flott-CF för en framtida offshore-flotta. DK ger empiriskt realiserad/ninja
+# ≈ 0.737 (blandade årgångar); avrundat UPP till 0.80 som modern-uplift (~8%),
+# eftersom nybyggen får moderna 15 MW-turbiner som slår DK:s gamla flotta.
+OFFSHORE_NINJA_NET_FACTOR = 0.80
+
+
+def _load_ninja_offshore(zone: str) -> pd.Series | None:
+    """Laddar ninjas offshore-CF för alla år, UTC-index. None om filer saknas."""
+    frames = []
+    for year in YEARS:
+        path = RAW_DIR / f"offshore_ninja_{zone}_{year}.parquet"
+        if not path.exists():
+            return None
+        frames.append(pd.read_parquet(path))
+    s = pd.concat(frames)
+    s.index = pd.to_datetime(s.index, utc=True)
+    s = s[~s.index.duplicated(keep="first")].sort_index()
+    return s["cf"]
+
+
+def _apply_ninja_offshore(result: dict) -> None:
+    """Ersätter offshore-profilen i zoner utan faktisk produktion med
+    Renewables.ninja-profiler, kalibrerade mot DK:s faktiska CF.
+
+    Ger expanderbar havsbaserad vind i alla zoner. DK behåller sin faktiska
+    profil (sann flott-CF ~0.41 med fleet_factor=1.0). p_nom påverkas INTE —
+    ninja ger bara formen (p_max_pu); installerad effekt = befintligt
+    (p_nom_min, ofta 0) och utbyggnad styrs av p_nom_max i config/zones.yaml.
+
+    Nivå: ninjas enskild-plats-CF skalas med OFFSHORE_NINJA_NET_FACTOR (0.80)
+    till realiserad flott-CF. DK fungerar som diagnostiskt ankare (empiriskt
+    realiserad/ninja ≈ 0.737; vi kör 0.80 som modern-uplift).
+    """
+    corr = OFFSHORE_NINJA_NET_FACTOR
+
+    # Diagnostik: jämför vald faktor mot DK:s empiriska realiserad/ninja-ankare.
+    dk_ninja = _load_ninja_offshore("DK")
+    if dk_ninja is not None:
+        dk_actual = result["DK_wind_offshore"]
+        idx = dk_actual.index.intersection(dk_ninja.index)
+        dk_emp = float(dk_actual.loc[idx].mean() / dk_ninja.loc[idx].mean())
+        print(f"  ninja offshore-faktor={corr:.2f} (modern-uplift) — "
+              f"DK empiriskt {dk_emp:.3f} "
+              f"(flott-CF {dk_actual.loc[idx].mean():.3f} / "
+              f"ninja {dk_ninja.loc[idx].mean():.3f})")
+    else:
+        print(f"  ninja offshore-faktor={corr:.2f} (modern-uplift)")
+
+    applied = 0
+    for zone in OFFSHORE_NINJA_ZONES:
+        cf = _load_ninja_offshore(zone)
+        if cf is None:
+            print(f"  OBS: ninja-offshore saknas för {zone} — hoppar över")
+            continue
+        col = f"{zone}_wind_offshore"
+        cal = (cf * corr).clip(0, 1).reindex(result[col].index).fillna(0.0)
+        result[col] = cal
+        applied += 1
+        print(f"  {zone}: offshore-profil ← ninja (medel-CF {cal.mean():.3f})")
+    if applied == 0:
+        print("  OBS: inga ninja-offshore-filer (kör 'python scripts/fetch_ninja.py')")
 
 
 # ---------------------------------------------------------------------------
