@@ -19,6 +19,7 @@ import pypsa
 import yaml
 
 from nordpsa.hydro import inflow_timeseries, load_nve_inflow, load_nve_ror
+from nordpsa.nuclear_availability import availability_timeseries
 
 # Load shedding pris (EUR/MWh)
 MC_SLACK = 3000.0
@@ -64,6 +65,7 @@ def build_network(
     batteries:               list | None = None,
     extra_nuclear:           list | None = None,
     extra_wind:              list | None = None,
+    synthetic_nuclear:       dict | None = None,
     hydrogen_overrides:      dict | None = None,
     heat_load:               pd.DataFrame | None = None,
     ev_profiles:             pd.DataFrame | None = None,
@@ -123,7 +125,8 @@ def build_network(
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
                zone_prices=zone_prices)
-    _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years)
+    _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years,
+                 snapshots, synthetic_nuclear)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
@@ -714,13 +717,15 @@ def _add_ev(n: pypsa.Network, cfg: dict, ev_profiles, ev_overrides,
 
 
 def _add_nuclear(
-    n:               pypsa.Network,
-    cfg:             dict,
-    nuclear_profile: pd.DataFrame,
-    ccfg:            dict,
-    r:               float,
-    fom_fraction:    float,
-    n_years:         float,
+    n:                 pypsa.Network,
+    cfg:               dict,
+    nuclear_profile:   pd.DataFrame,
+    ccfg:              dict,
+    r:                 float,
+    fom_fraction:      float,
+    n_years:           float,
+    snapshots:         pd.DatetimeIndex | None = None,
+    synthetic_nuclear: dict | None = None,
 ) -> None:
     tcfg       = ccfg["nuclear"]
     mc         = tcfg["vom_eur_per_mwh"]
@@ -729,13 +734,36 @@ def _add_nuclear(
         tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
     ) * n_years
 
+    synth_reactors = (synthetic_nuclear or {}).get("reactors", {})
+    synth_params   = (synthetic_nuclear or {}).get("params", {})
+    synth_seed     = (synthetic_nuclear or {}).get("seed")
+
     for zone, zcfg in cfg["zones"].items():
         p_nom_existing = zcfg.get("nuclear_p_nom_mw", 0)
         if p_nom_existing == 0 and not extendable:
             continue
 
-        p_max = nuclear_profile[zone]
-        p_min = (p_max * NUCLEAR_MIN_FRACTION).clip(lower=0)
+        if zone in synth_reactors and p_nom_existing > 0:
+            n_large, n_small, frac = synth_reactors[zone]
+            # Fördela p_nom på stora + små reaktorer (små = frac × stor effekt):
+            #   c_L·n_large + frac·c_L·n_small = p_nom
+            c_large = p_nom_existing / (n_large + frac * n_small)
+            reactor_mw = [c_large] * n_large + [frac * c_large] * n_small
+            # Per-zon-seed: undvik identiska kurvor mellan zoner med samma params.
+            zone_seed = None if synth_seed is None else int(synth_seed) + sum(map(ord, zone))
+            p_max = availability_timeseries(
+                synth_params, snapshots, reactor_mw, seed=zone_seed,
+            )
+            print(f"  → syntetisk kärnkraft {zone}: {n_large} stora à {c_large:.0f} MW"
+                  + (f" + {n_small} små à {frac*c_large:.0f} MW" if n_small else "")
+                  + f", realiserad CF={p_max.mean():.3f}")
+            # Syntetisk kurva = TAK (tillgänglig effekt) med load-following nedåt;
+            # min_load_frac frikopplar från det globala must-run-låset.
+            min_frac = float(synth_params.get("min_load_frac", 0.0))
+            p_min = (p_max * min_frac).clip(lower=0)
+        else:
+            p_max = nuclear_profile[zone]
+            p_min = (p_max * NUCLEAR_MIN_FRACTION).clip(lower=0)
 
         p_nom_max = tcfg.get("p_nom_max_mw", np.inf)
         n.add(

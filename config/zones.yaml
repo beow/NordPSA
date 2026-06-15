@@ -44,6 +44,19 @@ zones:
     hydro_soc_initial: 0.65   # ~65% fyllnadsgrad 1 jan
     nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
 
+# Syntetisk kärnkrafts-tillgänglighet (--synthetic-nuclear ZON:N).
+# Delade parametrar för alla zoner; antal reaktorer anges per zon på CLI.
+# forcerad felrat lambda_fail härleds så att årlig medel-CF ≈ target_cf.
+nuclear_synth:
+  target_cf: 0.85
+  mttr_hours: 120                    # medel reparationstid forcerat avbrott (~5 dygn)
+  maintenance_window_doy: [105, 273] # revisionsfönster, ~15 apr – 30 sep
+  maintenance_days: [25, 45]         # uniform min/max revisionslängd (dygn)
+  revision_frequency: annual         # annual | biennial
+  min_load_frac: 1.0                 # p_min_pu = min_load_frac × p_max_pu
+                                     #   1.0 = must-run (tvingad mot kurvan), 0 = rent tak/load-following
+  seed: 42
+
 # Continental market connections: [name, zone, p_nom_mw, price_bzn]
 # name format: "<Nord zone> <counterpart>" — becomes the PyPSA generator name
 # price_bzn: Energy Charts bidding zone code used as marginal cost signal

@@ -392,6 +392,17 @@ def main() -> None:
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
+    parser.add_argument("--synthetic-nuclear", action="append", default=[],
+                        metavar="ZON:N[:N_SMÅ:FRAC]",
+                        help="Ersätt zonens kärnkrafts-tillgänglighet med en syntetisk "
+                             "stokastisk profil. 'SE-S:5' = 5 lika stora reaktorer; "
+                             "'SE-S:4:10:0.3' = 4 stora + 10 små (SMR) à 30%% av en stor. "
+                             "Zonens p_nom fördelas på reaktorerna. Forcerade avbrott + "
+                             "sommarrevision, kalibrerad mot target-CF (delade parametrar i "
+                             "config.nuclear_synth). Zoner som inte anges behåller "
+                             "faktisk-data-profilen. Kan anges flera gånger.")
+    parser.add_argument("--nuclear-seed", type=int, default=None, metavar="SEED",
+                        help="RNG-seed för --synthetic-nuclear (överstyr config.nuclear_synth.seed).")
     parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
                         help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
                              "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
@@ -484,6 +495,19 @@ def main() -> None:
             sys.exit(1)
         pmin = float(parts[2]) if len(parts) == 3 else 1.0
         extra_nuclear.append((parts[0].strip(), float(parts[1]), pmin))
+
+    # synth_reactors: zon → (n_stora, n_små, frac). 'ZON:N' = N stora, inga små.
+    synth_reactors = {}
+    for spec in args.synthetic_nuclear:
+        parts = spec.split(":")
+        if len(parts) == 2:
+            synth_reactors[parts[0].strip()] = (int(parts[1]), 0, 1.0)
+        elif len(parts) == 4:
+            synth_reactors[parts[0].strip()] = (int(parts[1]), int(parts[2]), float(parts[3]))
+        else:
+            print(f"Ogiltigt --synthetic-nuclear format: '{spec}' "
+                  f"(förväntat ZON:N eller ZON:N_STORA:N_SMÅ:FRAC)")
+            sys.exit(1)
 
     extra_wind = []
     for spec in args.add_wind:
@@ -654,6 +678,14 @@ def main() -> None:
     # Icke-cyklisk om SOC-ändpunkterna pinnas (--soc-pin); annars cyklisk
     cyclic_soc = not soc_pin_end
 
+    synthetic_nuclear = None
+    if synth_reactors:
+        synth_params = cfg.get("nuclear_synth", {})
+        seed = args.nuclear_seed if args.nuclear_seed is not None else synth_params.get("seed", 42)
+        synthetic_nuclear = {"reactors": synth_reactors, "params": synth_params, "seed": seed}
+        print(f"Syntetisk kärnkraft: {synth_reactors} (seed={seed}, "
+              f"target_cf={synth_params.get('target_cf', 0.85)})")
+
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
                       cyclic_soc=cyclic_soc,
@@ -661,6 +693,7 @@ def main() -> None:
                       batteries=batteries,
                       extra_nuclear=extra_nuclear,
                       extra_wind=extra_wind,
+                      synthetic_nuclear=synthetic_nuclear,
                       soc_initial_override=soc_pin_start or None,
                       hydrogen_overrides=hydrogen_overrides or None,
                       ev_overrides=ev_overrides or None)
