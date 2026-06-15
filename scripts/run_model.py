@@ -389,6 +389,10 @@ def main() -> None:
                         help="Höj landbaserad vinds kapacitetsfaktor med denna relativa "
                              "andel (0.1 = +10%%). Olinjär potens-transform per zon: lyfter "
                              "låga effektnivåer mest, märkeffekt (cf_max) oförändrad.")
+    parser.add_argument("--onshore-cap", action="append", default=[], metavar="ZON:MW",
+                        help="Sätt expansionstak (p_nom_max, MW) för landbaserad vind per zon, "
+                             "t.ex. 'SE-N:20000'. Override på default-taket (50 GW/zon). "
+                             "Kräver expansion (onshore extendable). Kan anges flera gånger.")
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
@@ -555,6 +559,14 @@ def main() -> None:
             sys.exit(1)
         ev_overrides[parts[0].strip()] = {"car": float(parts[1]), "heavy": float(parts[2])}
 
+    onshore_caps = {}
+    for spec in args.onshore_cap:
+        parts = spec.split(":")
+        if len(parts) != 2:
+            print(f"Ogiltigt --onshore-cap format: '{spec}' (förväntat ZON:MW)")
+            sys.exit(1)
+        onshore_caps[parts[0].strip()] = float(parts[1])
+
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
 
@@ -657,6 +669,7 @@ def main() -> None:
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     for spec in args.add_ev:            flags.append(f"ev-{spec.replace(':','_')}")
+    for spec in args.onshore_cap:       flags.append(f"onshorecap-{spec.replace(':','_')}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
@@ -723,6 +736,23 @@ def main() -> None:
                       f"= {budget_eur/1e9:.2f} mdr€ (vid {USD_TO_EUR} USD/EUR, likhet)")
             extra_callbacks.append(
                 oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
+
+    # Onshore-expansionstak per zon (override på default p_nom_max)
+    for zone, cap in onshore_caps.items():
+        name = f"{zone} wind_onshore"
+        if name not in n.generators.index:
+            print(f"  Varning: --onshore-cap zon {zone} saknas — hoppar över")
+            continue
+        existing = float(n.generators.at[name, "p_nom"])
+        if not bool(n.generators.at[name, "p_nom_extendable"]):
+            print(f"  Varning: {name} ej extendable (kör utan --no-expansion) — hoppar över cap")
+            continue
+        if cap < existing:
+            print(f"  Varning: onshore-cap {zone} {cap:.0f} < installerat {existing:.0f} — sätter till installerat")
+            cap = existing
+        n.generators.at[name, "p_nom_min"] = existing
+        n.generators.at[name, "p_nom_max"] = cap
+        print(f"  → onshore-cap {zone}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"
