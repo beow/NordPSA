@@ -7,7 +7,7 @@ zones:
     mbas: [SE1, SE2]
     hydro_p_nom_mw: 11500
     hydro_max_hours: 2522
-    hydro_soc_initial: 0.70   # ~70% fyllnadsgrad 1 jan (SE1+SE2)
+    hydro_soc_initial: 0.62   # ~62% fyllnadsgrad 1 jan (SE1+SE2, faktiskt 3-årssnitt ENTSO-E A72; var 0.70)
     nuclear_p_nom_mw: 0
 
   SE-S:
@@ -135,7 +135,7 @@ heat:
   store_overnight_eur_per_kwh: 0.5  # TES grop-/tanklager (DEA ~0.3-3 €/kWh_th)
   store_lifetime_years: 40
   store_fom_fraction: 0.01
-  store_e_nom_max_mwh: 100000000    # ~obegränsat tak (100 TWh_th)
+  store_e_nom_max_mwh: 20000        # 20 GWh_th tak per zon (var ~obegränsat; lagren blev orimligt stora)
   slack_eur_per_mwh: 3000
   zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
     # chp: bakpress-KVV, c=eta_el/eta_heat≈0.45 (svensk KVV värmefokuserad). SE-S CHP-el ~8.6 TWh
@@ -170,8 +170,8 @@ ev:
 # Capacity applies in both directions.
 links:
   - [NO-N, SE-N,  1600]
-  - [SE-N, SE-S,  7300]
-  - [SE-N, FI,    1200]   # pre-Aurora (historisk; Aurora live slutet 2025 höjde till ~2000)
+  - [SE-N, SE-S,  7600]   # q95 faktiska scheduled exchanges SE2↔SE3 2023-25 (var 7300; flödesbaserat lyfter taket)
+  - [SE-N, FI,    1550]   # pre-Aurora q95 faktiska SE1↔FI 2023-24 (var 1200; Aurora live slutet 2025 → 2000 nedan)
   - [NO-N, NO-S,  1300]
   - [NO-S, SE-S,  2120]
   - [NO-S, DK,    1681]
@@ -244,6 +244,38 @@ costs:
     vom_eur_per_mwh: 0.6        # reservoarkraft (lagringsvärde)
     vom_ror_eur_per_mwh: 0.5    # run-of-river (must-run, lägre än reservoar)
     extendable: false   # hydro capacity fixed; no new reservoirs
+
+  # Värmeförsörjning (--add-heat). extendable=true → modellen dimensionerar mot
+  # dessa kostnader i expansion; --no-expansion låser dem (som alla costs.*).
+  # overnight anges per MW OUTPUT; koden konverterar till komponentens p_nom-enhet:
+  #   heat_pump   (€/W_th) ×COP   → per MW_el (Link-p_nom)
+  #   heat_elboiler (€/W_th) ×η   → per MW_el (Link-p_nom)
+  #   heat_chp    (€/W_el) ×η_el  → per MW_fuel (Link-p_nom)
+  #   heat_bio    (€/W_th) =      per MW_th (Generator-p_nom, bara icke-CHP-zoner)
+  heat_pump:
+    overnight_eur_per_w: 0.85   # DEA stor central VP (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 10000         # MW_el per zon
+  heat_elboiler:
+    overnight_eur_per_w: 0.12   # elektrodpanna (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 10000         # MW_el per zon
+  heat_chp:
+    overnight_eur_per_w: 4.0    # biobränsle-CHP per MW_el (DEA/Gemini 3-6)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 40000         # MW_fuel per zon
+  heat_bio:
+    overnight_eur_per_w: 0.6    # heat-only biopanna (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 20000         # MW_th per zon
 
   # Li-ion (LFP) utility-scale. Tvådelad kostnad: effektdel (€/kW på p_nom,
   # växelriktare/BOP/nät) + energidel (€/kWh × max_hours, celler). Near-term,

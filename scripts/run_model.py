@@ -393,6 +393,10 @@ def main() -> None:
                         help="Sätt expansionstak (p_nom_max, MW) för landbaserad vind per zon, "
                              "t.ex. 'SE-N:20000'. Override på default-taket (50 GW/zon). "
                              "Kräver expansion (onshore extendable). Kan anges flera gånger.")
+    parser.add_argument("--solar-cap", type=float, default=None, metavar="MW",
+                        help="Sätt expansionstak (p_nom_max, MW) för sol i ALLA zoner, "
+                             "t.ex. '10000'. Override på default-taket (50 GW/zon). "
+                             "Kräver expansion (sol extendable).")
     parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
                         help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
                              "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
@@ -670,6 +674,7 @@ def main() -> None:
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     for spec in args.add_ev:            flags.append(f"ev-{spec.replace(':','_')}")
     for spec in args.onshore_cap:       flags.append(f"onshorecap-{spec.replace(':','_')}")
+    if args.solar_cap is not None:      flags.append(f"solarcap-{args.solar_cap:.0f}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
@@ -753,6 +758,20 @@ def main() -> None:
         n.generators.at[name, "p_nom_min"] = existing
         n.generators.at[name, "p_nom_max"] = cap
         print(f"  → onshore-cap {zone}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
+
+    # Sol-expansionstak i alla zoner (override på default p_nom_max)
+    if args.solar_cap is not None:
+        for zone in cfg["zones"]:
+            name = f"{zone} solar"
+            if name not in n.generators.index:
+                continue
+            existing = float(n.generators.at[name, "p_nom"])
+            if not bool(n.generators.at[name, "p_nom_extendable"]):
+                continue
+            cap = max(args.solar_cap, existing)
+            n.generators.at[name, "p_nom_min"] = existing
+            n.generators.at[name, "p_nom_max"] = cap
+            print(f"  → solar-cap {zone}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"

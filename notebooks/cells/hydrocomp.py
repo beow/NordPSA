@@ -26,7 +26,7 @@ import numpy as np
 # Sätt NO_WV_COMP=True i sådana scenarier → wv_adjusted/calw/calw2 returnerar RÅpriser
 # oförändrade, så alla downstream-celler (pricetable, compareprice, ...) jobbar på
 # råpris utan egna ändringar.
-NO_WV_COMP = False
+NO_WV_COMP = True
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Reservoarens BUDPRIS = vattenvärde + rörlig kostnad (VOM). När reservoaren är marginell blir
