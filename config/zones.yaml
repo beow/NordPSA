@@ -169,13 +169,13 @@ ev:
 # Interconnections: [zone_from, zone_to, capacity_mw]
 # Capacity applies in both directions.
 links:
-  - [NO-N, SE-N,  1600]
+  - [NO-N, SE-N,  1836]   # q95 faktiska scheduled exchanges NO4↔SE1 + NO4↔SE2 + NO3↔SE2 2023-25 (var 1600)
   - [SE-N, SE-S,  7600]   # q95 faktiska scheduled exchanges SE2↔SE3 2023-25 (var 7300; flödesbaserat lyfter taket)
   - [SE-N, FI,    1550]   # pre-Aurora q95 faktiska SE1↔FI 2023-24 (var 1200; Aurora live slutet 2025 → 2000 nedan)
-  - [NO-N, NO-S,  1300]
-  - [NO-S, SE-S,  2120]
+  - [NO-N, NO-S,  1773]   # q95 faktiska scheduled exchanges NO3↔NO1/NO5 2023-25 (var 1300; config var för låg)
+  - [NO-S, SE-S,  1674]   # q95 faktiska scheduled exchanges NO1↔SE3 2023-25 (var 2120; config var för hög)
   - [NO-S, DK,    1681]
-  - [SE-S, DK,    2015]
+  - [SE-S, DK,    2007]   # q95 faktiska scheduled exchanges SE4↔DK2 + SE3↔DK1 (Konti-Skan) 2023-25 (var 2015)
   - [SE-S, FI,    1200]
 
 # Tidsdimension via körtyp: dispatch (--no-expansion) modellerar historiska 2023-2025

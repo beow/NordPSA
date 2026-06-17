@@ -31,13 +31,13 @@ SLEEP_S  = 0.4   # vara snäll mot ENTSO-E API
 # Netto = flow(a→b) – flow(b→a); vi tar abs() och q95.
 # ---------------------------------------------------------------------------
 INTERNAL_BORDERS: dict[str, list[tuple[str, str]]] = {
-    "NO-N ↔ SE-N": [("NO_4", "SE_2"), ("NO_3", "SE_2")],
+    "NO-N ↔ SE-N": [("NO_4", "SE_1"), ("NO_4", "SE_2"), ("NO_3", "SE_2")],
     "SE-N ↔ SE-S": [("SE_2", "SE_3")],
     "SE-N ↔ FI":   [("SE_1", "FI")],
     "NO-N ↔ NO-S": [("NO_3", "NO_1"), ("NO_3", "NO_5")],
     "NO-S ↔ SE-S": [("NO_1", "SE_3")],
     "NO-S ↔ DK":   [("NO_2", "DK_1")],
-    "SE-S ↔ DK":   [("SE_4", "DK_2")],
+    "SE-S ↔ DK":   [("SE_4", "DK_2"), ("SE_3", "DK_1")],
     "SE-S ↔ FI":   [("SE_3", "FI")],
 }
 
