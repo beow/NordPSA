@@ -169,6 +169,115 @@ def load_inputs(cfg: dict) -> dict:
     )
 
 
+def apply_cost_scenario(cfg: dict, name: str) -> None:
+    """Skriver över cfg['costs'] med ett kostnadsscenario ur cost_scenarios.
+
+    Byggränta (IDC, ränta under byggtid): overnight' = OC·(1 + build_years/2·r).
+    fom_fraction sätts = fast_DoU/overnight' så att absolut O&M-nivå bevaras (ej
+    uppblåst av IDC, eftersom modellen beräknar annualiserat = overnight·(CRF+fom)).
+    """
+    scenarios = cfg.get("cost_scenarios", {})
+    scen = scenarios.get(name)
+    if scen is None:
+        raise SystemExit(f"Okänt --cost-scenario '{name}'. Finns: {list(scenarios)}")
+    r = cfg["costs"]["discount_rate"]
+    print(f"  → kostnadsscenario '{name}' (IDC med r={r}):")
+    for tech, p in scen.items():
+        if not isinstance(p, dict):
+            continue
+        tgt = cfg["costs"].setdefault(tech, {})
+        idc = 1.0 + p["build_years"] / 2 * r
+        tgt["lifetime_years"] = p["lifetime_years"]
+        if tech == "battery":
+            tgt["power_eur_per_kw"]   = p["power_eur_per_kw"]   * idc
+            tgt["energy_eur_per_kwh"] = p["energy_eur_per_kwh"] * idc
+            tgt["fom_fraction"]       = p.get("fom_fraction", 0.025)
+            print(f"     {tech:<14} IDC×{idc:.3f}  power {tgt['power_eur_per_kw']:.0f} €/kW + "
+                  f"energy {tgt['energy_eur_per_kwh']:.0f} €/kWh")
+        else:
+            oc_kw = p["oc_eur_per_kw"] * idc                       # OC' [EUR/kW]
+            tgt["overnight_eur_per_w"] = oc_kw / 1000.0            # EUR/W
+            tgt["fom_fraction"]        = p["fom_eur_per_kw"] / oc_kw
+            tgt["vom_eur_per_mwh"]     = p["vom_eur_per_mwh"]
+            print(f"     {tech:<14} IDC×{idc:.3f}  overnight {oc_kw/1000:.3f} €/W  "
+                  f"fom {tgt['fom_fraction']*100:.2f}%  vom {p['vom_eur_per_mwh']}  L{p['lifetime_years']}")
+
+
+def apply_demand_scenario(cfg: dict, name: str,
+                          hydrogen_overrides: dict, ev_overrides: dict,
+                          synth_reactors: dict, batteries: list) -> dict:
+    """Adderar ett efterfrågescenario (demand_scenarios i zones.yaml) ovanpå eSett-basen.
+
+    Muterar in-place: cfg['additional_load_mw'] (per zon), hydrogen_overrides,
+    ev_overrides och synth_reactors. Applicerar ntc_overrides på cfg['links'] och
+    (om nuclear_exogenous) låser kärnkraften (costs.nuclear.extendable=False) till
+    nivåerna i per-zon-nuclear-block. Returnerar {(zon, carrier): p_nom_max_mw} för
+    utbyggnadstak (VRE) som appliceras EFTER build_network.
+
+    Princip: additiv (eSett-bas bevaras), se zones.yaml-kommentar. CLI-givna H2/EV
+    (--add-h2/--add-ev) har företräde och skrivs INTE över.
+    """
+    scenarios = cfg.get("demand_scenarios", {})
+    scen = scenarios.get(name)
+    if scen is None:
+        raise SystemExit(f"Okänt --demand-scenario '{name}'. Finns: {list(scenarios)}")
+
+    print(f"  → efterfrågescenario '{name}' (additivt över eSett-bas):")
+    if scen.get("nuclear_exogenous"):
+        cfg["costs"]["nuclear"]["extendable"] = False
+        print("     kärnkraft EXOGEN (costs.nuclear.extendable=False — ingen endogen expansion)")
+    pnom_max: dict = {}
+    cfg.setdefault("additional_load_mw", {})
+    for zone, zc in scen.get("zones", {}).items():
+        extra = float(zc.get("extra_load_mw", 0.0))
+        cfg["additional_load_mw"][zone] = cfg["additional_load_mw"].get(zone, 0.0) + extra
+
+        h2 = zc.get("h2")
+        if h2 and zone not in hydrogen_overrides:           # CLI har företräde
+            hydrogen_overrides[zone] = {
+                "demand_mw":    float(h2["demand_mw"]),
+                "electrolyser": {"p_nom_mw": float(h2["electrolyser_mw"]), "extendable": False},
+                "store":        {"e_nom_mwh": float(h2["store_mwh"]),       "extendable": False},
+            }
+
+        cars = float(zc.get("ev_cars", 0.0))
+        if cars > 0 and zone not in ev_overrides:
+            ev_overrides[zone] = {"car": cars, "heavy": 0.0}
+
+        for carrier, pmax in (zc.get("pnom_max_mw") or {}).items():
+            pnom_max[(zone, carrier)] = float(pmax)
+
+        bat = zc.get("battery")
+        bat_txt = ""
+        if bat:                                              # exogent fast batteri (SvK storskaligt)
+            batteries.append((zone, float(bat["p_nom_mw"]), float(bat.get("hours", 2)), False))
+            bat_txt = f", batteri {bat['p_nom_mw']:.0f} MW/{bat.get('hours', 2)}h"
+
+        nuc = zc.get("nuclear")
+        nuc_txt = ""
+        if nuc:                                              # exogen kärnkraft i zonen
+            cfg["zones"][zone]["nuclear_p_nom_mw"] = float(nuc["p_nom_mw"])
+            s = nuc.get("synth")
+            if s:
+                synth_reactors[zone] = (int(s["n_large"]), int(s["n_small"]), float(s["frac"]))
+                nuc_txt = (f", kärnkr {nuc['p_nom_mw']:.0f} MW synth "
+                           f"({s['n_large']}+{s['n_small']} reaktorer)")
+            else:
+                nuc_txt = f", kärnkr {nuc['p_nom_mw']:.0f} MW"
+
+        h2dem = (h2 or {}).get("demand_mw", 0)
+        print(f"     {zone:<5} +{extra:6.0f} MW last, H2 {h2dem:.0f} MW, "
+              f"EV {cars/1e6:.1f}M bilar, tak {{{', '.join(f'{c}:{int(p)}' for (z,c),p in pnom_max.items() if z==zone)}}}"
+              f"{nuc_txt}{bat_txt}")
+
+    for z0, z1, mw in scen.get("ntc_overrides", []):
+        for link in cfg.get("links", []):
+            if link[0] == z0 and link[1] == z1 and link[2] != mw:
+                print(f"     NTC {z0}-{z1}: {link[2]} → {mw} MW (Tabell 10)")
+                link[2] = mw
+    return pnom_max
+
+
 def make_snapshots(cfg: dict, resolution: int, year: int | None) -> pd.DatetimeIndex:
     """Genererar snapshot-index utifrån konfiguration och CLI-parametrar."""
     start = pd.Timestamp(cfg["snapshots"]["start"], tz="UTC")
@@ -351,6 +460,15 @@ def main() -> None:
                         help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
+    parser.add_argument("--cost-scenario", default=None, metavar="NAMN",
+                        help="Skriv över cfg['costs'] med ett kostnadsscenario ur "
+                             "cost_scenarios i zones.yaml (t.ex. svk_2040, svk_2050). "
+                             "Inkl. byggränta (IDC). Avsett för expansionskörningar.")
+    parser.add_argument("--demand-scenario", default=None, metavar="NAMN",
+                        help="Addera ett efterfrågescenario ur demand_scenarios i "
+                             "zones.yaml (t.ex. svk_2040_mm): per-zon extra-last, H2, EV, "
+                             "utbyggnadstak (p_nom_max) och NTC-höjningar. Additivt över "
+                             "eSett-basen. Avsett för expansionskörningar.")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
     parser.add_argument("--voll", action="store_true",
@@ -605,6 +723,14 @@ def main() -> None:
                 print(f"  → expansion-NTC: {link[0]}-{link[1]} {link[2]} → {new} MW")
                 link[2] = new
 
+    if args.cost_scenario:
+        apply_cost_scenario(cfg, args.cost_scenario)
+
+    demand_pnom_max = {}
+    if args.demand_scenario:
+        demand_pnom_max = apply_demand_scenario(
+            cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, synth_reactors, batteries)
+
     if args.no_market:
         cfg["market_connections"] = []
 
@@ -654,6 +780,8 @@ def main() -> None:
 
     flags = []
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
+    if args.cost_scenario:              flags.append(f"cost-{args.cost_scenario}")
+    if args.demand_scenario:            flags.append(f"demand-{args.demand_scenario}")
     if args.no_expansion:               flags.append("no-expansion")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
@@ -772,6 +900,20 @@ def main() -> None:
             n.generators.at[name, "p_nom_min"] = existing
             n.generators.at[name, "p_nom_max"] = cap
             print(f"  → solar-cap {zone}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
+
+    # Utbyggnadstak per zon/teknik från --demand-scenario (Bilaga B-potentialer).
+    # cap=0 (t.ex. kärnkraft i NO/DK) låser tekniken till befintlig nivå.
+    for (zone, carrier), pmax in demand_pnom_max.items():
+        name = f"{zone} {carrier}"
+        if name not in n.generators.index:
+            continue
+        if not bool(n.generators.at[name, "p_nom_extendable"]):
+            continue
+        existing = float(n.generators.at[name, "p_nom"])
+        cap = max(pmax, existing)          # aldrig under redan installerat
+        n.generators.at[name, "p_nom_min"] = existing
+        n.generators.at[name, "p_nom_max"] = cap
+        print(f"  → potential {zone} {carrier}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"

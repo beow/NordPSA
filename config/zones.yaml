@@ -309,6 +309,99 @@ costs:
     slack_eur_per_mwh:    3000     # omött H2 / dyr import — sista utväg
     electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
 
+# Kostnadsscenarier för expansionskörningar (SvK Långsiktig marknadsanalys 2026,
+# 2024 års prisnivå). Väljs med --cost-scenario svk_2040 | svk_2050 → run_model
+# skriver över cfg['costs'] per teknik. Byggränta (IDC): overnight' = OC·(1 +
+# build_years/2·r); fom_fraction = fast_DoU/overnight' (bevarar absolut O&M).
+# Råvärden: oc_eur_per_kw (tab 30 OIC), fom_eur_per_kw (tab 31 fast DoU),
+# build_years (tab 29), lifetime_years (tab 29), vom_eur_per_mwh (SRMC, tab 9 +
+# antaganden η_kärn 0.33). I dessa scenarier representerar tekniken 'gas' (carrier
+# 'gas') CCGT-CCS i st.f. OCGT — vom = full SRMC (bränsle + rest-CO2 + CTS + O&M;
+# antaganden η_CCS 0.50, fångst 90%, ef_gas 0.20, CTS 20 €/t). Hydro/heat/H2
+# behåller sina DEA-värden ovan; dispatch-basblockets gas (OCGT) är orört.
+cost_scenarios:
+  svk_2040:
+    wind_onshore:  {oc_eur_per_kw: 1320, fom_eur_per_kw: 30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 2400, fom_eur_per_kw: 97.5, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  495, fom_eur_per_kw:  7.3, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 6250, fom_eur_per_kw: 95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}
+    gas:           {oc_eur_per_kw: 2300, fom_eur_per_kw: 52.5, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 72.0}   # CCGT-CCS
+    battery:       {power_eur_per_kw: 317, energy_eur_per_kwh: 217, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
+  svk_2050:
+    wind_onshore:  {oc_eur_per_kw: 1295, fom_eur_per_kw: 30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 2250, fom_eur_per_kw: 95.0, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  434, fom_eur_per_kw:  7.0, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 6000, fom_eur_per_kw: 95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}
+    gas:           {oc_eur_per_kw: 2180, fom_eur_per_kw: 45.0, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 73.0}   # CCGT-CCS
+    battery:       {power_eur_per_kw: 292, energy_eur_per_kwh: 169, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
+
+# Efterfrågescenarier för expansionskörningar (SvK LMA2026). Väljs med
+# --demand-scenario svk_2040_mm → run_model adderar SvK:s 2026→2040-tillskott
+# ovanpå dagens eSett-bas, fördelat på zoner och dekomponerat i:
+#   extra_load_mw  — inflexibel platålast (datacenter + ny industri + H&S/förluster-tillväxt)
+#   h2{...}        — vätgas: demand_mw (H2 LHV), electrolyser_mw (MW_el, fast), store_mwh (H2 LHV)
+#   ev_cars        — antal elfordon (smart charging; 2.5 MWh/bil, 60 kWh-batteri)
+#   pnom_max_mw    — utbyggnadspotential (Bilaga B, TWh→MW via modell-CF) som p_nom_max-tak
+# ntc_overrides    — NTC-höjningar till 2040 (Tabell 10), appliceras på cfg['links']
+# ⚠️ Princip: ADDITIV (eSett-bas bevaras) → modell-2040 ≈ 8–13 TWh/land UNDER SvK absolut
+#   (eSett-bas under SvK 2026; tillväxten är SvK-konsistent). Härlett i temp/svk2040mm_build.py.
+# ⚠️ ANTAGANDEN (flaggade): zon-split inom land, H2/EV-TWh (utom SE H2=24, firm p12),
+#   potential-zonandelar. Endast landstotaler + SE H2 är hårda SvK-tal.
+demand_scenarios:
+  svk_2040_mm:
+    ntc_overrides:
+      - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
+    # Kärnkraft EXOGEN (SvK MM bestämmer den exogent, ej endogen expansion). Sätter
+    # costs.nuclear.extendable=False → all kärnkraft låst till nivåerna nedan, dispatchad
+    # av tillgänglighetsprofil (synth där angivet). NO/DK/SE-N = 0 (befintlig).
+    nuclear_exogenous: true
+    # Batterier EXOGENT (storskaliga, stödtjänst-drivna). SvK:s egen modell bygger 0
+    # endogena batterier (Bilaga C: dagen-före-intäkter fångar ej stödtjänstvärdet) —
+    # samma i vår modell. Storskalig MM 2040 (GW): SE 5.5 / DK 3.8 / FI 2.7 / NO 0.
+    # ⚠️ Varaktighet 2h = ANTAGANDE (SvK anger bara effekt). Småskaliga sol-kopplade
+    # batterier (SE 2.0/DK 0.9/FI 1.1/NO 1.5 GW) UTELÄMNADE (kräver tak-PV-koppling).
+    zones:
+      SE-N:
+        extra_load_mw: 4110
+        h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
+        ev_cars: 1200000
+        pnom_max_mw: {wind_onshore: 27137, wind_offshore:  2470, solar:  5574}
+        battery: {p_nom_mw: 1000, hours: 2}
+      SE-S:
+        extra_load_mw: 3653
+        h2: {demand_mw:  452, electrolyser_mw:  850, store_mwh:  9900}
+        ev_cars: 4800000
+        pnom_max_mw: {wind_onshore: 18070, wind_offshore: 15763, solar: 20133}
+        battery: {p_nom_mw: 4500, hours: 2}
+        # SvK MM 2040 SE3 ≈ 8,5 GW: 6,9 GW befintlig (6 reaktorer) + 1,5 GW ny (3×500 MW).
+        # Hela flottan dispatchad av syntetiska tillgänglighetsmodellen (must-run, target_cf 0.85).
+        # synth: n_large=6 à 1150 MW, n_small=3 à frac×1150≈500 MW.
+        nuclear: {p_nom_mw: 8400, synth: {n_large: 6, n_small: 3, frac: 0.435}}
+      NO-N:
+        extra_load_mw: 1027
+        h2: {demand_mw:  226, electrolyser_mw:  494, store_mwh: 14045}
+        ev_cars: 1600000
+        pnom_max_mw: {wind_onshore:  7068, wind_offshore:  1452, solar:  6652}
+      NO-S:
+        extra_load_mw: 1941
+        h2: {demand_mw:  377, electrolyser_mw:  806, store_mwh: 22915}
+        ev_cars: 3200000
+        pnom_max_mw: {wind_onshore:  4985, wind_offshore:  4014, solar: 17261}
+      DK:
+        extra_load_mw: 2968
+        h2: {demand_mw:   75, electrolyser_mw:  200, store_mwh:  3960}
+        ev_cars: 3600000
+        pnom_max_mw: {wind_onshore:  8785, wind_offshore: 29843, solar: 32845}
+        battery: {p_nom_mw: 3800, hours: 2}
+      FI:
+        extra_load_mw: 4452
+        h2: {demand_mw:  678, electrolyser_mw: 1400, store_mwh:     0}
+        ev_cars: 1600000
+        pnom_max_mw: {wind_onshore: 36686, wind_offshore:  7356, solar: 33406}
+        battery: {p_nom_mw: 2700, hours: 2}
+        # FI kärnkraft = befintlig 4400 MW (Olkiluoto 1-3 + Loviisa 1-2), must-run historisk
+        # profil, ingen ny (SvK MM ny FI-kärnkraft ej medtagen — flaggat). Lägg ev. block här.
+
 # Vätgassystem per zon (opt-in). Utelämna = ingen H2. CLI-motsvarighet: --add-h2.
 # Exempel (avkommentera för att aktivera):
 # hydrogen:
