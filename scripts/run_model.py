@@ -811,6 +811,19 @@ def main() -> None:
     if args.onwind_capfac_increase:
         inputs["vre_profiles"] = boost_onshore_capfac(
             inputs["vre_profiles"], args.onwind_capfac_increase)
+
+    # Kontinentpris-skift (--demand-scenario ...continent_price_eur_mwh): multiplikativ
+    # omskalning av 2023-25-serien per bzn → SvK 2040-nivå (timform bevaras, nivå byts).
+    if args.demand_scenario:
+        cps = (cfg.get("demand_scenarios", {}).get(args.demand_scenario, {})
+               .get("continent_price_eur_mwh") or {})
+        for bzn, target in cps.items():
+            if bzn in inputs["market_prices"]:
+                m = inputs["market_prices"][bzn].mean()
+                if m > 0:
+                    inputs["market_prices"][bzn] = inputs["market_prices"][bzn] * (float(target) / m)
+                    print(f"  → kontinentpris {bzn}: snitt {m:.1f} → {float(target):.0f} €/MWh (×{float(target)/m:.2f})")
+
     snapshots = make_snapshots(cfg, res, args.year)
     inputs    = resample_inputs(inputs, snapshots, res)
 

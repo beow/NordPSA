@@ -355,6 +355,11 @@ demand_scenarios:
     # costs.nuclear.extendable=False → all kärnkraft låst till nivåerna nedan, dispatchad
     # av tillgänglighetsprofil (synth där angivet). NO/DK/SE-N = 0 (befintlig).
     nuclear_exogenous: true
+    # Kontinentpriser skiftade till SvK 2040 MM-nivå: multiplikativ omskalning av
+    # 2023-25-serien per bzn (behåller timform/väderkorrelation, byter nivå).
+    # DE-LU/LT/PL = SvK p79; NL/GB/EE = ANTAGANDEN (NL≈DE, GB lägre, EE≈Baltikum).
+    # ⚠️ Underplays 2040:s ökade volatilitet (metod 3 = äkta 2040-profil krävs för det).
+    continent_price_eur_mwh: {DE-LU: 79, LT: 87, PL: 83, NL: 78, GB: 75, EE: 84}
     # Batterier EXOGENT (storskaliga, stödtjänst-drivna). SvK:s egen modell bygger 0
     # endogena batterier (Bilaga C: dagen-före-intäkter fångar ej stödtjänstvärdet) —
     # samma i vår modell. Storskalig MM 2040 (GW): SE 5.5 / DK 3.8 / FI 2.7 / NO 0.
