@@ -234,9 +234,12 @@ def apply_demand_scenario(cfg: dict, name: str,
 
         h2 = zc.get("h2")
         if h2 and zone not in hydrogen_overrides:           # CLI har företräde
+            # Elektrolysör ENDOGEN: kapaciteten optimeras (SvK-GW = startvärde, ej golv).
+            # H2-last + lager förblir exogent fasta (SvK-plan). p_nom_max valfritt i config.
             hydrogen_overrides[zone] = {
                 "demand_mw":    float(h2["demand_mw"]),
-                "electrolyser": {"p_nom_mw": float(h2["electrolyser_mw"]), "extendable": False},
+                "electrolyser": {"p_nom_mw": float(h2["electrolyser_mw"]), "extendable": True,
+                                 "p_nom_max_mw": float(h2.get("electrolyser_max_mw", 50000.0))},
                 "store":        {"e_nom_mwh": float(h2["store_mwh"]),       "extendable": False},
             }
 

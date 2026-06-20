@@ -387,15 +387,20 @@ demand_scenarios:
         pnom_max_mw: {wind_onshore: 18070, wind_offshore: 15763, solar: 20133}
         battery: {p_nom_mw: 4500, hours: 2}
         # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny via --add-nuclear.
+      # NO-N/NO-S kalibrerade mot Statnett "Medium forbruksutvikling" 2040 (ej SvK-split):
+      # NO total 195 TWh = eSett-bas 138 + Δ56. Δ flat 28 (alm −5, kraftint +15, petrol +6,
+      # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel
+      # (⚠️ ANTAGANDE — geografisk sektor-split ej upplöst; petroleum/datac/grön industri
+      # har egen geografi). EV nät-uttag 18 TWh / 2.78 MWh/bil = 6.48M bilar. H2 10 TWh.
       NO-N:
-        extra_load_mw: 1027
-        h2: {demand_mw:  226, electrolyser_mw:  494, store_mwh: 14045}
-        ev_cars: 1600000
+        extra_load_mw: 1138
+        h2: {demand_mw:  406, electrolyser_mw:  494, store_mwh: 14045}
+        ev_cars: 2300000
         pnom_max_mw: {wind_onshore:  7068, wind_offshore:  1452, solar:  6652}
       NO-S:
-        extra_load_mw: 1941
-        h2: {demand_mw:  377, electrolyser_mw:  806, store_mwh: 22915}
-        ev_cars: 3200000
+        extra_load_mw: 2058
+        h2: {demand_mw:  735, electrolyser_mw:  806, store_mwh: 22915}
+        ev_cars: 4180000
         pnom_max_mw: {wind_onshore:  4985, wind_offshore:  4014, solar: 17261}
       DK:
         extra_load_mw: 2968
