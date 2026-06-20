@@ -4,8 +4,10 @@ country_balance, per land (TWh/år, medel över körningens år). Alla siffror i
 (TWh-flöden, GW-kapaciteter) extraheras ur körningens network.nc → auto-uppdateras per run.
 
 Användning:
-    python docs/nordpsa_overview.py [RUN_LABEL] [utfil.png]
-Default: RUN_LABEL=run142_svk2040mm_cont2040_3h, utfil=docs/nordpsa_overview.png
+    python docs/nordpsa_overview.py [RUN] [utfil.png]
+RUN kan vara hela katalognamnet (run143_svk2040mm_nucexp_3h) ELLER bara prefixet
+(run143 / run143_) — då matchas det entydigt mot results/.
+Default: RUN=run142_svk2040mm_cont2040_3h, utfil=docs/nordpsa_overview.png
 Körs cwd-oberoende (results/ + config/ hittas relativt repo-roten)."""
 import sys
 from pathlib import Path
@@ -18,7 +20,23 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, Rectangle, FancyArrowPatch, Circle
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN  = sys.argv[1] if len(sys.argv) > 1 else "run142_svk2040mm_cont2040_3h"
+
+
+def resolve_run(arg):
+    """Tar hela katalognamnet eller bara prefixet (run143) → entydig results/-katalog."""
+    results = ROOT / "results"
+    if (results / arg).is_dir():
+        return arg
+    hits = sorted(p.name for p in results.glob(f"{arg}*") if p.is_dir())
+    if not hits:
+        sys.exit(f"Ingen results/-katalog matchar '{arg}'. Finns: "
+                 + ", ".join(sorted(p.name for p in results.glob('run*') if p.is_dir())))
+    if len(hits) > 1:
+        sys.exit(f"'{arg}' är tvetydig — matchar: {', '.join(hits)}")
+    return hits[0]
+
+
+RUN  = resolve_run(sys.argv[1]) if len(sys.argv) > 1 else "run142_svk2040mm_cont2040_3h"
 OUT  = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).with_name("nordpsa_overview.png")
 
 ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
