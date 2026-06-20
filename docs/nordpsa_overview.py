@@ -140,12 +140,29 @@ def load_run(res_label):
             tot += twh(nl[ln]) if ln in nl.columns else float(nn.loads.at[ln, "p_set"]) * 8760 / 1e6
         return tot
     ror = sum(twh(disp.get(f"{z} hydro", zero).clip(lower=0)) for z in ZONES)
-    # Kärnkraft uppdelad: fast befintlig flotta (ej extendable) vs expansion (extendable).
-    nuc = G[G.carrier == "nuclear"]
-    nuc_fix = [g for g in nuc.index if not nuc.at[g, "p_nom_extendable"] and g in disp.columns]
-    nuc_exp = [g for g in nuc.index if nuc.at[g, "p_nom_extendable"] and g in disp.columns]
-    nuclear_fixed = sum(twh(disp[g].clip(lower=0)) for g in nuc_fix)
-    nuclear_exp   = sum(twh(disp[g].clip(lower=0)) for g in nuc_exp)
+
+    def split_fixed_exp(carrier):
+        """(fast_TWh, exp_TWh) för ett kraftslag: fast = befintlig flotta (ej-extendable
+        gen + p_nom_min-andelen av extendable), exp = utbyggnaden över p_nom_min.
+        Befintlig & nybyggd kapacitet delar CF-profil/curtailment → fördela produktionen
+        proportionellt mot p_nom_min / p_nom_opt per generator (separata kärnkr-gen → 0/1)."""
+        fixed = expn = 0.0
+        for g in G.index[G.carrier == carrier]:
+            if g not in disp.columns:
+                continue
+            e = twh(disp[g].clip(lower=0))
+            po = float(G.at[g, "p_nom_opt"])
+            if G.at[g, "p_nom_extendable"] and po > 1e-6:
+                fr = min(max(float(G.at[g, "p_nom_min"]) / po, 0.0), 1.0)
+                fixed += e * fr; expn += e * (1.0 - fr)
+            else:
+                fixed += e
+        return fixed, expn
+
+    nuclear_fixed, nuclear_exp = split_fixed_exp("nuclear")
+    onw_fixed,  onw_exp  = split_fixed_exp("wind_onshore")
+    offw_fixed, offw_exp = split_fixed_exp("wind_offshore")
+    sol_fixed,  sol_exp  = split_fixed_exp("solar")
     thermal_pure = sum(twh(disp.get(f"{z} thermal", zero).clip(lower=0)) for z in ZONES)
     heat_mustrun = sum(twh(disp.get(g, zero).clip(lower=0)) for g in G.index
                        if G.at[g, "carrier"] == "heat mustrun")
@@ -181,6 +198,8 @@ def load_run(res_label):
     caps = dict(
         nuclear=N["nuclear"], onw=N["wind_onshore"], offw=N["wind_offshore"], sol=N["solar"],
         nuclear_fixed=nuclear_fixed, nuclear_exp=nuclear_exp,
+        onw_fixed=onw_fixed, onw_exp=onw_exp, offw_fixed=offw_fixed, offw_exp=offw_exp,
+        sol_fixed=sol_fixed, sol_exp=sol_exp,
         gas=N["gas"], netexp=N["kont_export"], thermal_pure=thermal_pure, ror=ror,
         hydro_gen=N["hydro"], ellast=N["load_twh"],
         magasin_vol=float((hy.p_nom_opt * hy.max_hours).sum()) / 1e6,  # TWh
@@ -243,16 +262,22 @@ ax.text(SP + 1.6, 13.3, "×6", ha="center", fontsize=11, style="italic",
 
 # ---- GENERERING (ingen RoR-box: i run141 är all vattenkraft magasin) ----
 gx, gw, gh = 1.5, 14.5, 7.5
-# Kärnkraft: vid expansion delas TWh i fast (befintlig) + expansion (extendable).
-if K["nuclear_exp"] > 0.5:
-    nuc_val = f"{K['nuclear_fixed']:.0f} TWh (F)  +  {K['nuclear_exp']:.0f} TWh{tag('nuclear')}"
-else:
-    nuc_val = f"{K['nuclear']:.0f} TWh (F)"
+
+def split_val(key, total, fixed, expn):
+    """Etikett efter var produktionen kommer ifrån (ej bara komponentens expanderbarhet):
+       fast & exp → 'fast (F) + exp (E/ET)'; nästan allt exp → 'exp (E/ET)';
+       nästan allt befintligt (t.ex. ej-utbyggd DK-havsvind) → 'total (F)'."""
+    if expn > 0.5 and fixed > 0.5:
+        return f"{fixed:.0f} TWh (F)  +  {expn:.0f} TWh{tag(key)}"
+    if expn > 0.5:
+        return f"{expn:.0f} TWh{tag(key)}"
+    return f"{total:.0f} TWh (F)"
+
 gens = [
-    ("Kärnkraft (must-run)", C["nuc"], nuc_val),
-    ("Vind, land", C["onw"], f"{K['onw']:.0f} TWh{tag('onw')}"),
-    ("Vind, hav", C["offw"], f"{K['offw']:.0f} TWh{tag('offw')}"),
-    ("Sol-PV", C["sol"], f"{K['sol']:.0f} TWh{tag('sol')}"),
+    ("Kärnkraft (must-run)", C["nuc"], split_val("nuclear", K['nuclear'], K['nuclear_fixed'], K['nuclear_exp'])),
+    ("Vind, land", C["onw"], split_val("onw", K['onw'], K['onw_fixed'], K['onw_exp'])),
+    ("Vind, hav", C["offw"], split_val("offw", K['offw'], K['offw_fixed'], K['offw_exp'])),
+    ("Sol-PV", C["sol"], split_val("sol", K['sol'], K['sol_fixed'], K['sol_exp'])),
     ("Termisk must-run (industri)", C["therm"], f"{K['thermal_pure']:.0f} TWh{tag('thermal')}"),
     ("Gas CCGT-CCS (topp)", C["gas"], f"{K['gas']:.0f} TWh{tag('gas')}"),
     ("Marknad (kontinentventil)", C["mkt"], f"netto-exp {K['netexp']:.0f} TWh{tag('market')}"),
