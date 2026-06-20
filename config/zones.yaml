@@ -374,14 +374,16 @@ demand_scenarios:
     # ⚠️ Varaktighet 2h = ANTAGANDE (SvK anger bara effekt). Småskaliga sol-kopplade
     # batterier (SE 2.0/DK 0.9/FI 1.1/NO 1.5 GW) UTELÄMNADE (kräver tak-PV-koppling).
     zones:
+      # SE +8 TWh allmän förbrukning (basgap: eSett-bas 127,3 < SvK 2026 ~136) → SE 2040
+      # ≈ 243 TWh (= SvK MM SE). Split per eSett-andel SE-N 0,206 / SE-S 0,794 (⚠️ antagande).
       SE-N:
-        extra_load_mw: 4110
+        extra_load_mw: 4298   # 4110 + 188 (1,6 TWh basgap)
         h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
         ev_cars: 1200000
         pnom_max_mw: {wind_onshore: 27137, wind_offshore:  2470, solar:  5574}
         battery: {p_nom_mw: 1000, hours: 2}
       SE-S:
-        extra_load_mw: 3653
+        extra_load_mw: 4378   # 3653 + 725 (6,4 TWh basgap)
         h2: {demand_mw:  452, electrolyser_mw:  850, store_mwh:  9900}
         ev_cars: 4800000
         pnom_max_mw: {wind_onshore: 18070, wind_offshore: 15763, solar: 20133}
@@ -403,13 +405,17 @@ demand_scenarios:
         ev_cars: 4180000
         pnom_max_mw: {wind_onshore:  4985, wind_offshore:  4014, solar: 17261}
       DK:
-        extra_load_mw: 2968
+        # +913 MW (8 TWh) allmän förbrukning ovanpå tidigare 2968 → stänger basgapet:
+        # eSett-bas 36,5 < SvK 2026 ~45. DK total 2040 ≈ 81 TWh (= SvK MM DK).
+        extra_load_mw: 3881
         h2: {demand_mw:   75, electrolyser_mw:  200, store_mwh:  3960}
         ev_cars: 3600000
         pnom_max_mw: {wind_onshore:  8785, wind_offshore: 29843, solar: 32845}
         battery: {p_nom_mw: 3800, hours: 2}
       FI:
-        extra_load_mw: 4452
+        # +1370 MW (12 TWh) allmän förbrukning ovanpå tidigare 4452 → stänger basgapet:
+        # eSett-bas 80,4 < SvK 2026 ~93. FI total 2040 ≈ 145 TWh (= SvK MM FI).
+        extra_load_mw: 5822
         h2: {demand_mw:  678, electrolyser_mw: 1400, store_mwh:     0}
         ev_cars: 1600000
         pnom_max_mw: {wind_onshore: 36686, wind_offshore:  7356, solar: 33406}
