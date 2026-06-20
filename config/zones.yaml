@@ -44,18 +44,26 @@ zones:
     hydro_soc_initial: 0.65   # ~65% fyllnadsgrad 1 jan
     nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
 
-# Syntetisk kärnkrafts-tillgänglighet (--synthetic-nuclear ZON:N).
-# Delade parametrar för alla zoner; antal reaktorer anges per zon på CLI.
-# forcerad felrat lambda_fail härleds så att årlig medel-CF ≈ target_cf.
+# Syntetisk kärnkrafts-tillgänglighet. Delade Monte-Carlo-parametrar för alla zoner;
+# antal reaktorer + seed anges per zon (befintlig: nuclear_synth_existing nedan;
+# ny: --add-nuclear ZON:N:SEED). Forcerad felrat lambda_fail härleds så att årlig
+# medel-CF ≈ target_cf.
 nuclear_synth:
   target_cf: 0.85
   mttr_hours: 120                    # medel reparationstid forcerat avbrott (~5 dygn)
   maintenance_window_doy: [105, 273] # revisionsfönster, ~15 apr – 30 sep
   maintenance_days: [25, 45]         # uniform min/max revisionslängd (dygn)
   revision_frequency: annual         # annual | biennial
-  min_load_frac: 1.0                 # p_min_pu = min_load_frac × p_max_pu
-                                     #   1.0 = must-run (tvingad mot kurvan), 0 = rent tak/load-following
-  seed: 42
+  min_load_frac: 1.0                 # p_min_pu = min_load_frac × p_max_pu (1.0 = must-run)
+  mw_per_reactor: 1500               # --add-nuclear: tak p_nom_max = N × detta (MW/reaktor)
+
+# Befintlig kärnkraftsflotta → syntetisk profil i EXPANSIONSLÄGE (när --add-nuclear anges).
+# Kapaciteten tas från zones.nuclear_p_nom_mw; här anges bara antal reaktorer + seed per
+# zon för tillgänglighetskurvans form. Dispatchkörningar (utan --add-nuclear) använder
+# istället faktisk-data-profilen.
+nuclear_synth_existing:
+  SE-S: {n_reactors: 6, seed: 101}   # Forsmark 1-3, Ringhals 3-4, Oskarshamn 3 (≈6,9 GW)
+  FI:   {n_reactors: 5, seed: 103}   # Olkiluoto 1-3, Loviisa 1-2 (≈4,4 GW)
 
 # Continental market connections: [name, zone, p_nom_mw, price_bzn]
 # name format: "<Nord zone> <counterpart>" — becomes the PyPSA generator name
@@ -351,10 +359,10 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
-    # Kärnkraft EXOGEN (SvK MM bestämmer den exogent, ej endogen expansion). Sätter
-    # costs.nuclear.extendable=False → all kärnkraft låst till nivåerna nedan, dispatchad
-    # av tillgänglighetsprofil (synth där angivet). NO/DK/SE-N = 0 (befintlig).
-    nuclear_exogenous: true
+    # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
+    # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
+    # extendable). I expansionsläge går befintlig flotta över till syntetisk profil
+    # (nuclear_synth_existing). Ingen exogen låsning längre.
     # Kontinentpriser skiftade till SvK 2040 MM-nivå: multiplikativ omskalning av
     # 2023-25-serien per bzn (behåller timform/väderkorrelation, byter nivå).
     # DE-LU/LT/PL = SvK p79; NL/GB/EE = ANTAGANDEN (NL≈DE, GB lägre, EE≈Baltikum).
@@ -378,10 +386,7 @@ demand_scenarios:
         ev_cars: 4800000
         pnom_max_mw: {wind_onshore: 18070, wind_offshore: 15763, solar: 20133}
         battery: {p_nom_mw: 4500, hours: 2}
-        # SvK MM 2040 SE3 ≈ 8,5 GW: 6,9 GW befintlig (6 reaktorer) + 1,5 GW ny (3×500 MW).
-        # Hela flottan dispatchad av syntetiska tillgänglighetsmodellen (must-run, target_cf 0.85).
-        # synth: n_large=6 à 1150 MW, n_small=3 à frac×1150≈500 MW.
-        nuclear: {p_nom_mw: 8400, synth: {n_large: 6, n_small: 3, frac: 0.435}}
+        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny via --add-nuclear.
       NO-N:
         extra_load_mw: 1027
         h2: {demand_mw:  226, electrolyser_mw:  494, store_mwh: 14045}

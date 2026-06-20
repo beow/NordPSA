@@ -205,11 +205,11 @@ def apply_cost_scenario(cfg: dict, name: str) -> None:
 
 def apply_demand_scenario(cfg: dict, name: str,
                           hydrogen_overrides: dict, ev_overrides: dict,
-                          synth_reactors: dict, batteries: list) -> dict:
+                          batteries: list) -> dict:
     """Adderar ett efterfrågescenario (demand_scenarios i zones.yaml) ovanpå eSett-basen.
 
     Muterar in-place: cfg['additional_load_mw'] (per zon), hydrogen_overrides,
-    ev_overrides och synth_reactors. Applicerar ntc_overrides på cfg['links'] och
+    ev_overrides och batteries. Applicerar ntc_overrides på cfg['links'] och
     (om nuclear_exogenous) låser kärnkraften (costs.nuclear.extendable=False) till
     nivåerna i per-zon-nuclear-block. Returnerar {(zon, carrier): p_nom_max_mw} för
     utbyggnadstak (VRE) som appliceras EFTER build_network.
@@ -255,15 +255,9 @@ def apply_demand_scenario(cfg: dict, name: str,
 
         nuc = zc.get("nuclear")
         nuc_txt = ""
-        if nuc:                                              # exogen kärnkraft i zonen
+        if nuc:                                              # befintlig kärnkraftsnivå i zonen (override)
             cfg["zones"][zone]["nuclear_p_nom_mw"] = float(nuc["p_nom_mw"])
-            s = nuc.get("synth")
-            if s:
-                synth_reactors[zone] = (int(s["n_large"]), int(s["n_small"]), float(s["frac"]))
-                nuc_txt = (f", kärnkr {nuc['p_nom_mw']:.0f} MW synth "
-                           f"({s['n_large']}+{s['n_small']} reaktorer)")
-            else:
-                nuc_txt = f", kärnkr {nuc['p_nom_mw']:.0f} MW"
+            nuc_txt = f", kärnkr {nuc['p_nom_mw']:.0f} MW (befintlig)"
 
         h2dem = (h2 or {}).get("demand_mw", 0)
         print(f"     {zone:<5} +{extra:6.0f} MW last, H2 {h2dem:.0f} MW, "
@@ -515,20 +509,16 @@ def main() -> None:
                         help="Sätt expansionstak (p_nom_max, MW) för sol i ALLA zoner, "
                              "t.ex. '10000'. Override på default-taket (50 GW/zon). "
                              "Kräver expansion (sol extendable).")
-    parser.add_argument("--add-nuclear", action="append", default=[], metavar="ZON:MW[:PMIN]",
-                        help="Lägg till ny kärnkraft i en zon, t.ex. 'SE-S:2500' (must-run baslast) "
-                             "eller 'SE-S:2500:0' (dispatchbar). Kan anges flera gånger.")
-    parser.add_argument("--synthetic-nuclear", action="append", default=[],
-                        metavar="ZON:N[:N_SMÅ:FRAC]",
-                        help="Ersätt zonens kärnkrafts-tillgänglighet med en syntetisk "
-                             "stokastisk profil. 'SE-S:5' = 5 lika stora reaktorer; "
-                             "'SE-S:4:10:0.3' = 4 stora + 10 små (SMR) à 30%% av en stor. "
-                             "Zonens p_nom fördelas på reaktorerna. Forcerade avbrott + "
-                             "sommarrevision, kalibrerad mot target-CF (delade parametrar i "
-                             "config.nuclear_synth). Zoner som inte anges behåller "
-                             "faktisk-data-profilen. Kan anges flera gånger.")
-    parser.add_argument("--nuclear-seed", type=int, default=None, metavar="SEED",
-                        help="RNG-seed för --synthetic-nuclear (överstyr config.nuclear_synth.seed).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Bygg nätverket och skriv en komponent-sammanfattning "
+                             "(kärnkraft m.m.), men SOLVE:a inte. För verifiering före körning.")
+    parser.add_argument("--add-nuclear", nargs="+", action="extend", default=[], metavar="ZON:N:SEED",
+                        help="Lägg till N NYA kärnkraftsreaktorer i en zon med syntetisk "
+                             "stokastisk tillgänglighet (RNG-seed), t.ex. "
+                             "'SE-S:10:101'. EXTENDABLE — kapaciteten optimeras (implicit "
+                             "reaktorstorlek ≈ p_nom_opt/N), tak N×1500 MW. Befintlig flotta "
+                             "finns med by default och byter då till syntetisk profil "
+                             "(config.nuclear_synth_existing). Kan anges flera gånger.")
     parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
                         help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
                              "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
@@ -613,27 +603,17 @@ def main() -> None:
                 sys.exit(1)
             battery_fixed = [(toks[i].strip(), float(toks[i + 1])) for i in range(0, len(toks), 2)]
 
+    # --add-nuclear ZON:N:SEED → N nya reaktorer, syntetisk tillgänglighet (seed),
+    # EXTENDABLE (kapacitet optimeras). Befintlig flotta finns med by default; när
+    # --add-nuclear anges går befintlig flotta också över till syntetisk profil.
     extra_nuclear = []
     for spec in args.add_nuclear:
         parts = spec.split(":")
-        if len(parts) not in (2, 3):
-            print(f"Ogiltigt --add-nuclear format: '{spec}' (förväntat ZON:MW eller ZON:MW:PMIN)")
+        if len(parts) != 3:
+            print(f"Ogiltigt --add-nuclear format: '{spec}' (förväntat ZON:N:SEED — "
+                  f"N nya reaktorer + RNG-seed; syntetisk, extendable)")
             sys.exit(1)
-        pmin = float(parts[2]) if len(parts) == 3 else 1.0
-        extra_nuclear.append((parts[0].strip(), float(parts[1]), pmin))
-
-    # synth_reactors: zon → (n_stora, n_små, frac). 'ZON:N' = N stora, inga små.
-    synth_reactors = {}
-    for spec in args.synthetic_nuclear:
-        parts = spec.split(":")
-        if len(parts) == 2:
-            synth_reactors[parts[0].strip()] = (int(parts[1]), 0, 1.0)
-        elif len(parts) == 4:
-            synth_reactors[parts[0].strip()] = (int(parts[1]), int(parts[2]), float(parts[3]))
-        else:
-            print(f"Ogiltigt --synthetic-nuclear format: '{spec}' "
-                  f"(förväntat ZON:N eller ZON:N_STORA:N_SMÅ:FRAC)")
-            sys.exit(1)
+        extra_nuclear.append((parts[0].strip(), int(parts[1]), int(parts[2])))
 
     extra_wind = []
     for spec in args.add_wind:
@@ -729,7 +709,7 @@ def main() -> None:
     demand_pnom_max = {}
     if args.demand_scenario:
         demand_pnom_max = apply_demand_scenario(
-            cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, synth_reactors, batteries)
+            cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries)
 
     if args.no_market:
         cfg["market_connections"] = []
@@ -837,13 +817,19 @@ def main() -> None:
     # Icke-cyklisk om SOC-ändpunkterna pinnas (--soc-pin); annars cyklisk
     cyclic_soc = not soc_pin_end
 
-    synthetic_nuclear = None
-    if synth_reactors:
-        synth_params = cfg.get("nuclear_synth", {})
-        seed = args.nuclear_seed if args.nuclear_seed is not None else synth_params.get("seed", 42)
-        synthetic_nuclear = {"reactors": synth_reactors, "params": synth_params, "seed": seed}
-        print(f"Syntetisk kärnkraft: {synth_reactors} (seed={seed}, "
-              f"target_cf={synth_params.get('target_cf', 0.85)})")
+    # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw) + ev. ny via --add-nuclear.
+    # active=True (--add-nuclear angivet) → expansionsläge: befintlig flotta blir fast
+    # + syntetisk (nuclear_synth_existing), nya reaktorer expanderas (_add_extra_nuclear).
+    synthetic_nuclear = {
+        "existing": cfg.get("nuclear_synth_existing", {}),
+        "params":   cfg.get("nuclear_synth", {}),
+        "active":   bool(extra_nuclear),
+    }
+    if extra_nuclear:
+        ex = cfg.get("nuclear_synth_existing", {})
+        print(f"Kärnkraft EXPANSIONSLÄGE: befintlig flotta syntetisk {list(ex)}; "
+              f"nya reaktorer {[(z, n, s) for z, n, s in extra_nuclear]} "
+              f"(target_cf={synthetic_nuclear['params'].get('target_cf', 0.85)})")
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
@@ -927,6 +913,20 @@ def main() -> None:
         n.generators.at[name, "p_nom_min"] = existing
         n.generators.at[name, "p_nom_max"] = cap
         print(f"  → potential {zone} {carrier}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
+
+    if args.dry_run:
+        nuc = n.generators[n.generators.carrier == "nuclear"]
+        print("\n=== DRY-RUN: kärnkraftsgeneratorer ===")
+        for g, row in nuc.iterrows():
+            kind = "EXPANSION" if g.endswith("nuclear exp") else "befintlig"
+            print(f"  {g:18s} [{kind:9s}] p_nom={row.p_nom:7.0f}  "
+                  f"p_nom_max={row.p_nom_max:8.0f}  ext={bool(row.p_nom_extendable)!s:5s}  "
+                  f"CF(p_max)={float(n.generators_t.p_max_pu[g].mean()) if g in n.generators_t.p_max_pu else row.p_max_pu:.3f}  "
+                  f"must-run={float(n.generators_t.p_min_pu[g].mean()) if g in n.generators_t.p_min_pu else row.p_min_pu:.3f}")
+        print(f"  Σ befintlig p_nom = {nuc[~nuc.index.str.endswith('exp')].p_nom.sum():.0f} MW, "
+              f"Σ expansion-tak p_nom_max = {nuc[nuc.index.str.endswith('exp')].p_nom_max.sum():.0f} MW")
+        print("=== DRY-RUN klar (ingen solve) ===")
+        return
 
     # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
     log_path = RESULTS_DIR / label / "highs.log"

@@ -68,7 +68,11 @@ def country_balance(res_label):
                 s = hyd.get(f'{zone} hydro', zero).clip(lower=0) \
                     + (disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero)
             else:
-                s = disp.get(f'{zone} {c}', zero).clip(lower=0)   # slack ingår här
+                # Summera ALLA generatorer med carrier c i zonen (t.ex. 'nuclear' +
+                # 'nuclear exp', wind_onshore + wind_new) — ej bara exakt '{zon} {c}'.
+                ccols = [g for g in disp.columns if g in nn.generators.index
+                         and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == c]
+                s = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero   # slack ingår här
             r[c] = twh(s)
         # KVV-el (bakpress-länk: bränsle×η_el → AC) läggs på thermal-raden (matchar eSett).
         eta_el = float(((((cfg.get('heat') or {}).get('zones') or {}).get(zone, {}).get('chp')) or {}).get('eta_el', 0.0))
