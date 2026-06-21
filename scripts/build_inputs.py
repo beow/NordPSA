@@ -554,12 +554,33 @@ _EV_SHAPES = {
 }
 
 
+def _bridge_inflex(drive, thr: float = 0.4):
+    """Oflexibel "ladda-direkt"-form ur körprofilen (SvK snabb-/kortparkeringsladdning).
+
+    Behåller morgon- och kvällspucklarna men ersätter middagsdippen MELLAN dem med en
+    konstant linje (snabb/jobb-laddning gör dagprofilen jämnare än den momentana körningen),
+    och nollar natten (ingen oflexibel laddning utanför aktiv dag). Linjenivå = lägre puckeln
+    → den högre puckeln sticker upp över plateauen. v1-platshållare, trimma."""
+    a   = np.asarray(drive, dtype=float)
+    hrs = np.arange(len(a))
+    hm  = int(np.argmax(a[:12]))            # morgonpuckel (FM)
+    he  = 12 + int(np.argmax(a[12:]))       # kvällspuckel (EM)
+    lvl = min(a[hm], a[he])                 # konstant brygg-nivå
+    out = a.copy()
+    mid = (hrs > hm) & (hrs < he)           # middagsdippen mellan pucklarna
+    out[mid] = np.maximum(out[mid], lvl)
+    night = (a < thr) & ((hrs < hm) | (hrs > he))   # natt före/efter aktiv dag
+    out[night] = 0.0
+    return out
+
+
 def build_ev_profiles() -> pd.DataFrame:
     """Syntetiska EV-profiler per fordonsklass (zon-oberoende vecka×timme-mall).
 
     Kolumner per klass: {c}_drive (relativ körenergi), {c}_avail (inkopplings-
-    tillgänglighet 0–1), {c}_minsoc (körbarhets-golv 0–1). Skalas/appliceras per zon
-    i network._add_ev. v1: ingen säsongsvariation (vinterräckvidd) — TODO."""
+    tillgänglighet 0–1), {c}_minsoc (körbarhets-golv 0–1), {c}_inflex (oflexibel
+    ladda-direkt-form, _bridge_inflex). Skalas/appliceras per zon i network._add_ev.
+    v1: ingen säsongsvariation (vinterräckvidd) — TODO."""
     print("Bygger EV-profiler (syntetiska vecka×timme) ...")
     idx  = pd.date_range(PERIOD_START, PERIOD_END, freq="h")
     hour = idx.hour.to_numpy()
@@ -573,6 +594,8 @@ def build_ev_profiles() -> pd.DataFrame:
         result[f"{c}_drive"]  = _expand(s["drive_wd"], s["drive_we"])
         result[f"{c}_avail"]  = _expand(s["avail_wd"], s["avail_we"])
         result[f"{c}_minsoc"] = np.array(s["minsoc"])[hour]   # samma alla dagar (v1)
+        result[f"{c}_inflex"] = _expand(_bridge_inflex(s["drive_wd"]),
+                                        _bridge_inflex(s["drive_we"]))
 
     out = pd.DataFrame(result, index=idx)
     out.index.name = "time"

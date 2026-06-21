@@ -81,9 +81,12 @@ def country_balance(res_label):
         r['heat_elec'] = twh(flw.get(f'{zone} heat elboiler', zero).clip(lower=0)
                              + flw.get(f'{zone} heat hp', zero).clip(lower=0))
         r['h2_elec']   = twh(flw.get(f'{zone} electrolyser', zero).clip(lower=0))
-        # EV-laddning (AC → EV-buss via laddar-länk, p0 per fordonsklass)
+        # EV-laddning = flexibel (charger-länk p0) + oflexibel (fast AC-last, svk-läget).
+        # Oflex-lasten ligger på AC-bussen men EJ i ld (bara '{z} load') → måste in här.
+        ev_inflex = sum((nl[f'{zone} EV {c} inflex'].reindex(disp.index).fillna(0.0)
+                         for c in ('car', 'heavy') if f'{zone} EV {c} inflex' in nl.columns), zero)
         r['ev_elec']   = twh(sum((flw.get(f'{zone} EV {c} charger', zero).clip(lower=0)
-                                  for c in ('car', 'heavy')), zero))
+                                  for c in ('car', 'heavy')), zero) + ev_inflex)
         # Kontinent-export (market-gen: p>0 import, p<0 export → netto export = −Σp)
         r['kont_export'] = -twh(zmkt(zone))
         # Intern export = netto NTC-flöde UT ur zonen (p0 = bus0→bus1)

@@ -29,3 +29,6 @@ Thumbs.db
 # Env
 .env
 *.log
+
+# Genererade översiktsfigurer (per-run, regenereras ur results/)
+docs/nordpsa_overview*.png

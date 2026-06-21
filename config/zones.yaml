@@ -138,7 +138,8 @@ heat:
   el_tax_eur_per_mwh: 35.0          # energiskatt på el (~0.39 SEK/kWh) på FV-el (panna+VP) → per MWh el
   elboiler_vom_eur_per_mwh: 0.5
   hp_vom_eur_per_mwh: 0.5
-  store_hours: 6                    # ackumulator = store_hours × topplast (termiskt MWh, fast läge)
+  store_hours: 6                    # ackumulator = store_hours × topplast (fast läge, om zonen saknar store_gwh)
+                                    # per-zon store_gwh (i heat.zones) överstyr → explicit fast lagervolym i GWh_th
   store_extendable: false           # --heat-store-ext slår på (modellen dimensionerar lagret)
   store_overnight_eur_per_kwh: 0.5  # TES grop-/tanklager (DEA ~0.3-3 €/kWh_th)
   store_lifetime_years: 40
@@ -148,29 +149,35 @@ heat:
   zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
     # chp: bakpress-KVV, c=eta_el/eta_heat≈0.45 (svensk KVV värmefokuserad). SE-S CHP-el ~8.6 TWh
     # (korrigerar thermal-under-rep 5→~8 ≈ verklig SE-S-KVV); SE-N ~1 ≈ thermal. share_of_thermal 1.0.
-    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80,
+    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80, store_gwh:   5,
            chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}   # HP/panna ~6.7%/0.8%
-    SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600,
+    SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600, store_gwh:  20,
            chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}
     # DK: levererat ~30 TWh; el-panna-DOMINANT (4% panna / 1% VP), COP 4, must-run 0.25 (avfall 22%+sol 3%).
     #     chp: bakpress-KVV (multi-output Link bränsle→el+värme). Ersätter heat-only-bio + DK must-run-termisk
     #     (share_of_thermal 1.0 → all DK-termisk endogen via KVV; korrigerar under-rep. ~3 vs ~10 TWh).
     #     c=eta_el/eta_heat≈0.48 (DK ~10 TWh el / ~21 TWh värme). Första version — kalibreras.
-    DK:   {dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 4.0, mustrun_share: 0.25,
+    DK:   {dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 4.0, mustrun_share: 0.25, store_gwh: 20,
            chp: {eta_el: 0.26, eta_heat: 0.54, fuel_vom: 22.0, share_of_thermal: 1.0}}
     # FI (Finsk Energi "District heating 2024", first version): konsumtion 32.7 TWh; VP/återvinning 7.8 TWh (~22%,
     #   FI elektrifierar hårt); KVV-andel 37% (ner från 76%), DH-KVV-el 4.5 TWh. NYCKEL: FI-thermal (12.3 TWh i
     #   modellen) domineras av INDUSTRI-KVV (skogsbruk) → share_of_thermal 0.37 (bara DH-KVV endogen, ~4.5 TWh;
     #   industri-KVV ~7.8 stannar must-run). c aggregerat lågt (DH-KVV + värme-bara-pannor). KALIBRERAS.
-    FI:   {dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15,
+    FI:   {dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15, store_gwh: 100,
            chp: {eta_el: 0.16, eta_heat: 0.76, fuel_vom: 22.0, share_of_thermal: 0.37}}
 
 # Fordonsladdning (EV smart charging). Antal fordon per zon anges via CLI --add-ev.
 # Per-fordon-tal = PLATSHÅLLARE (nordiska medel) att trimma. Bara smart laddning (ingen V2G).
 ev:
   enabled: false
+  mode: svk                         # svk = SvK-formulering (flex/oflex-split); fleet = gammal per-fordon-modell
+  flex_fraction: 0.5                # andel av förbrukningen som är flyttbar (SvK: hälften laddar flexibelt)
+  flex_battery_gwh_per_twh: 12      # batterikapacitet per FLYTTBAR TWh (SvK: 12 GWh/TWh fleet-statistik)
+  charge_hours: 10                  # SvK: laddtid → flex-laddeffekt = flexbatteri / charge_hours
   slack_eur_per_mwh: 3000           # omött mobilitet (sista utväg)
   classes:
+    # annual_mwh används i båda lägen (E_tot = antal × annual_mwh). battery_kwh/charger_kw
+    # används BARA i fleet-läget; charge_efficiency ignoreras i svk-läget (SvK räknar grid-side).
     car:   {battery_kwh: 60,  annual_mwh: 2.5, charger_kw: 7,   charge_efficiency: 0.90}
     heavy: {battery_kwh: 400, annual_mwh: 120, charger_kw: 150, charge_efficiency: 0.90}
 
@@ -438,4 +445,6 @@ solver:
   threads: 16
   solver: ipm          # interior point method — skalbar för stora LP
   run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
-  ipm_optimality_tolerance: 1e-4   # lossad (1e-6→1e-5→1e-4) → färre iterationer (expansion: sista decimalen i p_nom är brus)
+  ipm_optimality_tolerance: 1e-6   # ÅTER till 1e-6: lös IPM (1e-4) gav crossover en slarvig startpunkt
+                                   # → "imprecise crossover" → dyr enkeltrådad simplex-städning (run145: ~3h).
+                                   # Snävare IPM = ren crossover utan simplex-fallback = snabbare totalt (testas nästa run).

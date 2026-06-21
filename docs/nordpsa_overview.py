@@ -7,7 +7,7 @@ Användning:
     python docs/nordpsa_overview.py [RUN] [utfil.png]
 RUN kan vara hela katalognamnet (run143_svk2040mm_nucexp_3h) ELLER bara prefixet
 (run143 / run143_) — då matchas det entydigt mot results/.
-Default: RUN=run142_svk2040mm_cont2040_3h, utfil=docs/nordpsa_overview.png
+Default: RUN=run142_svk2040mm_cont2040_3h, utfil=docs/nordpsa_overview_<runNNN>.png
 Körs cwd-oberoende (results/ + config/ hittas relativt repo-roten)."""
 import sys
 from pathlib import Path
@@ -37,7 +37,9 @@ def resolve_run(arg):
 
 
 RUN  = resolve_run(sys.argv[1]) if len(sys.argv) > 1 else "run142_svk2040mm_cont2040_3h"
-OUT  = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).with_name("nordpsa_overview.png")
+# Default-utfil får run-prefix-suffix (nordpsa_overview_run145.png) → skriver ej över andra runs.
+OUT  = Path(sys.argv[2]) if len(sys.argv) > 2 else \
+       Path(__file__).with_name(f"nordpsa_overview_{RUN.split('_')[0]}.png")
 
 ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
 cfg   = yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
@@ -105,8 +107,11 @@ def load_run(res_label):
         r["heat_elec"] = twh(flw.get(f"{zone} heat elboiler", zero).clip(lower=0)
                              + flw.get(f"{zone} heat hp", zero).clip(lower=0))
         r["h2_elec"]   = twh(flw.get(f"{zone} electrolyser", zero).clip(lower=0))
+        # EV-laddning = flexibel (charger-länk p0) + oflexibel (fast AC-last, svk-läget).
+        ev_inflex = sum((nl[f"{zone} EV {c} inflex"].reindex(zero.index).fillna(0.0)
+                         for c in ("car", "heavy") if f"{zone} EV {c} inflex" in nl.columns), zero)
         r["ev_elec"]   = twh(sum((flw.get(f"{zone} EV {c} charger", zero).clip(lower=0)
-                                  for c in ("car", "heavy")), zero))
+                                  for c in ("car", "heavy")), zero) + ev_inflex)
         r["kont_export"] = -twh(zmkt(zone))
         ie = zero.copy()
         for l, b0, b1 in ntc:
