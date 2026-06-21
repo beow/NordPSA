@@ -423,7 +423,7 @@ demand_scenarios:
         # +1370 MW (12 TWh) allmän förbrukning ovanpå tidigare 4452 → stänger basgapet:
         # eSett-bas 80,4 < SvK 2026 ~93. FI total 2040 ≈ 145 TWh (= SvK MM FI).
         extra_load_mw: 5822
-        h2: {demand_mw:  678, electrolyser_mw: 1400, store_mwh:     0}
+        h2: {demand_mw:  913, electrolyser_mw: 1400, store_mwh:     0}   # 8,0 TWh/år (höjt från 678=5,9)
         ev_cars: 1600000
         pnom_max_mw: {wind_onshore: 36686, wind_offshore:  7356, solar: 33406}
         battery: {p_nom_mw: 2700, hours: 2}
