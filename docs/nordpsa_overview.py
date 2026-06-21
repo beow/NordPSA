@@ -177,6 +177,12 @@ def load_run(res_label):
     ev_cols = [c for c in (emp.columns if emp is not None else []) if "EV" in c]
     ev_floor = (float(emp[ev_cols].min().min()), float(emp[ev_cols].max().max())) if ev_cols else (0.0, 0.0)
 
+    # Årlig energi genom omvandlingslänkarna (TWh/år, länk-p0 = AC-sidans uttag/insättning)
+    lke = lambda suf: twh(sum((flw[c].clip(lower=0) for c in flw.columns if c.endswith(suf)), zero))
+    e_chp_el = sum(twh(flw[c].clip(lower=0))     # KVV-EL = bränsleflöde × eta_el
+                   * float(((((cfg.get("heat") or {}).get("zones") or {}).get(c.rsplit(" ", 1)[0], {}).get("chp")) or {}).get("eta_el", 0.0))
+                   for c in flw.columns if c.endswith("chp"))
+
     # ── F/E/ET-klassning: F=fast (ej extendable), E=expanderbar m. luft,
     #    ET=expanderbar & potentialtaket binder i ≥1 zon (opt≈p_nom_max/e_nom_max).
     def _cls(df, ocol, ccol, ecol):
@@ -219,6 +225,9 @@ def load_run(res_label):
         heat_mustrun=heat_mustrun, h2_store=store_gwh(" H2"),
         heat_store=store_gwh(" heat"), ev_store=store_gwh(" EV car"),
         ev_floor_lo=ev_floor[0], ev_floor_hi=ev_floor[1], tags=tags,
+        e_electrolyser=lke("electrolyser"), e_turbine=lke("h2 turbine") + lke("turbine"),
+        e_hp=lke("heat hp"), e_elboiler=lke("heat elboiler"), e_chp_el=e_chp_el,
+        e_ev=lke("EV car charger") + lke("EV heavy charger"),
     )
     return cyr, caps
 
@@ -310,20 +319,26 @@ box(44.0, 86.5, 16.0, 8.0, "El-last", C["load"],
 arrow(SPR, 90.5, 44.0, 90.5, C["load"])
 
 # ---- OMVANDLING (mellan elbuss & sektorbussar → GW-kapacitet) ----
-cx, cw, ch = 52.0, 13.0, 6.6
-conv = [("Elektrolysör", C["h2"], 79.0, "to_h2", f"{K['gw_electrolyser']:.1f} GW{tag('electrolyser')}")]
+cx, cw, ch = 52.0, 13.0, 7.4
+conv = [("Elektrolysör", C["h2"], 79.0, "to_h2",
+         f"{K['gw_electrolyser']:.1f} GW{tag('electrolyser')}\n{K['e_electrolyser']:.0f} TWh")]
 if K["gw_turbine"] > 0.05:
-    conv.append(("H2-turbin", C["h2"], 70.0, "from_h2", f"{K['gw_turbine']:.1f} GW"))
+    conv.append(("H2-turbin", C["h2"], 70.0, "from_h2",
+                 f"{K['gw_turbine']:.1f} GW\n{K['e_turbine']:.0f} TWh"))
 conv += [
-    ("Värmepump", C["heat"], 53.0, "to_heat", f"{K['gw_hp']:.1f} GW{tag('hp')}"),
-    ("El-panna", C["boil"], 44.5, "to_heat", f"{K['gw_elboiler']:.1f} GW{tag('elboiler')}"),
-    ("KVV bakpress (el+värme)", C["therm"], 35.5, "chp", f"{K['gw_chp_el']:.1f} GW el{tag('chp')}"),
-    ("EV-laddare", C["ev"], 23.0, "to_ev", f"{K['gw_ev']:.0f} GW{tag('ev')}"),
+    ("Värmepump", C["heat"], 53.0, "to_heat",
+     f"{K['gw_hp']:.1f} GW{tag('hp')}\n{K['e_hp']:.0f} TWh"),
+    ("El-panna", C["boil"], 44.5, "to_heat",
+     f"{K['gw_elboiler']:.1f} GW{tag('elboiler')}\n{K['e_elboiler']:.0f} TWh"),
+    ("KVV bakpress (el+värme)", C["therm"], 35.5, "chp",
+     f"{K['gw_chp_el']:.1f} GW el{tag('chp')}\n{K['e_chp_el']:.0f} TWh el"),
+    ("EV-laddare", C["ev"], 23.0, "to_ev",
+     f"{K['gw_ev']:.0f} GW{tag('ev')}\n{K['e_ev']:.0f} TWh"),
 ]
 conv_y = {}
 for lab, col, yc, kind, val in conv:
     conv_y[lab] = yc
-    box(cx, yc - ch/2, cw, ch, lab, col, val, fs=8.4)
+    box(cx, yc - ch/2, cw, ch, lab, col, val, fs=7.4)
     if kind == "from_h2":
         arrow(cx, yc, SPR, yc, col)
     elif kind == "chp":
@@ -351,8 +366,7 @@ box(sx, 80.0, sw, sh, "H2-lager", C["h2"], f"{K['h2_store']:.0f} GWh{tag('h2_sto
 arrow(BBR, 83.1, sx, 83.1, C["h2"], bidir=True)
 box(sx, 68.0, sw, sh, "H2-last (P2X)", C["h2"], f"{K['h2_demand']:.0f} TWh{tag('load')}", fs=9.0)
 arrow(BBR, 71.1, sx, 71.1, C["h2"])
-_hh = float((cfg.get("heat") or {}).get("store_hours", 6))
-box(sx, 50.0, sw, sh, "Värmelager", C["heat"], f"{K['heat_store']:.0f} GWh{tag('heat_store')} ({_hh:.0f}h·topp)", fs=7.4)
+box(sx, 50.0, sw, sh, "Värmelager", C["heat"], f"{K['heat_store']:.0f} GWh{tag('heat_store')}", fs=7.4)
 arrow(BBR, 53.1, sx, 53.1, C["heat"], bidir=True)
 box(sx, 40.0, sw, sh, "Värme must-run", C["bio"], f"bio/avfall · {K['heat_mustrun']:.0f} TWh{tag('heat_mustrun')}", fs=8.2)
 arrow(sx, 43.1, BBR, 43.1, C["bio"])
