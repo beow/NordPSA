@@ -466,6 +466,12 @@ def main() -> None:
                              "zones.yaml (t.ex. svk_2040_mm): per-zon extra-last, H2, EV, "
                              "utbyggnadstak (p_nom_max) och NTC-höjningar. Additivt över "
                              "eSett-basen. Avsett för expansionskörningar.")
+    parser.add_argument("--continent-diurnal-scale", type=float, default=1.0, metavar="FAKTOR",
+                        help="Komprimera kontinent-ventilprisets DYGNSSVÄNG (hour-of-day-komponent) "
+                             "med FAKTOR (1.0=oförändrat, 0.5=halverad). Behåller nivå + dag-till-dag-"
+                             "väder-volatilitet. Modellerar att 2040-kontinentlagring arbitrerar bort "
+                             "den sol-formade dygnsspreaden Nordens hydro annars utnyttjar. Bara "
+                             "ventil-bzn (DE-LU/EE/LT/PL/NL/GB), ej zon-priser. Se project_solar_overbuild_continent_spread.")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
     parser.add_argument("--voll", action="store_true",
@@ -806,6 +812,22 @@ def main() -> None:
                 if m > 0:
                     inputs["market_prices"][bzn] = inputs["market_prices"][bzn] * (float(target) / m)
                     print(f"  → kontinentpris {bzn}: snitt {m:.1f} → {float(target):.0f} €/MWh (×{float(target)/m:.2f})")
+
+    # Dygnssväng-komprimering (--continent-diurnal-scale): 2040-kontinentlagring plattar den
+    # deterministiska sol-formade dygnsspreaden. Dela varje ventil-bzn i nivå + hour-of-day-
+    # komponent + residual (väder); skala BARA hour-of-day-komponenten. Nivå + residual bevaras.
+    dsc = float(args.continent_diurnal_scale)
+    if dsc != 1.0:
+        valve_bzn = {mc[3] for mc in cfg.get("market_connections", [])}   # ej zon-priser (hydro)
+        for bzn in valve_bzn:
+            s = inputs["market_prices"].get(bzn)
+            if s is None:
+                continue
+            om   = s.mean()
+            hodm = s.groupby(s.index.hour).transform("mean")   # hour-of-day-medel alignat
+            sw0  = float(hodm.max() - hodm.min())
+            inputs["market_prices"][bzn] = om + dsc * (hodm - om) + (s - hodm)
+            print(f"  → kontinent dygnssväng {bzn}: {sw0:.0f} → {sw0*dsc:.0f} €/MWh (×{dsc}), nivå {om:.1f} bevarad")
 
     snapshots = make_snapshots(cfg, res, args.year)
     inputs    = resample_inputs(inputs, snapshots, res)
