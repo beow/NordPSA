@@ -137,6 +137,7 @@ def build_network(
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
     _add_heat(n, cfg, heat_demand, r, n_years)
     _add_chp(n, cfg, heat_demand, r, n_years)
+    _add_chp_fixed(n, cfg, thermal_profile)
     _add_ev(n, cfg, ev_profiles, ev_overrides, snapshots, dt_h, n_years)
 
     return n
@@ -538,6 +539,10 @@ def _heat_demand_profiles(cfg, heat_load, snapshots, dt_h, n_years) -> dict:
     hcfg = cfg.get("heat") or {}
     if not hcfg.get("enabled") or heat_load is None:
         return {}
+    # KVV-fast-läge (--chp-fixed-gw): ingen värmebuss/lager/VP/panna byggs och dagens
+    # FV-el dras INTE ur AC-lasten. KVV-elen återinförs av _add_chp_fixed i stället.
+    if hcfg.get("chp_fixed_gw"):
+        return {}
     out = {}
     for zone, zc in (hcfg.get("zones") or {}).items():
         if zone not in heat_load.columns:
@@ -709,6 +714,58 @@ def _add_chp(n: pypsa.Network, cfg: dict, heat_demand: dict,
         print(f"  → CHP {zone}: bakpress η_el={eta_el} η_heat={eta_heat} (c={eta_el/eta_heat:.2f}), "
               f"fuel MC {fuel_vom}, p_nom {'ext≤'+str(int(cc.get('p_nom_max_mw',0)))+' MW_fuel' if chp_ext else f'{p_nom_fuel:.0f} MW_fuel'} "
               f"(→ ≤{p_nom_fuel*eta_el:.0f} MW_el / ≤{p_nom_fuel*eta_heat:.0f} MW_th vid fast)")
+
+
+def _add_chp_fixed(n: pypsa.Network, cfg: dict, thermal_profile: pd.DataFrame) -> None:
+    """Fast exogen KVV-EL utan värmebuss (--chp-fixed-gw). Snabbalternativ till hela
+    värmesektorn (_add_heat/_add_chp): ingen heat-buss, lager, VP eller el-panna byggs.
+
+    _add_thermal har redan reducerat must-run-termiken med share_of_thermal för KVV-
+    zonerna (heat.enabled=True). Den borttagna termik-FORMEN (säsongsvintertung) återförs
+    här som MUST-RUN KVV-generator på AC-bussen, omskalad så att totala toppen över alla
+    KVV-zoner = chp_fixed_gw. Per-zon-vikt = borttagen termik (share_of_thermal × termik-
+    topp) → FI:s låga share ger litet FI-bidrag (industri-KVV stannar i must-run-termiken).
+
+    KVV är värmestyrd (går vintern oavsett elpris) → must-run, ej dispatchbar. Utan
+    värmebussens skuggpris skulle en ren el-MC (fuel_vom/η_el ≈ 88 €/MWh) annars knappt köra.
+    """
+    hcfg = cfg.get("heat") or {}
+    gw = hcfg.get("chp_fixed_gw")
+    if not gw:
+        return
+    target_mw = float(gw) * 1e3
+    zcfg = hcfg.get("zones") or {}
+    # Borttagen termik-form per KVV-zon (share_of_thermal × termik-profil)
+    removed = {}
+    for zone, zc in zcfg.items():
+        chp = (zc or {}).get("chp")
+        if not chp or zone not in n.buses.index or zone not in thermal_profile.columns:
+            continue
+        share = float(chp.get("share_of_thermal", 1.0))
+        prof = thermal_profile[zone].clip(lower=0) * share
+        if float(prof.max()) > 0:
+            removed[zone] = (prof, chp)
+    tot_peak = sum(float(p.max()) for p, _ in removed.values())
+    if tot_peak <= 0:
+        print(f"  → CHP-fast: ingen reducerad termik att återföra (chp_fixed_gw={gw}) — hoppar över")
+        return
+    scale = target_mw / tot_peak     # omskala totala toppen → chp_fixed_gw
+    if "heat chp" not in n.carriers.index:
+        n.add("Carrier", "heat chp")
+    dt_h = (n.snapshots[1] - n.snapshots[0]).total_seconds() / 3600 if len(n.snapshots) > 1 else 1.0
+    e_tot = 0.0
+    for zone, (prof, chp) in removed.items():
+        p = prof * scale
+        p_nom = float(p.max())
+        pu = (p / p_nom).clip(0, 1)
+        n.add("Generator", f"{zone} chp", bus=zone, carrier="heat chp",
+              p_nom=p_nom, p_nom_extendable=False, p_min_pu=pu, p_max_pu=pu,
+              marginal_cost=float(chp.get("fuel_vom", 22.0)))
+        e_z = float(p.sum() * dt_h / 1e6)
+        e_tot += e_z
+        print(f"  → CHP-fast {zone}: must-run topp {p_nom:.0f} MW_el, {e_z:.1f} TWh/period "
+              f"(share {chp.get('share_of_thermal',1.0):g}, MC {chp.get('fuel_vom',22.0)})")
+    print(f"  → CHP-fast TOTAL: {target_mw/1e3:.1f} GW topp / {e_tot:.1f} TWh (skala ×{scale:.2f} på borttagen termik)")
 
 
 def _add_ev(n: pypsa.Network, cfg: dict, ev_profiles, ev_overrides,

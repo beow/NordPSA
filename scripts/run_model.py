@@ -567,6 +567,12 @@ def main() -> None:
                         help="Gör värmeackumulatorn investerbar: modellen dimensionerar lagret "
                              "fritt mot TES-kostnad (config heat.store_overnight_eur_per_kwh) i "
                              "stället för fast store_hours×topplast. Kräver --add-heat.")
+    parser.add_argument("--chp-fixed-gw", type=float, default=None, metavar="GW",
+                        help="Snabbalternativ till --add-heat: koppla bort hela värmebussen "
+                             "(ingen heat-buss/lager/VP/panna) och återinför KVV-elen som ett "
+                             "FAST must-run-block om GW (totala toppen). Must-run-termiken reduceras "
+                             "med share_of_thermal som i heat-läget; borttagen termik-form skalas till "
+                             "GW. Snabbare LP. Ömsesidigt uteslutande med --add-heat.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -730,12 +736,23 @@ def main() -> None:
     if args.market_elasticity:
         cfg.setdefault("market_elasticity", {})["enabled"] = True
 
+    if args.add_heat and args.chp_fixed_gw is not None:
+        parser.error("--chp-fixed-gw och --add-heat är ömsesidigt uteslutande "
+                     "(KVV-fast kopplar bort värmebussen).")
+
     if args.add_heat:
         cfg.setdefault("heat", {})["enabled"] = True
         if args.heat_store_ext:
             cfg["heat"]["store_extendable"] = True
         print(f"  → fjärrvärmesektor aktiv"
               + (" (värmelager extendable mot TES-kostnad)" if args.heat_store_ext else ""))
+
+    if args.chp_fixed_gw is not None:
+        # KVV-fast: aktivera heat.enabled (→ _add_thermal reducerar termik med share_of_thermal)
+        # men ingen värmebuss byggs (_heat_demand_profiles returnerar {} när chp_fixed_gw satt).
+        cfg.setdefault("heat", {})["enabled"] = True
+        cfg["heat"]["chp_fixed_gw"] = args.chp_fixed_gw
+        print(f"  → KVV-fast aktiv: {args.chp_fixed_gw:g} GW must-run-el, värmebuss bortkopplad")
 
     if ev_overrides:
         cfg.setdefault("ev", {})["enabled"] = True
@@ -776,6 +793,7 @@ def main() -> None:
     if args.effective_ntc:              flags.append("effective-ntc")
     if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
+    if args.chp_fixed_gw is not None:   flags.append(f"chpfixed-{args.chp_fixed_gw:g}gw")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll:                       flags.append("voll")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
