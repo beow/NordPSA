@@ -20,11 +20,12 @@ REF_LABEL = globals().get('LABEL2', None)   # referenskörning (delad global), a
 
 COUNTRY_MAP = {'SE-N': 'SE', 'SE-S': 'SE', 'NO-N': 'NO', 'NO-S': 'NO', 'DK': 'DK', 'FI': 'FI'}
 COUNTRIES   = ['SE', 'NO', 'DK', 'FI', 'Norden']
-SOURCES     = ['hydro', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas', 'slack']
+SOURCES     = ['hydro', 'ror', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas', 'slack']
 SHOW_ROWS   = SOURCES + ['prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
                          'batt_net', 'kont_export', 'intern_export']
 ROW_LABELS  = {
-    'hydro': 'Vattenkraft', 'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
+    'hydro': 'Vattenkraft, magasin', 'ror': 'Vattenkraft, älv (RoR)',
+    'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
     'wind_offshore': 'Vind offshore', 'solar': 'Sol', 'thermal': 'Termisk (inkl KVV-el)',
     'gas': 'Gas', 'slack': 'Slack (lastskärn.)',
     'prod_twh': 'PRODUKTION TOTALT', 'load_twh': 'Last (konsumtion)', 'h2_elec': 'H2-elektrolys',
@@ -63,10 +64,12 @@ def country_balance(res_label):
         r = {'country': COUNTRY_MAP[zone]}
         for c in SOURCES:
             if c == 'hydro':
+                # Magasin (StorageUnit); RoR-generatorerna redovisas separat som 'ror'.
+                s = hyd.get(f'{zone} hydro', zero).clip(lower=0)
+            elif c == 'ror':
                 rcols = [g for g in disp.columns if g in nn.generators.index
                          and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == 'hydro']
-                s = hyd.get(f'{zone} hydro', zero).clip(lower=0) \
-                    + (disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero)
+                s = disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero
             else:
                 # Summera ALLA generatorer med carrier c i zonen (t.ex. 'nuclear' +
                 # 'nuclear exp', wind_onshore + wind_new) — ej bara exakt '{zon} {c}'.

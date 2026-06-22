@@ -47,11 +47,12 @@ cfg   = yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
 # ───────────────────────── energibalans + kapaciteter ─────────────────────────
 COUNTRY_MAP = {"SE-N": "SE", "SE-S": "SE", "NO-N": "NO", "NO-S": "NO", "DK": "DK", "FI": "FI"}
 COUNTRIES   = ["SE", "NO", "DK", "FI", "Norden"]
-SOURCES     = ["hydro", "nuclear", "wind_onshore", "wind_offshore", "solar", "thermal", "gas", "slack"]
+SOURCES     = ["hydro", "ror", "nuclear", "wind_onshore", "wind_offshore", "solar", "thermal", "gas", "slack"]
 SHOW_ROWS   = SOURCES + ["prod_twh", "load_twh", "h2_elec", "heat_elec", "ev_elec",
                          "batt_net", "kont_export", "intern_export"]
 ROW_LABELS  = {
-    "hydro": "Vattenkraft", "nuclear": "Kärnkraft", "wind_onshore": "Vind onshore",
+    "hydro": "Vattenkraft, magasin", "ror": "Vattenkraft, älv (RoR)",
+    "nuclear": "Kärnkraft", "wind_onshore": "Vind onshore",
     "wind_offshore": "Vind offshore", "solar": "Sol", "thermal": "Termisk (KVV-el)",
     "gas": "Gas", "slack": "Slack (lastsk.)",
     "prod_twh": "PRODUKTION", "load_twh": "Last", "h2_elec": "H2-elektrolys",
@@ -91,10 +92,12 @@ def load_run(res_label):
         r = {"country": COUNTRY_MAP[zone]}
         for c in SOURCES:
             if c == "hydro":
+                # Magasin (StorageUnit); RoR-generatorerna redovisas separat som "ror".
+                s = hyd.get(f"{zone} hydro", zero).clip(lower=0)
+            elif c == "ror":
                 rcols = [g for g in disp.columns if g in nn.generators.index
                          and nn.generators.at[g, "bus"] == zone and nn.generators.at[g, "carrier"] == "hydro"]
-                s = hyd.get(f"{zone} hydro", zero).clip(lower=0) \
-                    + (disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero)
+                s = disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero
             else:
                 # Summera ALLA generatorer med carrier c i zonen (t.ex. 'nuclear' +
                 # 'nuclear exp', 'wind_onshore' + 'wind_new') — ej bara exakt '{zon} {c}'.
@@ -144,7 +147,11 @@ def load_run(res_label):
                 continue
             tot += twh(nl[ln]) if ln in nl.columns else float(nn.loads.at[ln, "p_set"]) * 8760 / 1e6
         return tot
-    ror = sum(twh(disp.get(f"{z} hydro", zero).clip(lower=0)) for z in ZONES)
+    # RoR (älvkraft) = hydro-CARRIER-generatorer ({zon} hydro_ror), skild från magasin
+    # (StorageUnit). Matcha på carrier, ej namn (generatorerna heter hydro_ror).
+    ror_cols = [g for g in disp.columns if g in nn.generators.index
+                and nn.generators.at[g, "carrier"] == "hydro"]
+    ror = twh(disp[ror_cols].clip(lower=0).sum(axis=1)) if ror_cols else 0.0
 
     def split_fixed_exp(carrier):
         """(fast_TWh, exp_TWh) för ett kraftslag: fast = befintlig flotta (ej-extendable
@@ -212,7 +219,7 @@ def load_run(res_label):
         onw_fixed=onw_fixed, onw_exp=onw_exp, offw_fixed=offw_fixed, offw_exp=offw_exp,
         sol_fixed=sol_fixed, sol_exp=sol_exp,
         gas=N["gas"], netexp=N["kont_export"], thermal_pure=thermal_pure, ror=ror,
-        hydro_gen=N["hydro"], ellast=N["load_twh"],
+        hydro_gen=N["hydro"], hydro_reservoir=N["hydro"], ellast=N["load_twh"],
         magasin_vol=float((hy.p_nom_opt * hy.max_hours).sum()) / 1e6,  # TWh
         magasin_gw=float(hy.p_nom_opt.sum()) / 1e3,
         batt_gw=float(ba.p_nom_opt.sum()) / 1e3,
@@ -228,6 +235,7 @@ def load_run(res_label):
         e_electrolyser=lke("electrolyser"), e_turbine=lke("h2 turbine") + lke("turbine"),
         e_hp=lke("heat hp"), e_elboiler=lke("heat elboiler"), e_chp_el=e_chp_el,
         e_ev=lke("EV car charger") + lke("EV heavy charger"),
+        ntc_mw={frozenset((b0, b1)): float(nn.links.at[l, "p_nom"]) for l, b0, b1 in ntc},
     )
     return cyr, caps
 
@@ -274,7 +282,7 @@ SPR = SP + 3.2
 ax.text(SP + 1.6, 13.3, "×6", ha="center", fontsize=11, style="italic",
         color="white", weight="bold", zorder=5)
 
-# ---- GENERERING (ingen RoR-box: i run141 är all vattenkraft magasin) ----
+# ---- GENERERING (RoR-box läggs in nedan om körningen har älvkraft) ----
 gx, gw, gh = 1.5, 14.5, 7.5
 
 def split_val(key, total, fixed, expn):
@@ -305,9 +313,9 @@ for i, (lab, col, val) in enumerate(gens):
     box(gx, gy, gw, gh, lab, col, val, fs=9.2)
     arrow(gx + gw, gy + gh/2, SP, gy + gh/2, col, bidir=(i == len(gens) - 1))
 
-# ---- LAGRING (magasin = vattenkraftkällan i run141) ----
+# ---- LAGRING (magasin = reservoardelen; RoR redovisas separat i genereringskolumnen) ----
 box(26.0, 0.6, 12.5, 8.8, "Vattenmagasin", C["hyd"],
-    f"{K['hydro_gen']:.0f} TWh/år · {K['magasin_vol']:.0f} TWh vol{tag('hydro')}", fs=7.4)
+    f"{K['hydro_reservoir']:.0f} TWh/år · {K['magasin_vol']:.0f} TWh vol{tag('hydro')}", fs=7.4)
 arrow(32.2, 9.4, 32.2, 12.0, C["hyd"], bidir=True)
 box(40.0, 0.6, 12.0, 8.8, "Batteri (exogen)", C["batt"],
     f"{K['batt_gw']:.0f} GW · {K['batt_gwh']:.0f} GWh{tag('batt')}", fs=7.6)
@@ -382,15 +390,21 @@ arrow(BBR, 18.5, sx, 18.5, C["evbus"])
 ax.plot([99.5, 99.5], [2, 98], color="#cccccc", lw=1.0, zorder=1)
 
 # --- zonkarta ---
-ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar", ha="center",
+ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar (GW)", ha="center",
         fontsize=12, weight="bold", color=C["text"])
 zpos = {"NO-N": (110, 90), "SE-N": (124, 90), "FI": (137, 87),
         "NO-S": (110, 78), "SE-S": (124, 76), "DK": (119, 70)}
 links = [("NO-N","SE-N"), ("NO-N","NO-S"), ("SE-N","SE-S"), ("SE-N","FI"),
          ("NO-S","SE-S"), ("SE-S","FI"), ("SE-S","DK"), ("NO-S","DK")]
+ntc_mw = K.get("ntc_mw", {})
 for a, b in links:
     (xa, ya), (xb, yb) = zpos[a], zpos[b]
     ax.plot([xa, xb], [ya, yb], color="#888", lw=2.0, zorder=2)
+    mw = ntc_mw.get(frozenset((a, b)))
+    if mw:
+        ax.text((xa + xb) / 2, (ya + yb) / 2, f"{mw/1e3:.1f}",
+                ha="center", va="center", fontsize=6.8, color="#444", zorder=3,
+                bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.85))
 for z in ["SE-S", "NO-S", "DK", "FI"]:
     xz, yz = zpos[z]
     ax.plot([xz, xz + 3.2], [yz - 2.8, yz - 5.2], color=C["mkt"], lw=1.8, ls=":", zorder=2)
