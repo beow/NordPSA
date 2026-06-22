@@ -383,17 +383,23 @@ demand_scenarios:
     zones:
       # SE +8 TWh allmän förbrukning (basgap: eSett-bas 127,3 < SvK 2026 ~136) → SE 2040
       # ≈ 243 TWh (= SvK MM SE). Split per eSett-andel SE-N 0,206 / SE-S 0,794 (⚠️ antagande).
+      # VRE-potentialer (LMA2026, TWh→MW vid CF onshore ×1,30 / offshore ×1,10):
+      # SE land: golv 50 / tak 100 TWh; hav: golv 0 / tak 63 (allt→SE-S); sol: golv 7,4 / tak 25.
+      # Split SE→SE-N/SE-S efter install-andel (onshore 59/41, sol 5/95; ⚠️ antagande).
+      # ⚠️ Tak/golv-MW förutsätter --onwind-capfac-increase 0.30 + --offwind-capfac-increase 0.10.
       SE-N:
         extra_load_mw: 4298   # 4110 + 188 (1,6 TWh basgap)
         h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
         ev_cars: 1200000
-        pnom_max_mw: {wind_onshore: 27137, wind_offshore:  2470, solar:  5574}
+        pnom_max_mw: {wind_onshore: 20394, wind_offshore:     0, solar:  1282}
+        pnom_min_mw: {wind_onshore: 10197, solar:   380}   # SE-golv (install on 10050/sol 134)
         battery: {p_nom_mw: 1000, hours: 2}
       SE-S:
         extra_load_mw: 4378   # 3653 + 725 (6,4 TWh basgap)
         h2: {demand_mw:  452, electrolyser_mw:  850, store_mwh:  9900}
         ev_cars: 4800000
-        pnom_max_mw: {wind_onshore: 18070, wind_offshore: 15763, solar: 20133}
+        pnom_max_mw: {wind_onshore: 14376, wind_offshore: 16283, solar: 24000}
+        pnom_min_mw: {wind_onshore:  7188, solar:  7104}   # SE-golv (install on 7092/sol 2778 → +~4,3 GW sol)
         battery: {p_nom_mw: 4500, hours: 2}
         # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny via --add-nuclear.
       # NO-N/NO-S kalibrerade mot Statnett "Medium forbruksutvikling" 2040 (ej SvK-split):
@@ -401,23 +407,25 @@ demand_scenarios:
       # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel
       # (⚠️ ANTAGANDE — geografisk sektor-split ej upplöst; petroleum/datac/grön industri
       # har egen geografi). EV nät-uttag 18 TWh / 2.78 MWh/bil = 6.48M bilar. H2 10 TWh.
+      # NO (LMA2026): land 30, hav 21 (allt→NO-S), sol 20 TWh. Split NO→NO-N/NO-S install-andel
+      # (onshore 61/39, sol 6/94; ⚠️ antagande). Inga golv för NO/DK/FI (bara tak).
       NO-N:
         extra_load_mw: 1138
         h2: {demand_mw:  406, electrolyser_mw:  494, store_mwh: 14045}
         ev_cars: 2300000
-        pnom_max_mw: {wind_onshore:  7068, wind_offshore:  1452, solar:  6652}
+        pnom_max_mw: {wind_onshore:  5537, wind_offshore:     0, solar:  1672}
       NO-S:
         extra_load_mw: 2058
         h2: {demand_mw:  735, electrolyser_mw:  806, store_mwh: 22915}
         ev_cars: 4180000
-        pnom_max_mw: {wind_onshore:  4985, wind_offshore:  4014, solar: 17261}
+        pnom_max_mw: {wind_onshore:  3730, wind_offshore:  4866, solar: 21560}
       DK:
         # +913 MW (8 TWh) allmän förbrukning ovanpå tidigare 2968 → stänger basgapet:
         # eSett-bas 36,5 < SvK 2026 ~45. DK total 2040 ≈ 81 TWh (= SvK MM DK).
         extra_load_mw: 3881
         h2: {demand_mw:   75, electrolyser_mw:  200, store_mwh:  3960}
         ev_cars: 3600000
-        pnom_max_mw: {wind_onshore:  8785, wind_offshore: 29843, solar: 32845}
+        pnom_max_mw: {wind_onshore:  6757, wind_offshore: 27127, solar: 32843}   # DK LMA2026: land 17/hav 107/sol 41 TWh
         battery: {p_nom_mw: 3800, hours: 2}
       FI:
         # +1370 MW (12 TWh) allmän förbrukning ovanpå tidigare 4452 → stänger basgapet:
@@ -425,7 +433,7 @@ demand_scenarios:
         extra_load_mw: 5822
         h2: {demand_mw:  913, electrolyser_mw: 1400, store_mwh:     0}   # 8,0 TWh/år (höjt från 678=5,9)
         ev_cars: 1600000
-        pnom_max_mw: {wind_onshore: 36686, wind_offshore:  7356, solar: 33406}
+        pnom_max_mw: {wind_onshore: 28219, wind_offshore:  6686, solar: 33417}   # FI LMA2026: land 77/hav 21/sol 29 TWh
         battery: {p_nom_mw: 2700, hours: 2}
         # FI kärnkraft = befintlig 4400 MW (Olkiluoto 1-3 + Loviisa 1-2), must-run historisk
         # profil, ingen ny (SvK MM ny FI-kärnkraft ej medtagen — flaggat). Lägg ev. block här.

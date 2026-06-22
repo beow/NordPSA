@@ -129,6 +129,43 @@ def boost_onshore_capfac(profiles: "pd.DataFrame", increase: float) -> "pd.DataF
     return out
 
 
+def boost_offshore_capfac(profiles: "pd.DataFrame", increase: float) -> "pd.DataFrame":
+    """Som boost_onshore_capfac men för `*_wind_offshore`-kolumner. Höjer havsbaserad
+    vinds fleet-CF med relativ andel `increase` via samma olinjära potens-transform
+    (cf' = cf_max·(cf/cf_max)^γ, mean(cf')=(1+increase)·mean(cf)). Speglar att 2040:s
+    nybyggnadsflotta (moderna 15 MW-turbiner, bästa sitsar) slår dagens kalibrering."""
+    if increase <= 0:
+        return profiles
+    out = profiles.copy()
+    print(f"Höjer havsbaserad vind-CF med {increase*100:.0f}% (olinjär potens-transform):")
+    for col in [c for c in profiles.columns if c.endswith("_wind_offshore")]:
+        cf     = profiles[col].astype(float)
+        cf_max = float(cf.max())
+        if cf_max <= 0:
+            continue
+        x      = (cf / cf_max).clip(0.0, 1.0)
+        mean0  = float(cf.mean())
+        target = mean0 * (1.0 + increase)
+        max_mean = cf_max * float((cf > 0).mean())
+        zone = col.replace("_wind_offshore", "")
+        if target > max_mean:
+            print(f"  Varning: {zone} — mål {target:.3f} > tak {max_mean:.3f}; klampar till taket")
+            target = max_mean
+        lo, hi, g = 1e-4, 1.0, 1.0
+        for _ in range(60):
+            g = 0.5 * (lo + hi)
+            m = float((cf_max * x.pow(g)).mean())
+            if m > target:
+                lo = g
+            else:
+                hi = g
+        cf1 = cf_max * x.pow(g)
+        out[col] = cf1
+        print(f"  {zone:6s} CF {mean0:.3f}→{float(cf1.mean()):.3f} "
+              f"(+{100*(cf1.mean()/mean0-1):.1f}%), γ={g:.3f}, cf_max={cf_max:.3f} (oförändrad)")
+    return out
+
+
 def load_inputs(cfg: dict) -> dict:
     """Laddar alla förberedda indata från data/processed/."""
     load_df       = pd.read_parquet(PROC_DIR / "load.parquet")
@@ -211,8 +248,9 @@ def apply_demand_scenario(cfg: dict, name: str,
     Muterar in-place: cfg['additional_load_mw'] (per zon), hydrogen_overrides,
     ev_overrides och batteries. Applicerar ntc_overrides på cfg['links'] och
     (om nuclear_exogenous) låser kärnkraften (costs.nuclear.extendable=False) till
-    nivåerna i per-zon-nuclear-block. Returnerar {(zon, carrier): p_nom_max_mw} för
-    utbyggnadstak (VRE) som appliceras EFTER build_network.
+    nivåerna i per-zon-nuclear-block. Returnerar (pnom_max, pnom_min): två dictar
+    {(zon, carrier): MW} för VRE-utbyggnadstak resp. exogena golv (pnom_min_mw, t.ex.
+    SE-basflotta), båda applicerade EFTER build_network.
 
     Princip: additiv (eSett-bas bevaras), se zones.yaml-kommentar. CLI-givna H2/EV
     (--add-h2/--add-ev) har företräde och skrivs INTE över.
@@ -227,6 +265,7 @@ def apply_demand_scenario(cfg: dict, name: str,
         cfg["costs"]["nuclear"]["extendable"] = False
         print("     kärnkraft EXOGEN (costs.nuclear.extendable=False — ingen endogen expansion)")
     pnom_max: dict = {}
+    pnom_min: dict = {}
     cfg.setdefault("additional_load_mw", {})
     for zone, zc in scen.get("zones", {}).items():
         extra = float(zc.get("extra_load_mw", 0.0))
@@ -250,6 +289,9 @@ def apply_demand_scenario(cfg: dict, name: str,
         for carrier, pmax in (zc.get("pnom_max_mw") or {}).items():
             pnom_max[(zone, carrier)] = float(pmax)
 
+        for carrier, pmin in (zc.get("pnom_min_mw") or {}).items():
+            pnom_min[(zone, carrier)] = float(pmin)
+
         bat = zc.get("battery")
         bat_txt = ""
         if bat:                                              # exogent fast batteri (SvK storskaligt)
@@ -272,7 +314,7 @@ def apply_demand_scenario(cfg: dict, name: str,
             if link[0] == z0 and link[1] == z1 and link[2] != mw:
                 print(f"     NTC {z0}-{z1}: {link[2]} → {mw} MW (Tabell 10)")
                 link[2] = mw
-    return pnom_max
+    return pnom_max, pnom_min
 
 
 def make_snapshots(cfg: dict, resolution: int, year: int | None) -> pd.DatetimeIndex:
@@ -510,6 +552,11 @@ def main() -> None:
                         help="Höj landbaserad vinds kapacitetsfaktor med denna relativa "
                              "andel (0.1 = +10%%). Olinjär potens-transform per zon: lyfter "
                              "låga effektnivåer mest, märkeffekt (cf_max) oförändrad.")
+    parser.add_argument("--offwind-capfac-increase", type=float, default=0.0, metavar="FRAC",
+                        help="Som --onwind-capfac-increase men för HAVSbaserad vind "
+                             "(0.1 = +10%%). Speglar 2040:s nybyggnadsflotta (moderna 15 MW-"
+                             "turbiner). Påverkar genereringen; potential-MW i config förutsätter "
+                             "matchande CF.")
     parser.add_argument("--onshore-cap", action="append", default=[], metavar="ZON:MW",
                         help="Sätt expansionstak (p_nom_max, MW) för landbaserad vind per zon, "
                              "t.ex. 'SE-N:20000'. Override på default-taket (50 GW/zon). "
@@ -528,6 +575,11 @@ def main() -> None:
                              "reaktorstorlek ≈ p_nom_opt/N), tak N×1500 MW. Befintlig flotta "
                              "finns med by default och byter då till syntetisk profil "
                              "(config.nuclear_synth_existing). Kan anges flera gånger.")
+    parser.add_argument("--nuclear-discount-rate", nargs="+", action="extend", default=[], metavar="ZON:RATE",
+                        help="Egen diskontoränta för NY kärnkraft (--add-nuclear) i en zon, "
+                             "t.ex. 'SE-N:0.03 SE-S:0.03'. Påverkar bara den extendable expansionens "
+                             "annualiserade kapitalkostnad (befintlig flotta är fast). Default = global "
+                             "costs.discount_rate. Kan anges flera gånger / som lista.")
     parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
                         help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
                              "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
@@ -721,9 +773,9 @@ def main() -> None:
     if args.cost_scenario:
         apply_cost_scenario(cfg, args.cost_scenario)
 
-    demand_pnom_max = {}
+    demand_pnom_max, demand_pnom_min = {}, {}
     if args.demand_scenario:
-        demand_pnom_max = apply_demand_scenario(
+        demand_pnom_max, demand_pnom_min = apply_demand_scenario(
             cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries)
 
     if args.no_market:
@@ -735,6 +787,17 @@ def main() -> None:
 
     if args.market_elasticity:
         cfg.setdefault("market_elasticity", {})["enabled"] = True
+
+    if args.nuclear_discount_rate:
+        disc = {}
+        for spec in args.nuclear_discount_rate:
+            parts = spec.split(":")
+            if len(parts) != 2:
+                parser.error(f"Ogiltigt --nuclear-discount-rate format: '{spec}' (förväntat ZON:RATE)")
+            disc[parts[0].strip()] = float(parts[1])
+        cfg["costs"].setdefault("nuclear", {})["discount_rate_by_zone"] = disc
+        print("  → kärnkrafts-diskontoränta (ny/expansion): "
+              + ", ".join(f"{z} {r:.0%}" for z, r in disc.items()))
 
     if args.add_heat and args.chp_fixed_gw is not None:
         parser.error("--chp-fixed-gw och --add-heat är ömsesidigt uteslutande "
@@ -803,7 +866,9 @@ def main() -> None:
     if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")
     if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
+    if args.offwind_capfac_increase:    flags.append(f"offwind-cf+{args.offwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
+    for spec in args.nuclear_discount_rate: flags.append(f"nucdisc-{spec.replace(':','_')}")
     for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
@@ -818,6 +883,9 @@ def main() -> None:
     if args.onwind_capfac_increase:
         inputs["vre_profiles"] = boost_onshore_capfac(
             inputs["vre_profiles"], args.onwind_capfac_increase)
+    if args.offwind_capfac_increase:
+        inputs["vre_profiles"] = boost_offshore_capfac(
+            inputs["vre_profiles"], args.offwind_capfac_increase)
 
     # Kontinentpris-skift (--demand-scenario ...continent_price_eur_mwh): multiplikativ
     # omskalning av 2023-25-serien per bzn → SvK 2040-nivå (timform bevaras, nivå byts).
@@ -956,6 +1024,24 @@ def main() -> None:
         n.generators.at[name, "p_nom_min"] = existing
         n.generators.at[name, "p_nom_max"] = cap
         print(f"  → potential {zone} {carrier}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
+
+    # Exogena GOLV per zon/teknik från --demand-scenario (pnom_min_mw, t.ex. SE-basflotta
+    # LMA2026). Sätter p_nom_min = max(golv, installerat); höjer p_nom_max om golvet
+    # skulle hamna över taket. Tvingar fram minst golv-MW (ej curtailbart bort).
+    for (zone, carrier), pmin in demand_pnom_min.items():
+        name = f"{zone} {carrier}"
+        if name not in n.generators.index:
+            continue
+        if not bool(n.generators.at[name, "p_nom_extendable"]):
+            print(f"  Varning: {name} ej extendable — kan ej sätta golv {pmin:.0f}, hoppar över")
+            continue
+        existing = float(n.generators.at[name, "p_nom"])
+        floor = max(pmin, existing)
+        n.generators.at[name, "p_nom_min"] = floor
+        if float(n.generators.at[name, "p_nom_max"]) < floor:
+            n.generators.at[name, "p_nom_max"] = floor
+        print(f"  → golv {zone} {carrier}: p_nom_min = {floor:.0f} MW "
+              f"(installerat {existing:.0f}{' — golv binder, +%.0f MW' % (floor-existing) if floor>existing else ''})")
 
     if args.dry_run:
         nuc = n.generators[n.generators.carrier == "nuclear"]

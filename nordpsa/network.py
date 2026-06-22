@@ -366,9 +366,9 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
         return
     tcfg     = ccfg["nuclear"]
     mc       = tcfg["vom_eur_per_mwh"]
-    cap_cost = _annualized_cost(
-        tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
-    ) * n_years
+    # Per-zon diskontoränta (--nuclear-discount-rate ZON:RATE) → annualiserad kapital-
+    # kostnad räknas om per zon. Default = global r. Påverkar bara EXTENDABLE expansion.
+    disc_by_zone = tcfg.get("discount_rate_by_zone") or {}
     params   = synth_params or {}
     min_frac = float(params.get("min_load_frac", 1.0))
     mw_each  = float(params.get("mw_per_reactor", 1500.0))
@@ -376,6 +376,11 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
         if zone not in n.buses.index:
             print(f"  Varning: kärnkrafts-zon {zone} saknas — hoppar över")
             continue
+        r_zone   = float(disc_by_zone.get(zone, r))
+        cap_cost = _annualized_cost(
+            tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r_zone,
+            tcfg.get("fom_fraction", fom_fraction)
+        ) * n_years
         p_max     = availability_timeseries(params, snapshots, int(n_react), seed=int(seed))
         p_min     = (p_max * min_frac).clip(lower=0)
         p_nom_max = n_react * mw_each
@@ -393,7 +398,9 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
             capital_cost=cap_cost,
         )
         print(f"  → ny kärnkraft {zone}: {int(n_react)} reaktorer synth (seed {seed}), "
-              f"tak {p_nom_max:.0f} MW, realiserad CF={p_max.mean():.3f}, kapital→p_nom_opt")
+              f"tak {p_nom_max:.0f} MW, realiserad CF={p_max.mean():.3f}, "
+              f"r={r_zone:.0%}{' (override)' if zone in disc_by_zone else ''}, "
+              f"kapital {cap_cost/n_years/1e3:.0f} €/kW/år→p_nom_opt")
 
 
 def _add_extra_wind(n: pypsa.Network, extra_wind: list | None,
