@@ -557,6 +557,11 @@ def main() -> None:
                              "(0.1 = +10%%). Speglar 2040:s nybyggnadsflotta (moderna 15 MW-"
                              "turbiner). Påverkar genereringen; potential-MW i config förutsätter "
                              "matchande CF.")
+    parser.add_argument("--offwind-discount-rate", nargs="+", action="extend", default=[], metavar="ZON:RATE",
+                        help="Egen diskontoränta för HAVSbaserad vind i en zon, t.ex. "
+                             "'SE-N:0.03 SE-S:0.03'. Påverkar bara den annualiserade kapitalkostnaden "
+                             "(samma subventioneringsmekanik som --nuclear-discount-rate). Default = "
+                             "global costs.discount_rate. Kan anges flera gånger / som lista.")
     parser.add_argument("--onshore-cap", action="append", default=[], metavar="ZON:MW",
                         help="Sätt expansionstak (p_nom_max, MW) för landbaserad vind per zon, "
                              "t.ex. 'SE-N:20000'. Override på default-taket (50 GW/zon). "
@@ -799,6 +804,17 @@ def main() -> None:
         print("  → kärnkrafts-diskontoränta (ny/expansion): "
               + ", ".join(f"{z} {r:.0%}" for z, r in disc.items()))
 
+    if args.offwind_discount_rate:
+        disc = {}
+        for spec in args.offwind_discount_rate:
+            parts = spec.split(":")
+            if len(parts) != 2:
+                parser.error(f"Ogiltigt --offwind-discount-rate format: '{spec}' (förväntat ZON:RATE)")
+            disc[parts[0].strip()] = float(parts[1])
+        cfg["costs"].setdefault("wind_offshore", {})["discount_rate_by_zone"] = disc
+        print("  → havsvind-diskontoränta: "
+              + ", ".join(f"{z} {r:.0%}" for z, r in disc.items()))
+
     if args.add_heat and args.chp_fixed_gw is not None:
         parser.error("--chp-fixed-gw och --add-heat är ömsesidigt uteslutande "
                      "(KVV-fast kopplar bort värmebussen).")
@@ -869,6 +885,7 @@ def main() -> None:
     if args.offwind_capfac_increase:    flags.append(f"offwind-cf+{args.offwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
     for spec in args.nuclear_discount_rate: flags.append(f"nucdisc-{spec.replace(':','_')}")
+    for spec in args.offwind_discount_rate: flags.append(f"offdisc-{spec.replace(':','_')}")
     for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
     for spec in args.add_h2:            flags.append(f"h2-{spec.replace(':','_')}")
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")

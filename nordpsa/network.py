@@ -978,8 +978,11 @@ def _add_vre(
             tcfg       = ccfg[cost_key]
             mc         = tcfg["vom_eur_per_mwh"]
             extendable = tcfg["extendable"]
+            # Per-zon diskontoränta (t.ex. --offwind-discount-rate SE-S:0.03) → egen
+            # annualiserad kapitalkostnad för den zonen/tekniken. Default = global r.
+            r_zone     = float((tcfg.get("discount_rate_by_zone") or {}).get(zone, r))
             cap_cost   = _annualized_cost(
-                tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
+                tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r_zone, tcfg.get("fom_fraction", fom_fraction)
             ) * n_years
 
             p_nom = vre_noms.get(zone, {}).get(nom_key, 0)
