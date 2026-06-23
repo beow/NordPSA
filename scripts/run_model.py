@@ -34,6 +34,7 @@ VRE_CARRIERS = ("wind_onshore", "wind_offshore", "solar")
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
+LOGS_DIR    = Path(__file__).resolve().parents[1] / "logs"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "zones.yaml"
 
 
@@ -1082,8 +1083,9 @@ def main() -> None:
         print("=== DRY-RUN klar (ingen solve) ===")
         return
 
-    # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
-    log_path = RESULTS_DIR / label / "highs.log"
+    # Solver-loggen hålls UTANFÖR results/ (logs/<label>_highs.log)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOGS_DIR / f"{label}_highs.log"
     (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
     write_run_meta(label, args, res, args.year, flag_str)
 

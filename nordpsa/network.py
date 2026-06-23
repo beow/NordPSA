@@ -270,8 +270,14 @@ def _add_hydro(
                 p_nom   = max(p_nom - ror_p_nom, 1.0)
                 max_h   = cap_mwh / p_nom
         else:
-            params = hydro_params[zone]
-            inflow = inflow_timeseries(params, snapshots)
+            params       = hydro_params[zone]
+            peak_gamma   = params.get("peak_gamma")
+            target_annual = params.get("target_annual_twh")
+            inflow = inflow_timeseries(
+                params, snapshots,
+                peak_gamma=peak_gamma,
+                target_annual_twh=target_annual,
+            )
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True

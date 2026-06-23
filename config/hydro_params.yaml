@@ -5,6 +5,14 @@ FI:
   mu: 120.0
   phi: 183.0
   sigma: 22.0
+  # FI saknar NVE-inflöde → parametrisk profil. Kalibrerad 2026-06-23 mot
+  # ENTSO-E-reservoar (A72, ΔSOC) + eSett-produktion-härledd tillrinning:
+  # peakad (γ=1.5) och per-år-normaliserad till faktisk årstillrinning.
+  peak_gamma: 1.5
+  target_annual_twh:
+    2023: 15.28
+    2024: 14.02
+    2025: 12.53
 NO-N:
   A: 6000.0
   B: 1800.0

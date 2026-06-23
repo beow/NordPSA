@@ -178,19 +178,45 @@ def load_nve_ror(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:
     return result
 
 
+_MODEL_KEYS = ("A", "mu", "sigma", "B", "phi", "C")
+
+
 def inflow_timeseries(params: Dict[str, float],
                       timestamps: pd.DatetimeIndex,
-                      annual_scales: Dict[int, float] | None = None) -> pd.Series:
+                      annual_scales: Dict[int, float] | None = None,
+                      peak_gamma: float | None = None,
+                      target_annual_twh: Dict[int, float] | None = None) -> pd.Series:
     """
     Genererar inflödestidsserie (MW) för ett godtyckligt tidsstämpelindex.
     Om annual_scales är givet skalas inflödet per kalenderår mot faktisk produktion.
+
+    peak_gamma:        potens-transform av den parametriska formen (>1 spetsar
+                       vårfloden; FI-kalibrering mot ENTSO-E+eSett-härledd
+                       tillrinning gav γ≈1.5).
+    target_annual_twh: dict {år: TWh} → varje kalenderår normaliseras (efter
+                       ev. peakning) så att årssumman exakt matchar faktisk
+                       tillrinning. Ersätter annual_scales när angiven.
+
     Används av network.py för att sätta inflow_t på StorageUnits.
     """
-    doy    = timestamps.dayofyear.values.astype(float)
-    values = _model(doy, **params)
-    values = np.maximum(values, 0.0)
+    mparams = {k: params[k] for k in _MODEL_KEYS if k in params}
+    doy     = timestamps.dayofyear.values.astype(float)
+    values  = _model(doy, **mparams)
+    values  = np.maximum(values, 0.0)
+    if peak_gamma is not None and peak_gamma != 1.0:
+        values = values ** peak_gamma
     result = pd.Series(values, index=timestamps, name="inflow_mw")
-    if annual_scales:
+
+    if target_annual_twh:
+        # Steg-timmar ur tidsstämpelsteget (uniformt rutnät, t.ex. 3h-upplösning).
+        step_h = ((timestamps[1] - timestamps[0]).total_seconds() / 3600.0
+                  if len(timestamps) > 1 else 1.0)
+        for year, twh in target_annual_twh.items():
+            mask = timestamps.year == year
+            cur_mwh = result.loc[mask].sum() * step_h
+            if cur_mwh > 0:
+                result.loc[mask] *= twh * 1e6 / cur_mwh
+    elif annual_scales:
         for year, scale in annual_scales.items():
             result.loc[timestamps.year == year] *= scale
     return result
