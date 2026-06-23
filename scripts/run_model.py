@@ -566,6 +566,10 @@ def main() -> None:
                         help="Sätt expansionstak (p_nom_max, MW) för landbaserad vind per zon, "
                              "t.ex. 'SE-N:20000'. Override på default-taket (50 GW/zon). "
                              "Kräver expansion (onshore extendable). Kan anges flera gånger.")
+    parser.add_argument("--onshore-lower", type=float, default=1.0, metavar="FAKTOR",
+                        help="Skala ALLA zoners landvind-potentialtak (--demand-scenario "
+                             "pnom_max_mw) med FAKTOR. Default 1.0; 0.8 = −20%% onshore-tak. "
+                             "Golv (pnom_min_mw) lämnas orört. Sensitivitet på utbyggnadspotentialen.")
     parser.add_argument("--solar-cap", type=float, default=None, metavar="MW",
                         help="Sätt expansionstak (p_nom_max, MW) för sol i ALLA zoner, "
                              "t.ex. '10000'. Override på default-taket (50 GW/zon). "
@@ -891,6 +895,7 @@ def main() -> None:
     for spec in args.add_h2_ext:        flags.append(f"h2ext-{spec.replace(':','_')}")
     for spec in args.add_ev:            flags.append(f"ev-{spec.replace(':','_')}")
     for spec in args.onshore_cap:       flags.append(f"onshorecap-{spec.replace(':','_')}")
+    if args.onshore_lower != 1.0:       flags.append(f"onshorelow-{args.onshore_lower:g}")
     if args.solar_cap is not None:      flags.append(f"solarcap-{args.solar_cap:.0f}")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
@@ -1036,11 +1041,14 @@ def main() -> None:
             continue
         if not bool(n.generators.at[name, "p_nom_extendable"]):
             continue
+        # --onshore-lower skalar landvind-potentialen (golvet hanteras separat nedan).
+        scaled = pmax * args.onshore_lower if carrier == "wind_onshore" else pmax
         existing = float(n.generators.at[name, "p_nom"])
-        cap = max(pmax, existing)          # aldrig under redan installerat
+        cap = max(scaled, existing)          # aldrig under redan installerat
         n.generators.at[name, "p_nom_min"] = existing
         n.generators.at[name, "p_nom_max"] = cap
-        print(f"  → potential {zone} {carrier}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f})")
+        note = f" [×{args.onshore_lower:g}]" if (carrier == "wind_onshore" and args.onshore_lower != 1.0) else ""
+        print(f"  → potential {zone} {carrier}: p_nom_max = {cap:.0f} MW (installerat {existing:.0f}){note}")
 
     # Exogena GOLV per zon/teknik från --demand-scenario (pnom_min_mw, t.ex. SE-basflotta
     # LMA2026). Sätter p_nom_min = max(golv, installerat); höjer p_nom_max om golvet
