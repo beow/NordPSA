@@ -39,8 +39,9 @@ zones:
 
   FI:
     mbas: [FI]
-    hydro_p_nom_mw: 3200
-    hydro_max_hours: 500
+    hydro_p_nom_mw: 3200           # ~3.2 GW total installerad (Fingrid/Wikipedia 2022)
+    hydro_max_hours: 1719          # 5.5 TWh magasinsvolym (5.5e6/3200; Åbo Akademi-review); var 500 (1.6 TWh, okalibrerad placeholder från initial commit)
+    hydro_ror_fraction: 0.33       # ~1/3 av FI:s vattenkraftsENERGI är run-of-river (ej reglerbar); splittas till must-run (formad efter avrinning, glättad till CF~0.5), reservoaren får resten + hela lagervolymen
     hydro_soc_initial: 0.65   # ~65% fyllnadsgrad 1 jan
     nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
 
@@ -215,6 +216,56 @@ snapshots:
 costs:
   discount_rate: 0.06
   fom_fraction:  0.02   # fraction of overnight cost per year
+
+  # Nätkostnad som kapital-adder per KRAFTSLAG × ZON (REN OPTION, default av).
+  # Aktiveras med --grid-cost; internaliserar att olika kraftslag belastar nätet
+  # olika (vind långt från lasten med låg CF drar mer nätutbyggnad per MW än
+  # kärnkraft nära lasten). INGEN explicit 1/CF-faktor (låg CF straffas redan via
+  # byggvolym); avstånd fångas av zone_factor. Debiteras BARA på INKREMENTET
+  # (p_nom_opt − p_nom_min) för TILLKOMMANDE effekt — befintlig kapacitet bär noll
+  # nätkostnad (dess nät är redan byggt). Gäller alla extendable kraftslag UTOM KVV
+  # (KVV-carriers saknas i cost_eur_per_w → exkluderas automatiskt). Implementeras
+  # som egen objektiv-term (grid_cost_objective i network.py, hjälpvariabel grid_inc
+  # == p_nom − p_nom_min), SKILT från teknikens egen overnight (som per konvention
+  # debiteras på hela p_nom_opt). active:false → ingen term, identiskt med idag.
+  #
+  # KALIBRERING (2026-06-23): addern = DJUP nätförstärkning (uppströms transmission
+  # för att evakuera effekten), EJ radiell anslutning — den senare (NREL ATB grid
+  # connection cost ~100 $/kW = spur line + interconnect) ligger redan i DEA-overnight,
+  # och DEA-offshore (2.2 €/W) inkluderar exportkabel. cost_eur_per_w ankrat mot
+  # Hirth/Ueckerdt (2015) "network cost"-komponent: ~100 €/kW vid 15-20 % vindandel
+  # → 200 €/kW vid 40 %. Onshore 0.15 €/W ger 4.9 €/MWh (zon 1.0) → 7.4 €/MWh (SE-N),
+  # mitt i Hirths 3.75-7.5 €/MWh-spann. Kärnkr/gas nära last ≈ 0.5 €/MWh (försumbart;
+  # nätförstärkning är i praktiken ett VRE-fenomen).
+  # ⚠️ zone_factor = lokaliseringssignal, JUDGMENT (ej hårdkalibrerad): norr =
+  # produktionsöverskott långt från last → dyr nord-syd-transmission (Svk NordSyd
+  # >100 mdr SEK för SE2↔SE3 7300→10500 MW); söder/DK = nära last/kontinent.
+  #
+  # FRAMTIDSVÄG (B, ej byggd): debitera förstärkning på NETTO-TOPP-INJEKTION per buss
+  # (variabel peak_inj[zon] ≥ net_inj(t) ∀t, custom linopy-constraint) i st.f. på p_nom.
+  # Då belönas co-lokaliserat batteri/peak-shaving (hybrid-solpark) endogent — plattare
+  # injektion → lägre nätkostnad — utan att modellera enskilda parker. NACKDEL: kopplar
+  # kapital till dispatch (det per-MW-addern undvek) + zon-aggregatet ≠ parks-anslutningstopp
+  # i 6-zoners copper-plate. Passar bättre i spatiellt mer upplöst modell.
+  grid:
+    active: false             # --grid-cost flippar denna till true
+    lifetime_years: 40        # nätinfrastrukturens livslängd
+    fom_fraction:  0.02
+    cost_eur_per_w:           # DJUP nätförstärkning per kraftslag (€/W), ej anslutning
+      wind_onshore:  0.15     # Hirth ~150 €/kW djup förstärkning → 5-7 €/MWh
+      wind_offshore: 0.20     # onshore-förstärkning UTÖVER DEA-inkluderad exportkabel
+      solar:         0.05     # nära last + hybrid-batteri (peak-shaving kapar middags-
+                              # injektionen → mindre djup förstärkning) → lägsta VRE-adder
+      nuclear:       0.04     # fast, nära last, hög CF → minimal förstärkning
+      gas:           0.04
+      battery:       0.05
+    zone_factor:              # lokaliserings-multiplikator (default 1.0); JUDGMENT
+      SE-N: 1.5               # SE1+SE2: NordSyd-stråket, långt till last
+      NO-N: 1.6               # mest avlägset, svagt nät
+      FI:   1.4               # nord, Aurora-begränsningar
+      SE-S: 1.0               # SE3+SE4: nära last (referens)
+      NO-S: 1.1               # nära last men fjord/terräng
+      DK:   0.9               # platt, tätt nät, nära kontinent
 
   nuclear:
     overnight_eur_per_w: 7.0

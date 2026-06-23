@@ -26,7 +26,9 @@ from nordpsa.network import (
     hydro_soc_initial_constraint,
     hydro_soc_terminal_pin_constraint,
     oc_budget_constraint,
+    grid_cost_objective,
     _annualized_cost,
+    _grid_capital_cost,
 )
 
 USD_TO_EUR = 0.926   # 1 USD ≈ 0.926 EUR (1 EUR ≈ 1.08 USD), 2026
@@ -34,7 +36,6 @@ VRE_CARRIERS = ("wind_onshore", "wind_offshore", "solar")
 
 PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
-LOGS_DIR    = Path(__file__).resolve().parents[1] / "logs"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "zones.yaml"
 
 
@@ -77,6 +78,38 @@ def make_vre_extendable(n, cfg: dict, zones: list, n_years: float,
             print(f"  → expanderbar: {name} (existing {existing:.0f} MW, "
                   f"overnight {tcfg['overnight_eur_per_w']:.2f} €/W, {cc})")
     return touched
+
+
+def report_grid_cost(n, cfg: dict, n_years: float) -> None:
+    """Post-solve nätkostnads-bokföring (--grid-cost): annualiserad nät-adder ×
+    tillförd kapacitet (p_nom_opt − p_nom_min) per kraftslag × zon. Ren
+    rapporteringspost ("egen buss" = bokföring), ingår redan i objektivet."""
+    ccfg = cfg["costs"]
+    r    = ccfg["discount_rate"]
+    fom  = ccfg["fom_fraction"]
+    rows = []
+    comps = [(n.generators, "carrier", "bus"), (n.storage_units, "carrier", "bus")]
+    for df, ckey, bkey in comps:
+        ext = df[df.p_nom_extendable] if "p_nom_extendable" in df else df.iloc[0:0]
+        for name, row in ext.iterrows():
+            ann_mw = _grid_capital_cost(row[ckey], row[bkey], ccfg, r, fom, n_years)
+            if ann_mw <= 0:
+                continue
+            added = float(row.p_nom_opt - row.p_nom_min)
+            if added <= 1e-6:
+                continue
+            rows.append((row[bkey], row[ckey], added, ann_mw * added))
+    print("\n=== NÄTKOSTNAD (kapital-adder, ⚠️ PLATSHÅLLAR-siffror) ===")
+    if not rows:
+        print("  (ingen tillförd extendable-kapacitet med nät-adder)")
+        return
+    rows.sort(key=lambda x: -x[3])
+    tot = 0.0
+    for zone, carrier, added, cost in rows:
+        tot += cost
+        print(f"  {zone:5s} {carrier:13s}  +{added/1e3:7.2f} GW  "
+              f"nätkostnad {cost/1e6:8.1f} M€/{n_years:.1f}år")
+    print(f"  {'TOTALT':5s} {'':13s}  {'':10s}  nätkostnad {tot/1e6:8.1f} M€/{n_years:.1f}år")
 
 
 def boost_onshore_capfac(profiles: "pd.DataFrame", increase: float) -> "pd.DataFrame":
@@ -575,6 +608,12 @@ def main() -> None:
                         help="Sätt expansionstak (p_nom_max, MW) för sol i ALLA zoner, "
                              "t.ex. '10000'. Override på default-taket (50 GW/zon). "
                              "Kräver expansion (sol extendable).")
+    parser.add_argument("--grid-cost", action="store_true",
+                        help="Aktivera nätkostnad som kapital-adder per kraftslag × zon "
+                             "(costs.grid i zones.yaml). Internaliserar att vind/sol långt "
+                             "från lasten drar mer nätutbyggnad per MW än kärnkraft nära. "
+                             "Default AV (capital_cost identisk med idag). ⚠️ grid-siffrorna "
+                             "är PLATSHÅLLARE tills de förankrats i källor (ENTSO-E TYNDP/NREL).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Bygg nätverket och skriv en komponent-sammanfattning "
                              "(kärnkraft m.m.), men SOLVE:a inte. För verifiering före körning.")
@@ -798,6 +837,15 @@ def main() -> None:
     if args.market_elasticity:
         cfg.setdefault("market_elasticity", {})["enabled"] = True
 
+    if args.grid_cost:
+        grd = cfg["costs"].setdefault("grid", {})
+        grd["active"] = True
+        zf = grd.get("zone_factor") or {}
+        print("  → NÄTKOSTNAD aktiv: djup nätförstärkning per kraftslag × zon, "
+              "INKREMENT-only (bara tillkommande effekt), exkl. KVV. €/W:")
+        for c, oc in (grd.get("cost_eur_per_w") or {}).items():
+            print(f"      {c:13s} {oc:.2f} €/W  (× zon-faktor {zf})")
+
     if args.nuclear_discount_rate:
         disc = {}
         for spec in args.nuclear_discount_rate:
@@ -898,6 +946,7 @@ def main() -> None:
     for spec in args.onshore_cap:       flags.append(f"onshorecap-{spec.replace(':','_')}")
     if args.onshore_lower != 1.0:       flags.append(f"onshorelow-{args.onshore_lower:g}")
     if args.solar_cap is not None:      flags.append(f"solarcap-{args.solar_cap:.0f}")
+    if args.grid_cost:                  flags.append("grid-cost")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
@@ -1003,6 +1052,15 @@ def main() -> None:
             extra_callbacks.append(
                 oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
 
+    # Nätkostnad (--grid-cost): egen objektiv-term på INKREMENTET för alla extendable
+    # enheter (inkl. ny kärnkraft/vind), exkl. KVV. I tvingat budgetläge går grid via
+    # OC-budgeten istället (kapital sunk i objektivet) → lägg ej till termen då.
+    _forced = bool(args.expand_vre) and (args.expand_budget_musd is not None
+                                         or args.expand_budget_meur is not None)
+    if args.grid_cost and not _forced:
+        n_years_grid = len(snapshots) * res / 8760.0
+        extra_callbacks.append(grid_cost_objective(cfg, n_years_grid))
+
     # Onshore-expansionstak per zon (override på default p_nom_max)
     for zone, cap in onshore_caps.items():
         name = f"{zone} wind_onshore"
@@ -1083,9 +1141,8 @@ def main() -> None:
         print("=== DRY-RUN klar (ingen solve) ===")
         return
 
-    # Solver-loggen hålls UTANFÖR results/ (logs/<label>_highs.log)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOGS_DIR / f"{label}_highs.log"
+    # Skapa resultatmappen i förväg så att loggfilen kan skrivas dit
+    log_path = RESULTS_DIR / label / "highs.log"
     (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
     write_run_meta(label, args, res, args.year, flag_str)
 
@@ -1098,6 +1155,10 @@ def main() -> None:
         sys.exit(1)
 
     save_results(n, label)
+
+    if args.grid_cost:
+        report_grid_cost(n, cfg, len(snapshots) * res / 8760.0)
+
     print("Klart!")
 
 

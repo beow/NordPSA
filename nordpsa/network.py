@@ -48,6 +48,28 @@ def _annualized_cost(overnight_eur_per_w: float, lifetime: int,
     return oc_mw * (_crf(lifetime, r) + fom_fraction)
 
 
+def _grid_capital_cost(carrier: str, zone: str, ccfg: dict, r: float,
+                       fom_default: float, n_years: float) -> float:
+    """Annualiserad nät-adder (EUR/MW × n_år) för byggd kapacitet av (carrier, zon).
+
+    REN OPTION (--grid-cost): returnerar 0.0 om costs.grid saknas, grid['active']
+    är False (default), eller kraftslaget saknar cost_eur_per_w → capital_cost blir
+    då identisk med dagens. Annars nät-overnight (€/W) annualiserad med nätets egen
+    livslängd/FOM × multiplikativ zon-faktor. Adderas på capital_cost för extendable
+    enheter; debiteras på p_nom_opt med fast p_nom_min → prissätter inkrementet.
+    """
+    g = ccfg.get("grid") or {}
+    if not g.get("active"):
+        return 0.0
+    oc = (g.get("cost_eur_per_w") or {}).get(carrier)
+    if not oc:
+        return 0.0
+    life = g.get("lifetime_years", 40)
+    gfom = g.get("fom_fraction", fom_default)
+    zfac = (g.get("zone_factor") or {}).get(zone, 1.0)
+    return _annualized_cost(oc, life, r, gfom) * zfac * n_years
+
+
 def build_network(
     cfg:                     dict,
     snapshots:               pd.DatetimeIndex,
@@ -227,6 +249,30 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame, cfg: dict | No
 NVE_INFLOW_ZONES = {"NO-N", "NO-S", "SE-N", "SE-S"}
 
 
+def _synth_ror_profile(inflow: pd.Series, frac: float, target_cf: float) -> pd.Series:
+    """Syntetisk run-of-river must-run-profil (MW) för zoner utan separat RoR-data.
+
+    RoR-energin = andel `frac` av inflödesenergin, formad efter avrinningen (RoR ∝
+    inflöde) men GLÄTTAD tills topp/medel ≤ 1/target_cf (energibevarande) så att
+    p_nom = profil.max() ger en realistisk RoR-CF ≈ target_cf. Speglar metoden i
+    scripts/synth_se_ror._smooth_to_cf (där fast på veckodata; här på snapshot-data).
+    Utan glättning skulle p_nom sättas av en enstaka vårflodstopp → orimligt låg CF
+    och för stor reduktion av reservoarturbinen.
+    """
+    base  = inflow.clip(lower=0.0) * frac
+    total = float(base.sum())
+    if total <= 0:
+        return base
+    ratio = 1.0 / target_cf
+    prof  = base
+    w, n_ = 1, len(base)
+    while prof.max() / max(prof.mean(), 1e-9) > ratio and w < n_ // 2:
+        w    = w * 2 + 1
+        prof = base.rolling(w, center=True, min_periods=1).mean()
+        prof = prof * (total / float(prof.sum()))   # bevara energin
+    return prof
+
+
 def _add_hydro(
     n:                    pypsa.Network,
     cfg:                  dict,
@@ -278,6 +324,43 @@ def _add_hydro(
                 peak_gamma=peak_gamma,
                 target_annual_twh=target_annual,
             )
+
+        # Syntetisk run-of-river-split för zoner utan separat NVE/synth-RoR-fil
+        # (t.ex. FI, som går via den parametriska grenen och därför aldrig nås av
+        # NVE-RoR-grenen ovan). hydro_ror_fraction = andel av ENERGIN (produktionen)
+        # som är icke-reglerbar strömkraft; formad efter avrinningen + glättad till
+        # realistisk CF (se _synth_ror_profile). Reservoaren får resten av energin
+        # ((1−frac)×inflöde) PLUS hela lagervolymen (p_nom×max_h bevaras när
+        # turbineffekten reduceras med RoR:ns p_nom). Speglar scripts/synth_se_ror.
+        ror_frac = zcfg.get("hydro_ror_fraction", 0.0)
+        if ror_frac > 0 and f"{zone} hydro_ror" not in n.generators.index:
+            ror_cf     = ccfg["hydro"].get("ror_target_cf", 0.5)
+            ror_series = _synth_ror_profile(inflow, ror_frac, ror_cf)
+            ror_p_nom  = float(ror_series.max())
+            if ror_p_nom > 1.0:
+                pu = (ror_series / ror_p_nom).clip(0, 1)
+                n.add(
+                    "Generator", f"{zone} hydro_ror",
+                    bus=zone,
+                    carrier="hydro",
+                    p_nom=ror_p_nom,
+                    p_nom_extendable=False,
+                    p_min_pu=pu,
+                    p_max_pu=pu,
+                    marginal_cost=ccfg["hydro"].get("vom_ror_eur_per_mwh", mc_default),
+                )
+                dt_h    = (snapshots[1] - snapshots[0]).total_seconds() / 3600
+                ror_twh = float(ror_series.sum()) * dt_h / 1e6
+                inflow  = (inflow - ror_series).clip(lower=0.0)  # reservoaren får resten
+                res_twh = float(inflow.sum()) * dt_h / 1e6
+                cap_mwh = p_nom * max_h
+                p_nom   = max(p_nom - ror_p_nom, 1.0)
+                max_h   = cap_mwh / p_nom
+                print(f"  → RoR-split {zone}: must-run {ror_p_nom:.0f} MW "
+                      f"(CF={float(ror_series.mean())/ror_p_nom:.2f}, {ror_twh:.1f} TWh = "
+                      f"{100*ror_twh/(ror_twh+res_twh):.0f}%); "
+                      f"reservoar {p_nom:.0f} MW / {p_nom*max_h/1e6:.1f} TWh, "
+                      f"inflöde {res_twh:.1f} TWh")
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True
@@ -1146,6 +1229,14 @@ def oc_budget_constraint(cfg: dict, zones, budget_eur: float, equality: bool = F
     """
     VRE   = {"wind_onshore", "wind_offshore", "solar"}
     zones = set(zones)
+    grd   = (cfg["costs"].get("grid") or {}) if (cfg["costs"].get("grid") or {}).get("active") else {}
+
+    def _grid_oc(carrier: str, zone: str) -> float:
+        """Nät-overnight (€/MW) för budgeten; 0 om --grid-cost ej aktiv."""
+        oc = (grd.get("cost_eur_per_w") or {}).get(carrier)
+        if not oc:
+            return 0.0
+        return oc * 1e6 * (grd.get("zone_factor") or {}).get(zone, 1.0)
 
     def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
         m     = n.model
@@ -1157,7 +1248,8 @@ def oc_budget_constraint(cfg: dict, zones, budget_eur: float, equality: bool = F
         gext = n.generators[n.generators.p_nom_extendable]
         for name, gen in gext.iterrows():
             if gen.bus in zones and gen.carrier in VRE:
-                oc = cfg["costs"][gen.carrier]["overnight_eur_per_w"] * 1e6
+                oc = cfg["costs"][gen.carrier]["overnight_eur_per_w"] * 1e6 \
+                     + _grid_oc(gen.carrier, gen.bus)
                 terms.append(oc * gp.sel({gdim: name}))
                 rhs += oc * float(gen.p_nom_min)        # flytta existing till RHS
 
@@ -1169,7 +1261,8 @@ def oc_budget_constraint(cfg: dict, zones, budget_eur: float, equality: bool = F
             for name, su in sext.iterrows():
                 if su.bus in zones and su.carrier == "battery":
                     oc = (bc["power_eur_per_kw"]
-                          + su.max_hours * bc["energy_eur_per_kwh"]) * 1e3
+                          + su.max_hours * bc["energy_eur_per_kwh"]) * 1e3 \
+                          + _grid_oc("battery", su.bus)
                     terms.append(oc * sp.sel({sdim: name}))
                     rhs += oc * float(su.p_nom_min)     # = 0
 
@@ -1188,6 +1281,61 @@ def oc_budget_constraint(cfg: dict, zones, budget_eur: float, equality: bool = F
         op = "=" if equality else "≤"
         print(f"  → OC-budget aktiv: Σ overnight×Δp_nom {op} {budget_eur/1e9:.2f} mdr€ "
               f"över {len(terms)} enheter i {', '.join(sorted(zones))}")
+
+    return _extra_functionality
+
+
+def grid_cost_objective(cfg: dict, n_years: float):
+    """extra_functionality-callback: nätkostnaden (--grid-cost) som EGEN objektiv-term
+    på INKREMENTET (p_nom_opt − p_nom_min) för alla EXTENDABLE generatorer + lager vars
+    carrier har en grid-kostnad i costs.grid.cost_eur_per_w (wind/sol/kärnkr/gas/batteri).
+
+    Befintlig kapacitet bär INGEN nätkostnad (golvet p_nom_min subtraheras → bara
+    tillkommande effekt prissätts). KVV exkluderas automatiskt (dess carriers — "heat chp"
+    m.fl. — saknas i grid-dicten → _grid_capital_cost returnerar 0). Separat från
+    capital_cost, som per modellkonvention debiteras på HELA p_nom_opt för teknikens egen
+    overnight; nätkostnaden följer en annan regel (bara inkrementet).
+
+    Implementation: hjälpvariabel grid_inc ≥ 0 med constraint grid_inc == p_nom − p_nom_min
+    (konstant RHS är tillåten i linopy-constraints; konstant i SJÄLVA objektivet är det inte,
+    därav hjälpvariabeln) → objektiv += Σ grid_i × grid_inc_i. Täcker även ny kärnkraft/vind
+    (--add-nuclear/--add-wind, carrier nuclear/wind_onshore) eftersom alla extendable enheter
+    itereras. Inaktiv (returnerar tyst) om costs.grid.active=False.
+    """
+    ccfg = cfg["costs"]
+    if not (ccfg.get("grid") or {}).get("active"):
+        return lambda n, snapshots: None
+    r   = ccfg["discount_rate"]
+    fom = ccfg["fom_fraction"]
+
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        m = n.model
+        for comp, vname in (("generators", "Generator-p_nom"),
+                            ("storage_units", "StorageUnit-p_nom")):
+            if vname not in m.variables:
+                continue
+            ext = getattr(n, comp)
+            ext = ext[ext.p_nom_extendable]
+            coeff, pmin = {}, {}
+            for name, row in ext.iterrows():
+                g = _grid_capital_cost(row.carrier, row.bus, ccfg, r, fom, n_years)
+                if g > 0:
+                    coeff[name] = g
+                    pmin[name]  = float(row.p_nom_min)
+            if not coeff:
+                continue
+            var   = m.variables[vname]
+            dim   = var.dims[0]
+            names = pd.Index(list(coeff), name=dim)
+            g_da    = xr.DataArray(pd.Series(coeff).reindex(names))
+            pmin_da = xr.DataArray(pd.Series(pmin).reindex(names))
+            inc = m.add_variables(lower=0.0, coords=[names], name=f"grid_inc_{comp}")
+            # grid_inc == p_nom − p_nom_min  (befintlig kapacitet → noll nätkostnad)
+            m.add_constraints(inc - var.sel({dim: names}) == -pmin_da,
+                              name=f"grid_inc_def_{comp}")
+            m.objective = m.objective + (g_da * inc).sum()
+            print(f"  → nätkostnad (inkrement-only) på {len(coeff)} extendable "
+                  f"{comp} ({', '.join(sorted({ext.at[k,'carrier'] for k in coeff}))})")
 
     return _extra_functionality
 
