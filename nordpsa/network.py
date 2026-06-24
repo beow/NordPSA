@@ -1010,34 +1010,48 @@ def _add_nuclear(
     syn_active   = bool(syn.get("active"))
     syn_existing = syn.get("existing", {}) or {}
     syn_params   = syn.get("params", {}) or {}
+    syn_fixed    = syn.get("fixed", {}) or {}           # {zon: [(n_react, mw_each), ...]} exogen fast
     min_frac     = float(syn_params.get("min_load_frac", NUCLEAR_MIN_FRACTION))
     extendable   = tcfg["extendable"] and not syn_active
 
     for zone, zcfg in cfg["zones"].items():
         p_nom_existing = zcfg.get("nuclear_p_nom_mw", 0)
-        if p_nom_existing == 0 and not extendable:
+        fixed_adds     = syn_fixed.get(zone, [])         # exogena fasta reaktorer (--add-nuclear-fixed)
+        fixed_mw       = sum(int(n_r) * float(mw) for n_r, mw in fixed_adds)
+        if p_nom_existing == 0 and fixed_mw == 0 and not extendable:
             continue
 
-        if syn_active and zone in syn_existing and p_nom_existing > 0:
-            sc    = syn_existing[zone]
-            p_max = availability_timeseries(
-                syn_params, snapshots, int(sc["n_reactors"]), seed=int(sc["seed"]),
-            )
-            print(f"  → befintlig kärnkraft {zone}: {p_nom_existing:.0f} MW, "
-                  f"{int(sc['n_reactors'])} reaktorer synth (seed {sc['seed']}), "
-                  f"realiserad CF={p_max.mean():.3f}")
+        if syn_active and (zone in syn_existing or fixed_mw > 0):
+            # Kombinerad heterogen flotta: befintliga (lika stora) + ev. nya fasta reaktorer.
+            # availability_timeseries effektviktar per reaktor → SvK-stil blandflotta i EN profil.
+            reactor_mw = []
+            if zone in syn_existing and p_nom_existing > 0:
+                sc   = syn_existing[zone]
+                n_ex = int(sc["n_reactors"]); seed = int(sc["seed"])
+                reactor_mw += [p_nom_existing / n_ex] * n_ex
+            else:
+                seed = int(syn_params.get("seed", 0))
+            for n_r, mw in fixed_adds:
+                reactor_mw += [float(mw)] * int(n_r)
+            p_max = availability_timeseries(syn_params, snapshots, reactor_mw, seed=seed)
             p_min = (p_max * min_frac).clip(lower=0)
+            fx = (f" + {sum(int(n) for n, _ in fixed_adds)}×fast à "
+                  f"{'/'.join(str(int(mw)) for _, mw in fixed_adds)} MW" if fixed_adds else "")
+            print(f"  → kärnkraft {zone}: {p_nom_existing + fixed_mw:.0f} MW "
+                  f"({len(reactor_mw)} reaktorer synth{fx}, seed {seed}), "
+                  f"realiserad CF={p_max.mean():.3f}")
         else:
             p_max = nuclear_profile[zone]
             p_min = (p_max * NUCLEAR_MIN_FRACTION).clip(lower=0)
 
-        p_nom_max = tcfg.get("p_nom_max_mw", np.inf)
+        p_nom_total = p_nom_existing + fixed_mw
+        p_nom_max   = max(tcfg.get("p_nom_max_mw", np.inf), p_nom_total)
         n.add(
             "Generator", f"{zone} nuclear",
             bus=zone,
             carrier="nuclear",
-            p_nom=p_nom_existing,
-            p_nom_min=p_nom_existing,
+            p_nom=p_nom_total,
+            p_nom_min=p_nom_total,
             p_nom_max=p_nom_max,
             p_nom_extendable=extendable,
             p_max_pu=p_max,

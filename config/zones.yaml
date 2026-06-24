@@ -417,6 +417,9 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
+    # Kontinentkablar (market_connections) — matchas på namn, ej zonpar
+    market_ntc_overrides:
+      - [DK DE, 4000]         # DK↔DE 2040 (Tabell 10; sannolikt i underkant); var 3244
     # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
     # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
     # extendable). I expansionsläge går befintlig flotta över till syntetisk profil
@@ -452,7 +455,8 @@ demand_scenarios:
         pnom_max_mw: {wind_onshore: 14376, wind_offshore: 16283, solar: 24000}
         pnom_min_mw: {wind_onshore:  7188, solar:  7104}   # SE-golv (install on 7092/sol 2778 → +~4,3 GW sol)
         battery: {p_nom_mw: 4500, hours: 2}
-        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny via --add-nuclear.
+        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny endogen via --add-nuclear,
+        # ny EXOGEN (SvK MM 1,5 GW) via --add-nuclear-fixed SE-S:3:500.
       # NO-N/NO-S kalibrerade mot Statnett "Medium forbruksutvikling" 2040 (ej SvK-split):
       # NO total 195 TWh = eSett-bas 138 + Δ56. Δ flat 28 (alm −5, kraftint +15, petrol +6,
       # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel

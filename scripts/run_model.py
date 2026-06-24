@@ -348,6 +348,13 @@ def apply_demand_scenario(cfg: dict, name: str,
             if link[0] == z0 and link[1] == z1 and link[2] != mw:
                 print(f"     NTC {z0}-{z1}: {link[2]} → {mw} MW (Tabell 10)")
                 link[2] = mw
+
+    # Kontinentkablar: matchas på connection-namn (market_connections = [namn, zon, mw, bzn])
+    for name, mw in scen.get("market_ntc_overrides", []):
+        for mc in cfg.get("market_connections", []):
+            if mc[0] == name and mc[2] != mw:
+                print(f"     Marknads-NTC {name}: {mc[2]} → {mw} MW (Tabell 10)")
+                mc[2] = mw
     return pnom_max, pnom_min
 
 
@@ -624,6 +631,12 @@ def main() -> None:
                              "reaktorstorlek ≈ p_nom_opt/N), tak N×1500 MW. Befintlig flotta "
                              "finns med by default och byter då till syntetisk profil "
                              "(config.nuclear_synth_existing). Kan anges flera gånger.")
+    parser.add_argument("--add-nuclear-fixed", nargs="+", action="extend", default=[], metavar="ZON:N:MW",
+                        help="Lägg till N NYA EXOGENA (fasta, ej extendable) reaktorer à MW i en zon, "
+                             "t.ex. 'SE-S:3:500' = +1,5 GW (SvK MM 2040). Must-run syntetisk profil "
+                             "SAMMANVÄVD med befintliga flottan (heterogen effektviktad reaktorlista) → "
+                             "modellen får inte välja bort den. Aktiverar syntetiskt läge. "
+                             "Kan anges flera gånger.")
     parser.add_argument("--nuclear-discount-rate", nargs="+", action="extend", default=[], metavar="ZON:RATE",
                         help="Egen diskontoränta för NY kärnkraft (--add-nuclear) i en zon, "
                              "t.ex. 'SE-N:0.03 SE-S:0.03'. Påverkar bara den extendable expansionens "
@@ -730,6 +743,17 @@ def main() -> None:
                   f"N nya reaktorer + RNG-seed; syntetisk, extendable)")
             sys.exit(1)
         extra_nuclear.append((parts[0].strip(), int(parts[1]), int(parts[2])))
+
+    # --add-nuclear-fixed ZON:N:MW → N fasta (exogena) reaktorer à MW, must-run, sammanvävda
+    # med befintliga flottans syntetiska profil (heterogen reaktorlista). {zon: [(N, MW), ...]}.
+    fixed_nuclear: dict = {}
+    for spec in args.add_nuclear_fixed:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            print(f"Ogiltigt --add-nuclear-fixed format: '{spec}' (förväntat ZON:N:MW — "
+                  f"N fasta reaktorer à MW, exogen must-run)")
+            sys.exit(1)
+        fixed_nuclear.setdefault(parts[0].strip(), []).append((int(parts[1]), float(parts[2])))
 
     extra_wind = []
     for spec in args.add_wind:
@@ -937,6 +961,7 @@ def main() -> None:
     if args.onwind_capfac_increase:     flags.append(f"onwind-cf+{args.onwind_capfac_increase:.2f}")
     if args.offwind_capfac_increase:    flags.append(f"offwind-cf+{args.offwind_capfac_increase:.2f}")
     for spec in args.add_nuclear:       flags.append(f"nuclear-{spec.replace(':','_')}")
+    for spec in args.add_nuclear_fixed: flags.append(f"nucfix-{spec.replace(':','_')}")
     for spec in args.nuclear_discount_rate: flags.append(f"nucdisc-{spec.replace(':','_')}")
     for spec in args.offwind_discount_rate: flags.append(f"offdisc-{spec.replace(':','_')}")
     for spec in args.add_wind:          flags.append(f"wind-{spec.replace(':','_')}")
@@ -1006,12 +1031,14 @@ def main() -> None:
     synthetic_nuclear = {
         "existing": cfg.get("nuclear_synth_existing", {}),
         "params":   cfg.get("nuclear_synth", {}),
-        "active":   bool(extra_nuclear),
+        "active":   bool(extra_nuclear or fixed_nuclear),
+        "fixed":    fixed_nuclear,
     }
-    if extra_nuclear:
+    if extra_nuclear or fixed_nuclear:
         ex = cfg.get("nuclear_synth_existing", {})
         print(f"Kärnkraft EXPANSIONSLÄGE: befintlig flotta syntetisk {list(ex)}; "
-              f"nya reaktorer {[(z, n, s) for z, n, s in extra_nuclear]} "
+              f"nya extendable {[(z, n, s) for z, n, s in extra_nuclear]}; "
+              f"nya FASTA {dict(fixed_nuclear)} "
               f"(target_cf={synthetic_nuclear['params'].get('target_cf', 0.85)})")
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
