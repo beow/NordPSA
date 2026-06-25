@@ -20,18 +20,29 @@ REF_LABEL = globals().get('LABEL2', None)   # referenskörning (delad global), a
 
 COUNTRY_MAP = {'SE-N': 'SE', 'SE-S': 'SE', 'NO-N': 'NO', 'NO-S': 'NO', 'DK': 'DK', 'FI': 'FI'}
 COUNTRIES   = ['SE', 'NO', 'DK', 'FI', 'Norden']
+# SOURCES = produktionsposter (mäts var för sig; 'hydro'+'ror' slås ihop till 'vatten'
+# i visningen, 'slack' ingår i prod_twh men visas ej som egen rad).
 SOURCES     = ['hydro', 'ror', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas', 'slack']
-SHOW_ROWS   = SOURCES + ['prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
-                         'batt_net', 'kont_export', 'intern_export']
+# Visningsrader: vatten (= hydro+ror), produktion, demand, KONSUMTION TOTAL (= demand-summa), balans.
+SHOW_ROWS   = ['vatten', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
+               'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
+               'batt_net', 'spill', 'kont_export', 'intern_export', 'kons_total']
 ROW_LABELS  = {
-    'hydro': 'Vattenkraft, magasin', 'ror': 'Vattenkraft, älv (RoR)',
+    'vatten': 'Vattenkraft',
     'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
-    'wind_offshore': 'Vind offshore', 'solar': 'Sol', 'thermal': 'Termisk (inkl KVV-el)',
-    'gas': 'Gas', 'slack': 'Slack (lastskärn.)',
-    'prod_twh': 'PRODUKTION TOTALT', 'load_twh': 'Last (konsumtion)', 'h2_elec': 'H2-elektrolys',
-    'heat_elec': 'Värme-el (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
-    'kont_export': 'Kont. export', 'intern_export': 'Intern export (NTC)',
+    'wind_offshore': 'Vind offshore', 'solar': 'Sol',
+    'thermal': 'Termisk',
+    'gas': 'Gas',
+    'prod_twh': 'PRODUKTION TOTAL', 'load_twh': 'Last', 'h2_elec': 'H2-elektrolys',
+    'heat_elec': 'Värme (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
+    'spill': 'Spill',
+    'kont_export': 'Kontinental export', 'intern_export': 'Norden-intern export',
+    'kons_total': 'KONSUMTION TOTAL',
 }
+# Sänk-/förbruknings-rader visas NEGATIVA (utflöde) i tabellen. Rent KOSMETISKT —
+# balanskontrollen nedan använder de RÅA (positiva) värdena via BALANCE_SIGNS.
+DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
+               'kont_export', 'intern_export', 'spill', 'kons_total'}
 
 
 def country_balance(res_label):
@@ -53,6 +64,11 @@ def country_balance(res_label):
            if nn.links.at[l, 'bus0'] in ZONES and nn.links.at[l, 'bus1'] in ZONES]
     # Batteri-storage (ej hydro) per buss
     batt = nn.storage_units[nn.storage_units.carrier != 'hydro'] if len(nn.storage_units) else nn.storage_units
+    # VRE-tillgänglighet (p_max_pu × p_nom_opt) för curtailment/spill-beräkning.
+    VRE_CARRIERS = {'wind_onshore', 'wind_offshore', 'solar'}
+    pmax = nn.generators_t.p_max_pu.copy()
+    pmax.index = pd.to_datetime(pmax.index).tz_localize(None)
+    pmax = pmax.reindex(disp.index)
 
     def zmkt(zone):
         cols = [g for g in disp.columns if g in nn.generators.index
@@ -62,6 +78,7 @@ def country_balance(res_label):
     rows = []
     for zone in ZONES:
         r = {'country': COUNTRY_MAP[zone]}
+        curt = zero.copy()                       # ackumulerad VRE-curtailment (→ spill-raden)
         for c in SOURCES:
             if c == 'hydro':
                 # Magasin (StorageUnit); RoR-generatorerna redovisas separat som 'ror'.
@@ -75,8 +92,18 @@ def country_balance(res_label):
                 # 'nuclear exp', wind_onshore + wind_new) — ej bara exakt '{zon} {c}'.
                 ccols = [g for g in disp.columns if g in nn.generators.index
                          and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == c]
-                s = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero   # slack ingår här
+                disp_c = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero   # slack ingår här
+                if c in VRE_CARRIERS and ccols:
+                    # VRE redovisas som TILLGÄNGLIGT (p_max_pu × p_nom_opt); skillnaden
+                    # mot dispatchat = curtailment → ackumuleras till spill-raden.
+                    avail = sum((pmax[g] * nn.generators.at[g, 'p_nom_opt']
+                                 for g in ccols if g in pmax.columns), zero)
+                    curt = curt + (avail - disp_c).clip(lower=0)
+                    s = avail
+                else:
+                    s = disp_c
             r[c] = twh(s)
+        r['spill']     = twh(curt)
         # KVV-el (bakpress-länk: bränsle×η_el → AC) läggs på thermal-raden (matchar eSett).
         eta_el = float(((((cfg.get('heat') or {}).get('zones') or {}).get(zone, {}).get('chp')) or {}).get('eta_el', 0.0))
         r['thermal'] += twh(flw.get(f'{zone} chp', zero).clip(lower=0)) * eta_el
@@ -106,7 +133,12 @@ def country_balance(res_label):
         rows.append(r)
 
     d = pd.DataFrame(rows)
-    d['prod_twh'] = d[SOURCES].sum(axis=1)        # produktion inkl slack
+    d['prod_twh']   = d[SOURCES].sum(axis=1)        # produktion inkl slack
+    d['vatten']     = d['hydro'] + d['ror']         # magasin + älv (RoR) i en post
+    # KONSUMTION TOTAL = inhemsk last + nettoexport (export = utflöde = last) − batteri (netto ut).
+    # = PRODUKTION TOTALT vid balans → de två totalraderna möts.
+    d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec']
+                       + d['kont_export'] + d['intern_export'] + d['spill'] - d['batt_net'])
     cyr = d.groupby('country')[SHOW_ROWS].sum()
     cyr.loc['Norden'] = cyr.sum()
     return cyr
@@ -122,13 +154,16 @@ data = {(lab, c): {row: (bal[lab].loc[c, row] if c in bal[lab].index else 0.0) f
         for lab in labels for c in COUNTRIES}
 
 tbl = pd.DataFrame(data, columns=cols)
+# Visa förbruknings-/sänk-rader negativa (utflöde); råvärdena i `data` (positiva)
+# används oförändrade i balanskontrollen nedan.
+tbl = tbl.mul(pd.Series({r: (-1 if r in DISPLAY_NEG else 1) for r in SHOW_ROWS}), axis=0)
 tbl.index = [ROW_LABELS[r] for r in SHOW_ROWS]
-tbl.index.name = 'TWh/år (medel 23-25)'
+tbl.index.name = 'TWh/år (medel)'
 
 # Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
 #   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
 BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'load_twh': -1, 'h2_elec': -1,
-                 'heat_elec': -1, 'ev_elec': -1, 'kont_export': -1, 'intern_export': -1}
+                 'heat_elec': -1, 'ev_elec': -1, 'spill': -1, 'kont_export': -1, 'intern_export': -1}
 bal_vals = [sum(sgn * data[col][row] for row, sgn in BALANCE_SIGNS.items()) for col in cols]
 bal_vals = [0.0 if abs(v) < 1e-6 else v for v in bal_vals]
 balance  = pd.DataFrame([bal_vals], index=['BALANS (bör ≈ 0)'], columns=cols)
