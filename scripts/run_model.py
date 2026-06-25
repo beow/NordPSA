@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pypsa
 import yaml
 
 # pandas 2.x använder Arrow-strängar som standard; PyPSA/xarray stöder inte det
@@ -523,6 +524,97 @@ def write_run_meta(label: str, args, res: int, year, flag_str: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def apply_dispatch_replay(parser, args):
+    """--dispatch LABEL: återspela LABEL:s scenario-argv (ur run_meta.txt) så att ett
+    IDENTISKT system byggs (samma komponentnamn), men låt den nya körningens
+    --resolution/--output/--desc/--year gälla. Kapaciteterna fryses sedan till LABEL:s
+    p_nom_opt efter build_network (freeze_capacities_from). Expansionsläget behålls med
+    flit — frysningen (extendable=False) gör körningen till ren dispatch."""
+    label = args.dispatch
+    meta = RESULTS_DIR / label / "run_meta.txt"
+    if not meta.exists():
+        parser.error(f"--dispatch: hittar inte {meta}")
+    argv_line = next((l for l in meta.read_text().splitlines() if l.startswith("argv:")), None)
+    if argv_line is None:
+        parser.error(f"--dispatch: ingen argv-rad i {meta}")
+    toks = argv_line.split(":", 1)[1].split()
+    if toks and toks[0].endswith(".py"):
+        toks = toks[1:]
+    if "--desc" in toks:                      # ociterad fritext sist → klipp bort
+        toks = toks[:toks.index("--desc")]
+    drop = {"--output", "--resolution", "--dispatch"}   # enkelvärdes-flaggor som ersätts
+    cleaned, i = [], 0
+    while i < len(toks):
+        if toks[i] in drop:
+            i += 2
+            continue
+        cleaned.append(toks[i]); i += 1
+    base = parser.parse_args(cleaned)
+    base.resolution = args.resolution or 1    # default 1h för omdispatch
+    base.output     = args.output
+    base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
+    base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
+    base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
+    if args.year is not None:
+        base.year = args.year
+    base.dispatch = label
+    print(f"--dispatch: återspelar {label}:s argv → {base.resolution}h; "
+          f"kapaciteter fryses till {label}:s p_nom_opt efter bygget")
+    return base
+
+
+def freeze_capacities_from(n, label):
+    """Sätt p_nom = p_nom_opt (och extendable=False) på alla komponenter (gen/lager/länkar)
+    som matchar namn i results/LABEL/network.nc → fryser kapaciteten till den körningens
+    optimum. Flexibilitet (dispatch, lager-SOC, handel) optimeras fortfarande fritt."""
+    src = pypsa.Network()
+    src.import_from_netcdf(RESULTS_DIR / label / "network.nc")
+    print(f"  → fryser kapaciteter till {label}:s p_nom_opt:")
+    for cname, ndf, sdf in (("generatorer", n.generators, src.generators),
+                            ("lager",       n.storage_units, src.storage_units),
+                            ("länkar",      n.links, src.links)):
+        if "p_nom_opt" not in sdf.columns or ndf.empty:
+            continue
+        common = [x for x in ndf.index if x in sdf.index]
+        ndf.loc[common, "p_nom"] = sdf.loc[common, "p_nom_opt"].astype(float)
+        if "p_nom_extendable" in ndf.columns:
+            ndf.loc[common, "p_nom_extendable"] = False
+        miss = [x for x in ndf.index if x not in sdf.index]
+        msg = f"      {cname}: {len(common)} frysta"
+        if miss:
+            msg += f"  ⚠️ {len(miss)} saknas i {label} ({miss[:3]})"
+        print(msg)
+
+
+def apply_low_hydro(n, factor, year=2024):
+    """Torrårs-scenario: skala ett års hydro NEDÅT med factor — både reservoar-inflöde
+    (storage_units_t.inflow) och RoR (must-run-generatorer, carrier 'hydro': p_max_pu &
+    p_min_pu). Övriga år orörda. factor<1 = torrare."""
+    dt  = (n.snapshots[1] - n.snapshots[0]).total_seconds() / 3600
+    inf = n.storage_units_t.inflow
+    m_inf = inf.index.year == year
+    if not m_inf.any():
+        print(f"  → --low-hydro: år {year} ingår ej i perioden — ingen ändring")
+        return
+    before = float(inf.loc[m_inf].to_numpy().sum()) * dt / 1e6
+    inf.loc[m_inf] *= factor
+    ror = [g for g in n.generators.index if n.generators.at[g, "carrier"] == "hydro"]
+    static = []
+    for g in ror:
+        hit = False
+        for tbl in (n.generators_t.p_max_pu, n.generators_t.p_min_pu):
+            if g in tbl.columns:
+                tbl.loc[tbl.index.year == year, g] *= factor
+                hit = True
+        if not hit:
+            static.append(g)
+    msg = (f"  → --low-hydro {factor:g}: {year} reservoar-inflöde {before:.1f} → "
+           f"{before * factor:.1f} TWh + RoR ×{factor:g} ({len(ror) - len(static)} profil-gen)")
+    if static:
+        msg += f"  ⚠️ {len(static)} RoR-gen har statisk p_max_pu, ej skalade ({static[:3]})"
+    print(msg)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--resolution", type=int, default=None,
@@ -536,6 +628,18 @@ def main() -> None:
                         help="Kort fritext om körningens SYFTE (t.ex. 'kandidat för "
                              "dispatch-baseline med värme och vätgaslast'). Sparas i "
                              "results/<output>/run_meta.txt.")
+    parser.add_argument("--dispatch", default=None, metavar="LABEL",
+                        help="OMDISPATCH-läge: bygg om en tidigare körnings system vid annan "
+                             "upplösning och LÅS alla kapaciteter till dess p_nom_opt. Återspelar "
+                             "LABEL:s scenario-argv (results/LABEL/run_meta.txt) men låter den NYA "
+                             "körningens --resolution/--output/--desc/--year gälla. Flexibiliteter "
+                             "(hydro, batteri, handel) optimeras fritt. T.ex. expansion 3h → "
+                             "omdispatch 1h: '--dispatch run164_... --resolution 1 --output run167_...'.")
+    parser.add_argument("--low-hydro", type=float, default=None, metavar="FACTOR",
+                        help="Torrårs-scenario: skala 2024 års hydro NEDÅT med FACTOR (t.ex. 0.6 "
+                             "= 60%% av normalt = −40%%). Påverkar både reservoar-inflöde och RoR "
+                             "(must-run). Andra år orörda. Tydligast effekt i en --year 2024-körning "
+                             "(cyklisk SOC buffrar i fleråriga). Realistiskt torrår ≈ 0.6–0.7.")
     parser.add_argument("--extra-load", type=float, default=0.0,
                         help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
     parser.add_argument("--no-expansion", action="store_true",
@@ -692,6 +796,9 @@ def main() -> None:
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
                              "Appliceras efter --effective-ntc om båda anges.")
     args = parser.parse_args()
+
+    if args.dispatch:                          # återspela källkörningens system-argv
+        args = apply_dispatch_replay(parser, args)
 
     soc_pin_start = {}   # zon → start-fraktion (→ soc_initial_override)
     soc_pin_end = {}     # zon → slut-fraktion (→ terminal-pin callback)
@@ -941,6 +1048,8 @@ def main() -> None:
                   f"{len(cfg.get('market_connections', []))} kablar")
 
     flags = []
+    if args.dispatch:                   flags.append(f"dispatch-{args.dispatch}")
+    if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     if args.cost_scenario:              flags.append(f"cost-{args.cost_scenario}")
     if args.demand_scenario:            flags.append(f"demand-{args.demand_scenario}")
@@ -1053,6 +1162,9 @@ def main() -> None:
                       hydrogen_overrides=hydrogen_overrides or None,
                       ev_overrides=ev_overrides or None)
 
+    if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt
+        apply_low_hydro(n, args.low_hydro)
+
     # Riktad VRE-expansion + OC-budget (bara angivna zoner, oavsett --no-expansion)
     extra_callbacks = []
     if args.expand_vre:
@@ -1153,6 +1265,9 @@ def main() -> None:
             n.generators.at[name, "p_nom_max"] = floor
         print(f"  → golv {zone} {carrier}: p_nom_min = {floor:.0f} MW "
               f"(installerat {existing:.0f}{' — golv binder, +%.0f MW' % (floor-existing) if floor>existing else ''})")
+
+    if args.dispatch:                          # frys alla kapaciteter till källkörningens p_nom_opt
+        freeze_capacities_from(n, args.dispatch)
 
     if args.dry_run:
         nuc = n.generators[n.generators.carrier == "nuclear"]
