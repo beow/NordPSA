@@ -888,6 +888,21 @@ def _add_ev(n: pypsa.Network, cfg: dict, ev_profiles, ev_overrides,
     flex_frac = float(ecfg.get("flex_fraction", 0.5))
     gwh_twh   = float(ecfg.get("flex_battery_gwh_per_twh", 12.0))
     chg_h     = float(ecfg.get("charge_hours", 10.0))
+    soc_floor = float(ecfg.get("morning_soc_floor", 0.0))   # SOC-golv kl morning_soc_hour
+    floor_h   = int(ecfg.get("morning_soc_hour", 6))
+
+    # Morgon-SOC-golv: e_min_pu = soc_floor på snapshots där timmen = floor_h, annars 0.
+    # Tvingar reservoaren körklar varje morgon → bryter perfekt-framsyn-flerdygnscoast
+    # (med 10h-laddtak måste påfyllnaden börja kvällen innan; nattligt mönster faller ut).
+    # Ingen V2G → SOC faller bara via körning, så inget golv övriga timmar behövs.
+    emin_morning = None
+    if soc_floor > 0:
+        hours = pd.DatetimeIndex(snapshots).hour
+        emin_morning = pd.Series(0.0, index=snapshots)
+        emin_morning[hours == floor_h] = soc_floor
+        if not (hours == floor_h).any():
+            print(f"  Varning: EV morgon-SOC-golv {soc_floor:g} satt men ingen snapshot "
+                  f"vid kl {floor_h:02d} (upplösning?) — golvet binder aldrig")
 
     for car in ("EV battery", "EV charger", "EV slack", "EV inflex"):
         if car not in n.carriers.index:
@@ -925,18 +940,21 @@ def _add_ev(n: pypsa.Network, cfg: dict, ev_profiles, ev_overrides,
 
             evbus = f"{zone} EV {c}"
             n.add("Bus", evbus, carrier="EV battery")
-            # SvK räknar grid-side förbrukning → η=1 (laddförluster ingår i annual_mwh);
-            # ingen e_min_pu/avail → SOC fri [0,1], laddning flyttas till billigaste timmarna.
+            # SvK räknar grid-side förbrukning → η=1 (laddförluster ingår i annual_mwh).
+            # SOC fri [0,1] utom morgon-SOC-golvet (e_min_pu kl floor_h) som tvingar
+            # körklar reservoar varje morgon; laddning flyttas annars till billigaste timmar.
+            store_kw = {} if emin_morning is None else {"e_min_pu": emin_morning}
             n.add("Store", f"{zone} EV {c} store", bus=evbus, carrier="EV battery",
-                  e_nom=e_nom, e_cyclic=True)
+                  e_nom=e_nom, e_cyclic=True, **store_kw)
             n.add("Link", f"{zone} EV {c} charger", bus0=zone, bus1=evbus,
                   carrier="EV charger", efficiency=1.0, p_nom=p_chg, marginal_cost=0.01)
             n.add("Load", f"{zone} EV {c} drive", bus=evbus, p_set=drive)
             n.add("Generator", f"{zone} EV {c} slack", bus=evbus, carrier="EV slack",
                   p_nom=1e6, marginal_cost=mc_slack)
+            floor_txt = f", morgongolv {soc_floor:.0%}@{floor_h:02d}h" if emin_morning is not None else ""
             print(f"  → EV {zone}/{c} (SvK): {n_veh:.0f} fordon, E={e_tot*1e3:.0f} GWh/år, "
                   f"flex {flex_frac:.0%} → batteri {e_nom/1e3:.0f} GWh, laddtak {p_chg:.0f} MW "
-                  f"({chg_h:.0f}h); oflex-last {e_inflex*1e3:.0f} GWh/år")
+                  f"({chg_h:.0f}h){floor_txt}; oflex-last {e_inflex*1e3:.0f} GWh/år")
 
 
 def _add_ev_fleet(n: pypsa.Network, ecfg: dict, ev_profiles, ev_overrides,

@@ -277,7 +277,7 @@ def apply_cost_scenario(cfg: dict, name: str) -> None:
 
 def apply_demand_scenario(cfg: dict, name: str,
                           hydrogen_overrides: dict, ev_overrides: dict,
-                          batteries: list) -> dict:
+                          batteries: list, scenario_battery: tuple | None = None) -> dict:
     """Adderar ett efterfrågescenario (demand_scenarios i zones.yaml) ovanpå eSett-basen.
 
     Muterar in-place: cfg['additional_load_mw'] (per zon), hydrogen_overrides,
@@ -301,6 +301,7 @@ def apply_demand_scenario(cfg: dict, name: str,
         print("     kärnkraft EXOGEN (costs.nuclear.extendable=False — ingen endogen expansion)")
     pnom_max: dict = {}
     pnom_min: dict = {}
+    scen_bats: list = []          # (zon, p_nom_mw, hours) — appendas (ev. omskalat) efter loopen
     cfg.setdefault("additional_load_mw", {})
     for zone, zc in scen.get("zones", {}).items():
         extra = float(zc.get("extra_load_mw", 0.0))
@@ -330,8 +331,9 @@ def apply_demand_scenario(cfg: dict, name: str,
         bat = zc.get("battery")
         bat_txt = ""
         if bat:                                              # exogent fast batteri (SvK storskaligt)
-            batteries.append((zone, float(bat["p_nom_mw"]), float(bat.get("hours", 2)), False))
-            bat_txt = f", batteri {bat['p_nom_mw']:.0f} MW/{bat.get('hours', 2)}h"
+            scen_bats.append((zone, float(bat["p_nom_mw"]), float(bat.get("hours", 2))))
+            if scenario_battery is None:                     # annars visas override-summa efter loopen
+                bat_txt = f", batteri {bat['p_nom_mw']:.0f} MW/{bat.get('hours', 2)}h"
 
         nuc = zc.get("nuclear")
         nuc_txt = ""
@@ -343,6 +345,21 @@ def apply_demand_scenario(cfg: dict, name: str,
         print(f"     {zone:<5} +{extra:6.0f} MW last, H2 {h2dem:.0f} MW, "
               f"EV {cars/1e6:.1f}M bilar, tak {{{', '.join(f'{c}:{int(p)}' for (z,c),p in pnom_max.items() if z==zone)}}}"
               f"{nuc_txt}{bat_txt}")
+
+    # Exogena scenariobatterier: as-is, eller omskalade till total GW @ HOURS (--scenario-battery)
+    if scen_bats:
+        if scenario_battery is not None:
+            gw, hours = scenario_battery
+            tot = sum(p for _, p, _ in scen_bats)
+            scale = (gw * 1e3) / tot if tot > 0 else 0.0
+            for z, p, _h in scen_bats:
+                batteries.append((z, p * scale, hours, False))
+            zsum = ", ".join(f"{z} {p*scale/1e3:.2f}" for z, p, _h in scen_bats)
+            print(f"     batteri-OVERRIDE: {tot/1e3:.1f} GW → {gw:.1f} GW @ {hours:.0f}h "
+                  f"(samma zonandel: {zsum} GW)")
+        else:
+            for z, p, h in scen_bats:
+                batteries.append((z, p, h, False))
 
     for z0, z1, mw in scen.get("ntc_overrides", []):
         for link in cfg.get("links", []):
@@ -682,6 +699,10 @@ def main() -> None:
                              "expanderbart 4h-batteri i VARJE zon (modellen optimerar effekten). "
                              "Med zoner (t.ex. '4h SE-S:5000 SE-N:2000'): fasta storlekar i de "
                              "angivna zonerna, 0 i övriga. Varaktigheten är fast (StorageUnit).")
+    parser.add_argument("--scenario-battery", default=None, metavar="GW:HOURS",
+                        help="Skala om efterfrågescenariots exogena batterier till total GW @ HOURS "
+                             "(behåller zonfördelningen). T.ex. '25:4' = 25 GW 4h i stället för "
+                             "scenariots 12 GW 2h. Kräver --demand-scenario.")
     parser.add_argument("--expand-vre", action="append", default=[], metavar="ZON",
                         help="Gör wind_onshore/wind_offshore/solar i ZON investerbara "
                              "(oavsett --no-expansion). Kan anges flera gånger. Kombinera "
@@ -953,10 +974,21 @@ def main() -> None:
     if args.cost_scenario:
         apply_cost_scenario(cfg, args.cost_scenario)
 
+    scenario_battery = None
+    if args.scenario_battery:
+        try:
+            _gw, _h = args.scenario_battery.split(":")
+            scenario_battery = (float(_gw), float(_h))
+        except ValueError:
+            raise SystemExit(f"Ogiltigt --scenario-battery '{args.scenario_battery}' (förväntat GW:HOURS)")
+        if not args.demand_scenario:
+            raise SystemExit("--scenario-battery kräver --demand-scenario")
+
     demand_pnom_max, demand_pnom_min = {}, {}
     if args.demand_scenario:
         demand_pnom_max, demand_pnom_min = apply_demand_scenario(
-            cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries)
+            cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries,
+            scenario_battery=scenario_battery)
 
     if args.no_market:
         cfg["market_connections"] = []
@@ -1064,6 +1096,7 @@ def main() -> None:
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
     if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
+    if args.scenario_battery:           flags.append(f"scenbatt-{args.scenario_battery.replace(':','_')}")
     for z in args.expand_vre:           flags.append(f"expand-vre-{z}")
     if args.expand_budget_musd:         flags.append(f"oc-budget-{args.expand_budget_musd:.0f}musd")
     if args.expand_budget_meur:         flags.append(f"oc-budget-{args.expand_budget_meur:.0f}meur")

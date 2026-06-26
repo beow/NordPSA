@@ -173,8 +173,10 @@ ev:
   enabled: false
   mode: svk                         # svk = SvK-formulering (flex/oflex-split); fleet = gammal per-fordon-modell
   flex_fraction: 0.5                # andel av förbrukningen som är flyttbar (SvK: hälften laddar flexibelt)
-  flex_battery_gwh_per_twh: 12      # batterikapacitet per FLYTTBAR TWh (SvK: 12 GWh/TWh fleet-statistik)
+  flex_battery_gwh_per_twh: 8.48    # LMA26 MM 2040: flotta 375 GWh, hälften flex = 187,5 GWh / 22,1 flex-TWh (var 12 → gav 265 GWh, +41% för högt)
   charge_hours: 10                  # SvK: laddtid → flex-laddeffekt = flexbatteri / charge_hours
+  morning_soc_floor: 0.7            # SOC-golv (e_min_pu) kl morning_soc_hour → tvingar daglig laddning
+  morning_soc_hour: 6               # bryter perfekt-framsyn-flerdygnscoast (0 = inget golv)
   slack_eur_per_mwh: 3000           # omött mobilitet (sista utväg)
   classes:
     # annual_mwh används i båda lägen (E_tot = antal × annual_mwh). battery_kwh/charger_kw
