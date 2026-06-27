@@ -812,6 +812,10 @@ def main() -> None:
                              "FAST must-run-block om GW (totala toppen). Must-run-termiken reduceras "
                              "med share_of_thermal som i heat-läget; borttagen termik-form skalas till "
                              "GW. Snabbare LP. Ömsesidigt uteslutande med --add-heat.")
+    parser.add_argument("--no-tax-heatpower", action="store_true",
+                        help="Nollställ energiskatten (heat.el_tax_eur_per_mwh) på FV-elektrifieringen "
+                             "(VP + el-panna) → marginalkostnad = bara VOM. Kräver --add-heat. "
+                             "Isolerar skattens effekt på elektrifieringsgrad/priser mot baseline.")
     parser.add_argument("--market-scale", default=None, metavar="FACTOR|ZON:F,...",
                         help="Skala kontinentkablars kapacitet. Enskild faktor för alla "
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
@@ -1035,10 +1039,17 @@ def main() -> None:
         parser.error("--chp-fixed-gw och --add-heat är ömsesidigt uteslutande "
                      "(KVV-fast kopplar bort värmebussen).")
 
+    if args.no_tax_heatpower and not args.add_heat:
+        parser.error("--no-tax-heatpower kräver --add-heat (skatten sitter på värmebussens VP/el-panna).")
+
     if args.add_heat:
         cfg.setdefault("heat", {})["enabled"] = True
         if args.heat_store_ext:
             cfg["heat"]["store_extendable"] = True
+        if args.no_tax_heatpower:
+            old_tax = float(cfg["heat"].get("el_tax_eur_per_mwh", 0.0))
+            cfg["heat"]["el_tax_eur_per_mwh"] = 0.0
+            print(f"  → elskatt på VP/el-panna nollställd ({old_tax:g} → 0 €/MWh)")
         print(f"  → fjärrvärmesektor aktiv"
               + (" (värmelager extendable mot TES-kostnad)" if args.heat_store_ext else ""))
 
@@ -1090,6 +1101,7 @@ def main() -> None:
     if args.effective_ntc:              flags.append("effective-ntc")
     if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
+    if args.no_tax_heatpower:           flags.append("no-tax-heatpower")
     if args.chp_fixed_gw is not None:   flags.append(f"chpfixed-{args.chp_fixed_gw:g}gw")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll:                       flags.append("voll")
