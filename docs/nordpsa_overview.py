@@ -49,7 +49,7 @@ COUNTRY_MAP = {"SE-N": "SE", "SE-S": "SE", "NO-N": "NO", "NO-S": "NO", "DK": "DK
 COUNTRIES   = ["SE", "NO", "DK", "FI", "Norden"]
 SOURCES     = ["hydro", "ror", "nuclear", "wind_onshore", "wind_offshore", "solar", "thermal", "gas", "slack"]
 SHOW_ROWS   = SOURCES + ["prod_twh", "load_twh", "h2_elec", "heat_elec", "ev_elec",
-                         "batt_net", "kont_export", "intern_export"]
+                         "batt_net", "spill", "kont_export", "intern_export", "kons_total"]
 ROW_LABELS  = {
     "hydro": "Vattenkraft, magasin", "ror": "Vattenkraft, älv (RoR)",
     "nuclear": "Kärnkraft", "wind_onshore": "Vind onshore",
@@ -57,10 +57,15 @@ ROW_LABELS  = {
     "gas": "Gas", "slack": "Slack (lastsk.)",
     "prod_twh": "PRODUKTION", "load_twh": "Last", "h2_elec": "H2-elektrolys",
     "heat_elec": "Värme-el (VP+panna)", "ev_elec": "EV-laddning", "batt_net": "Batteri (netto ut)",
-    "kont_export": "Kont. export", "intern_export": "Intern export (NTC)",
+    "spill": "Spill", "kont_export": "Kont. export", "intern_export": "Intern export (NTC)",
+    "kons_total": "KONSUMTION TOTAL",
 }
 BALANCE_SIGNS = {"prod_twh": +1, "batt_net": +1, "load_twh": -1, "h2_elec": -1,
-                 "heat_elec": -1, "ev_elec": -1, "kont_export": -1, "intern_export": -1}
+                 "heat_elec": -1, "ev_elec": -1, "spill": -1, "kont_export": -1, "intern_export": -1}
+# Sänk-/förbruknings-rader visas NEGATIVA (utflöde) — rent KOSMETISKT; balanskontrollen
+# använder de RÅA (positiva) värdena via BALANCE_SIGNS.
+DISPLAY_NEG = {"load_twh", "h2_elec", "heat_elec", "ev_elec", "spill",
+               "kont_export", "intern_export", "kons_total"}
 
 
 def load_run(res_label):
@@ -81,6 +86,11 @@ def load_run(res_label):
     ntc = [(l, nn.links.at[l, "bus0"], nn.links.at[l, "bus1"]) for l in nn.links.index
            if nn.links.at[l, "bus0"] in ZONES and nn.links.at[l, "bus1"] in ZONES]
     batt = nn.storage_units[nn.storage_units.carrier != "hydro"] if len(nn.storage_units) else nn.storage_units
+    # VRE-tillgänglighet (p_max_pu × p_nom_opt) → curtailment/spill (skillnad mot dispatchat).
+    VRE_CARRIERS = {"wind_onshore", "wind_offshore", "solar"}
+    pmax = nn.generators_t.p_max_pu.copy()
+    pmax.index = pd.to_datetime(pmax.index).tz_localize(None)
+    pmax = pmax.reindex(disp.index)
 
     def zmkt(zone):
         cols = [g for g in disp.columns if g in nn.generators.index
@@ -90,6 +100,7 @@ def load_run(res_label):
     rows = []
     for zone in ZONES:
         r = {"country": COUNTRY_MAP[zone]}
+        curt = zero.copy()                       # ackumulerad VRE-curtailment (→ spill-raden)
         for c in SOURCES:
             if c == "hydro":
                 # Magasin (StorageUnit); RoR-generatorerna redovisas separat som "ror".
@@ -103,8 +114,18 @@ def load_run(res_label):
                 # 'nuclear exp', 'wind_onshore' + 'wind_new') — ej bara exakt '{zon} {c}'.
                 ccols = [g for g in disp.columns if g in nn.generators.index
                          and nn.generators.at[g, "bus"] == zone and nn.generators.at[g, "carrier"] == c]
-                s = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero
+                disp_c = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero
+                if c in VRE_CARRIERS and ccols:
+                    # VRE redovisas som TILLGÄNGLIGT (p_max_pu × p_nom_opt); skillnaden mot
+                    # dispatchat = curtailment → ackumuleras till spill-raden.
+                    avail = sum((pmax[g] * nn.generators.at[g, "p_nom_opt"]
+                                 for g in ccols if g in pmax.columns), zero)
+                    curt = curt + (avail - disp_c).clip(lower=0)
+                    s = avail
+                else:
+                    s = disp_c
             r[c] = twh(s)
+        r["spill"] = twh(curt)
         eta_el = float(((((cfg.get("heat") or {}).get("zones") or {}).get(zone, {}).get("chp")) or {}).get("eta_el", 0.0))
         r["thermal"] += twh(flw.get(f"{zone} chp", zero).clip(lower=0)) * eta_el
         r["heat_elec"] = twh(flw.get(f"{zone} heat elboiler", zero).clip(lower=0)
@@ -128,7 +149,10 @@ def load_run(res_label):
         rows.append(r)
 
     d = pd.DataFrame(rows)
-    d["prod_twh"] = d[SOURCES].sum(axis=1)
+    d["prod_twh"] = d[SOURCES].sum(axis=1)        # produktion inkl slack
+    # KONSUMTION TOTAL = last + nettoexport + spill − batteri (netto ut) = PRODUKTION vid balans.
+    d["kons_total"] = (d["load_twh"] + d["h2_elec"] + d["heat_elec"] + d["ev_elec"]
+                       + d["kont_export"] + d["intern_export"] + d["spill"] - d["batt_net"])
     cyr = d.groupby("country")[SHOW_ROWS].sum()
     cyr.loc["Norden"] = cyr.sum()
 
@@ -213,6 +237,46 @@ def load_run(res_label):
         h2_store=cst(" H2"), heat_store=cst(" heat"), ev_store=cst(" EV car"), load="F",
     )
     N = cyr.loc["Norden"]
+    # Kontinent-NTC per zon → {zon: {land: MW}} (summa över imp-stegen i elasticitetsstegen;
+    # speglar körningens faktiska p_nom inkl. ev. demand-scenario-override, t.ex. DK-DE 4000).
+    mkt_ntc = {}
+    Gm = nn.generators
+    for gname in Gm.index[Gm.carrier == "market"]:
+        if "imp" not in gname:
+            continue
+        conn = gname.rsplit(" ", 1)[0]              # "DK DE imp1" → "DK DE"
+        country = conn.split()[-1]                  # "DE"
+        zone = Gm.at[gname, "bus"]
+        mkt_ntc.setdefault(zone, {}).setdefault(country, 0.0)
+        mkt_ntc[zone][country] += float(Gm.at[gname, "p_nom"])
+    # %bindande per kontinentanslutning = andel timmar då hela kabeln går på ±NTC
+    # (|nettoflöde Σ(imp+exp)| ≥ 0.99 × Σimp-steg). Mellansteg = ej bindande (headroom kvar).
+    mkt_bind = {}
+    mconns = {}
+    for gname in Gm.index[Gm.carrier == "market"]:
+        if gname in disp.columns:
+            mconns.setdefault(gname.rsplit(" ", 1)[0], []).append(gname)
+    for conn, gens in mconns.items():
+        cap = sum(float(Gm.at[g, "p_nom"]) for g in gens if "imp" in g)   # = full NTC
+        net = disp[gens].sum(axis=1)
+        bp = float((net.abs() >= 0.99 * cap).mean() * 100) if cap > 0 else 0.0
+        mkt_bind.setdefault(Gm.at[gens[0], "bus"], {})[conn.split()[-1]] = bp
+    # Tak-bindning per land×kraftslag: p_nom_opt ≈ p_nom_max (bara EXTENDABLE komponenter →
+    # VRE + kärnkraft + gas; hydro/RoR/termik/slack är ej extendable → aldrig). Rödmarkeras i
+    # balanstabellens produktionsrader. Logik = "NÅGON ZON vid taket" (landet flaggas om minst
+    # en av dess zoner är maxad i kraftslaget), så t.ex. SE Sol blir röd när SE-S sitter på taket.
+    country_zones = {"SE": ["SE-N", "SE-S"], "NO": ["NO-N", "NO-S"],
+                     "DK": ["DK"], "FI": ["FI"], "Norden": ZONES}
+    def _capbinds(carrier, zs):
+        for z in zs:
+            m = (Gm.carrier == carrier) & Gm.p_nom_extendable & (Gm.bus == z)
+            if not m.any():
+                continue
+            opt, mx = Gm.loc[m, "p_nom_opt"].sum(), Gm.loc[m, "p_nom_max"].sum()
+            if 0 < mx < 1e12 and opt >= 0.999 * mx:
+                return True
+        return False
+    cap_binds = {(co, c): _capbinds(c, zs) for co, zs in country_zones.items() for c in SOURCES}
     caps = dict(
         nuclear=N["nuclear"], onw=N["wind_onshore"], offw=N["wind_offshore"], sol=N["solar"],
         nuclear_fixed=nuclear_fixed, nuclear_exp=nuclear_exp,
@@ -236,6 +300,11 @@ def load_run(res_label):
         e_hp=lke("heat hp"), e_elboiler=lke("heat elboiler"), e_chp_el=e_chp_el,
         e_ev=lke("EV car charger") + lke("EV heavy charger"),
         ntc_mw={frozenset((b0, b1)): float(nn.links.at[l, "p_nom"]) for l, b0, b1 in ntc},
+        # %bindande timmar per intern länk (|flöde| ≥ 0.99 × NTC), som mastersheet.
+        ntc_bind={frozenset((b0, b1)): (float((flw.get(l, zero).abs()
+                  >= 0.99 * float(nn.links.at[l, "p_nom"])).mean() * 100)
+                  if float(nn.links.at[l, "p_nom"]) > 0 else 0.0) for l, b0, b1 in ntc},
+        mkt_ntc=mkt_ntc, mkt_bind=mkt_bind, cap_binds=cap_binds,
     )
     return cyr, caps
 
@@ -300,9 +369,9 @@ gens = [
     ("Vind, land", C["onw"], split_val("onw", K['onw'], K['onw_fixed'], K['onw_exp'])),
     ("Vind, hav", C["offw"], split_val("offw", K['offw'], K['offw_fixed'], K['offw_exp'])),
     ("Sol-PV", C["sol"], split_val("sol", K['sol'], K['sol_fixed'], K['sol_exp'])),
-    ("Termisk must-run (industri)", C["therm"], f"{K['thermal_pure']:.0f} TWh{tag('thermal')}"),
-    ("Gas CCGT-CCS (topp)", C["gas"], f"{K['gas']:.0f} TWh{tag('gas')}"),
-    ("Marknad (kontinentventil)", C["mkt"], f"netto-exp {K['netexp']:.0f} TWh{tag('market')}"),
+    ("Termisk must-run", C["therm"], f"{K['thermal_pure']:.0f} TWh{tag('thermal')}"),
+    ("Gas CCGT-CCS", C["gas"], f"{K['gas']:.0f} TWh{tag('gas')}"),
+    ("Kontinent exp/imp", C["mkt"], f"netto-exp {K['netexp']:.0f} TWh{tag('market')}"),
 ]
 if K["ror"] > 0.5:   # lägg in RoR-box bara om körningen har älvkraft
     gens.insert(4, ("Vattenkraft, älv (RoR)", C["ror"], f"{K['ror']:.0f} TWh{tag('ror')}"))
@@ -323,7 +392,7 @@ arrow(46.0, 9.4, 46.0, 12.0, C["batt"], bidir=True)
 
 # ---- EL-LAST ----
 box(44.0, 86.5, 16.0, 8.0, "El-last", C["load"],
-    f"{K['ellast']:.0f} TWh{tag('load')}\n(inflex. + industri/datacenter)", fs=8.6)
+    f"{K['ellast']:.0f} TWh{tag('load')}\n(hushåll/industri/DC/EV/förluster)", fs=8.6)
 arrow(SPR, 90.5, 44.0, 90.5, C["load"])
 
 # ---- OMVANDLING (mellan elbuss & sektorbussar → GW-kapacitet) ----
@@ -338,7 +407,7 @@ conv += [
      f"{K['gw_hp']:.1f} GW{tag('hp')}\n{K['e_hp']:.0f} TWh"),
     ("El-panna", C["boil"], 44.5, "to_heat",
      f"{K['gw_elboiler']:.1f} GW{tag('elboiler')}\n{K['e_elboiler']:.0f} TWh"),
-    ("KVV bakpress (el+värme)", C["therm"], 35.5, "chp",
+    ("Kraftvärme (el+värme)", C["therm"], 35.5, "chp",
      f"{K['gw_chp_el']:.1f} GW el{tag('chp')}\n{K['e_chp_el']:.0f} TWh el"),
     ("EV-laddare", C["ev"], 23.0, "to_ev",
      f"{K['gw_ev']:.0f} GW{tag('ev')}\n{K['e_ev']:.0f} TWh"),
@@ -364,8 +433,8 @@ if "H2-turbin" in conv_y:
     arrow(BB, conv_y["H2-turbin"], cx + cw, conv_y["H2-turbin"], C["h2"])
 arrow(cx + cw, conv_y["Värmepump"], BB, conv_y["Värmepump"], C["heat"])
 arrow(cx + cw, conv_y["El-panna"], BB, conv_y["El-panna"], C["boil"])
-arrow(cx + cw, conv_y["KVV bakpress (el+värme)"] - 1.4, BB,
-      conv_y["KVV bakpress (el+värme)"] - 1.4, C["therm"])
+arrow(cx + cw, conv_y["Kraftvärme (el+värme)"] - 1.4, BB,
+      conv_y["Kraftvärme (el+värme)"] - 1.4, C["therm"])
 arrow(cx + cw, conv_y["EV-laddare"], BB, conv_y["EV-laddare"], C["ev"])
 
 # ---- SEKTOR-LAGER & LASTER ----
@@ -390,31 +459,61 @@ arrow(BBR, 18.5, sx, 18.5, C["evbus"])
 ax.plot([99.5, 99.5], [2, 98], color="#cccccc", lw=1.0, zorder=1)
 
 # --- zonkarta ---
-ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar (GW)", ha="center",
+ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar & Exp/Imp-ventiler (GW)", ha="center",
         fontsize=12, weight="bold", color=C["text"])
 zpos = {"NO-N": (110, 90), "SE-N": (124, 90), "FI": (137, 87),
         "NO-S": (110, 78), "SE-S": (124, 76), "DK": (119, 70)}
 links = [("NO-N","SE-N"), ("NO-N","NO-S"), ("SE-N","SE-S"), ("SE-N","FI"),
          ("NO-S","SE-S"), ("SE-S","FI"), ("SE-S","DK"), ("NO-S","DK")]
 ntc_mw = K.get("ntc_mw", {})
+ntc_bind = K.get("ntc_bind", {})
+# Etikett-position = länkens mittpunkt, utom där noder trängs (SE-S–DK: DK ligger rakt
+# under SE-S → flytta etiketten till den fria fickan nedanför SE-S / höger om DK).
+mid_override = {frozenset(("SE-S", "DK")): (123.0, 70.6)}
 for a, b in links:
     (xa, ya), (xb, yb) = zpos[a], zpos[b]
     ax.plot([xa, xb], [ya, yb], color="#888", lw=2.0, zorder=2)
     mw = ntc_mw.get(frozenset((a, b)))
     if mw:
-        ax.text((xa + xb) / 2, (ya + yb) / 2, f"{mw/1e3:.1f}",
+        mx, my = mid_override.get(frozenset((a, b)), ((xa + xb) / 2, (ya + yb) / 2))
+        ax.text(mx, my, f"{mw/1e3:.1f}",
                 ha="center", va="center", fontsize=6.8, color="#444", zorder=3,
                 bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.85))
+        bp = ntc_bind.get(frozenset((a, b)))   # %bindande i rött, bredvid (höger om) kapacitetssiffran
+        if bp is not None:
+            ax.text(mx + 0.8, my, f"{bp:.0f}%", ha="left", va="center",
+                    fontsize=6.0, color="#c0392b", weight="bold", zorder=3,
+                    bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.75))
+# Per-zon kontinentventil (prickad stubbe) + NTC-kapacitet (GW) till varje exportland noden
+# når. Riktning/etikettläge tunade mot zonkartans trånga layout (NO-S pekar vänster mot öppen yta).
+mkt_ntc = K.get("mkt_ntc", {})
+mkt_bind = K.get("mkt_bind", {})
+mkt_dir = {"SE-S": +1, "NO-S": -1, "DK": +1, "FI": +1}          # x-riktning på ventilstubben
+mkt_lbl_pos = {  # (x_vänster, y_topp) för det staplade per-land-blocket (boxad GW + rött %)
+    "NO-S": (100.0, 73.6), "SE-S": (129.0, 70.4),
+    "DK":   (123.0, 68.8), "FI":   (135.0, 80.2),
+}
+MKT_ROW_H = 1.7
 for z in ["SE-S", "NO-S", "DK", "FI"]:
     xz, yz = zpos[z]
-    ax.plot([xz, xz + 3.2], [yz - 2.8, yz - 5.2], color=C["mkt"], lw=1.8, ls=":", zorder=2)
+    ax.plot([xz, xz + 3.2 * mkt_dir[z]], [yz - 2.8, yz - 5.2], color=C["mkt"], lw=1.8, ls=":", zorder=2)
+    d = mkt_ntc.get(z, {})
+    db = mkt_bind.get(z, {})
+    lx, ly = mkt_lbl_pos[z]
+    for i, (c, mw) in enumerate(sorted(d.items(), key=lambda kv: -kv[1])):
+        y = ly - i * MKT_ROW_H
+        ax.text(lx, y, f"{c} {mw/1e3:.1f}", ha="left", va="center", fontsize=5.6,
+                color=C["mkt"], zorder=3,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec=C["mkt"], lw=0.4, alpha=0.9))
+        bp = db.get(c)
+        if bp is not None:
+            ax.text(lx + 2.5, y, f"{bp:.0f}%", ha="left", va="center", fontsize=5.6,
+                    color="#c0392b", weight="bold", zorder=3)
 for z, (xz, yz) in zpos.items():
     ax.add_patch(Circle((xz, yz), 3.0, facecolor=C["bus"], edgecolor="white",
                  linewidth=1.4, zorder=4))
     ax.text(xz, yz, z, ha="center", va="center", fontsize=8.5, color="white",
             weight="bold", zorder=5)
-ax.text((103.0 + 138.0) / 2, 65.5, "··· = kontinentventil (DE-LU/NL/GB/EE/LT/PL)",
-        ha="center", fontsize=9, style="italic", color=C["text"])
 
 # --- energibalans-tabell ---
 ax.text((103.0 + 138.0) / 2, 62.8, f"Energibalans  (TWh/år)  —  {RUN}",
@@ -428,12 +527,14 @@ for row in rows_order:
         vals = [f"{(0.0 if abs(balance_row[c]) < 1e-6 else balance_row[c]):.1f}" for c in COUNTRIES]
         table_rows.append(["BALANS (≈0)", *vals])
     else:
-        table_rows.append([ROW_LABELS[row], *[f"{bal.loc[c, row]:.1f}" for c in COUNTRIES]])
+        sgn = -1 if row in DISPLAY_NEG else 1   # sänkor visas negativa (kosmetiskt)
+        table_rows.append([ROW_LABELS[row], *[f"{sgn * bal.loc[c, row]:.1f}" for c in COUNTRIES]])
 
 tbl = ax.table(cellText=table_rows, colLabels=["", *COUNTRIES],
                colWidths=[0.40, 0.115, 0.115, 0.115, 0.115, 0.14],
                cellLoc="right", bbox=[0.706, 0.035, 0.285, 0.56], transform=ax.transAxes)
 tbl.auto_set_font_size(False); tbl.set_fontsize(9.0)
+cap_binds = K.get("cap_binds", {})
 for (r, c), cell in tbl.get_celld().items():
     cell.set_edgecolor("#dddddd")
     if r == 0:
@@ -442,17 +543,21 @@ for (r, c), cell in tbl.get_celld().items():
     if c == 0 and r > 0:
         cell.get_text().set_ha("left")
     rn = table_rows[r - 1][0] if r > 0 else ""
-    if rn == "PRODUKTION":
+    if rn in ("PRODUKTION", "KONSUMTION TOTAL"):
         cell.set_facecolor("#eaf2f8"); cell.get_text().set_weight("bold")
     if rn == "BALANS (≈0)":
         cell.set_facecolor("#fdebd0"); cell.get_text().set_weight("bold")
+    # Rödmarkera produktionssiffror där kraftslagets kapacitet ligger vid sitt tak (p_nom_opt≈max).
+    if r > 0 and c > 0 and (r - 1) < len(SHOW_ROWS):
+        if cap_binds.get((COUNTRIES[c - 1], SHOW_ROWS[r - 1])):
+            cell.get_text().set_color("#c0392b"); cell.get_text().set_weight("bold")
 
 # ---- titel ----
-ax.text(XMAX / 2, 99.3, "NordPSA — sektorkopplad expansionsmodell  (struktur per zon, "
+ax.text(40, 99.3, "NordPSA — sektorkopplad expansionsmodell  (struktur per zon, "
         "nordisk översikt)", ha="center", fontsize=16, weight="bold", color=C["text"])
-ax.text(50, 97.2, f"Årsvärden: {RUN} · SvK 2040 MM · 3h · nordiska totaler",
+ax.text(40, 97.2, f"Årsvärden: {RUN} · SvK 2040 MM · nordiska totaler",
         ha="center", fontsize=11, style="italic", color="#555")
-ax.text(50, 95.0, "(F) fast   ·   (E) expanderbar (luft kvar)   ·   "
+ax.text(75, 5.0, "(F) fast   ·   (E) expanderbar (luft kvar)   ·   "
         "(ET) expanderbar – potentialtaket binder i ≥1 zon",
         ha="center", fontsize=9.5, color="#444",
         bbox=dict(boxstyle="round,pad=0.4", facecolor="#f4f4f4", edgecolor="#bbb"))
