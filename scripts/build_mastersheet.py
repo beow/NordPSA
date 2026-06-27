@@ -5,8 +5,8 @@ netto-export inom resp. utanför Norden — plus ett NTC-flödesblad (netto, bru
 % bindande timmar).
 
 Användning:
-  python scripts/build_mastersheet.py --prefix 17 --out temp/batch17_mastersheet.xlsx
-  python scripts/build_mastersheet.py --prefix 17 18 --out temp/master_17_18.xlsx   # flera batchar
+  python scripts/build_mastersheet.py --prefix 17 --out docs/batch17_mastersheet.xlsx
+  python scripts/build_mastersheet.py --prefix 17 18 --out docs/master_17_18.xlsx   # flera batchar
 """
 import argparse
 import warnings
@@ -29,6 +29,8 @@ CAP_CARRIERS = ["Vattenkraft", "Kärnkraft", "Vind onshore", "Vind offshore",
                 "Sol", "KVV-el", "Termisk", "Gas", "Batteri"]
 PROD_ROWS = ["Vattenkraft", "Kärnkraft", "Vind onshore", "Vind offshore",
              "Sol", "KVV-el", "Termisk", "Gas"]   # + PRODUKTION TOTAL (inkl slack)
+# Flexibla last-kapaciteter (Link-p_nom_opt, MW_el → GW), placeras efter produktionsblocket
+LOADCAP_COLS = ["Elektrolysör", "VP", "Elpanna", "EV-laddare"]
 CONS_ROWS = ["Last", "H2-elektrolys", "Värme (VP+panna)", "EV-laddning",
              "Batteri (netto ut)", "Spill", "Kontinent-export",
              "Norden-intern export"]              # + KONSUMTION TOTAL
@@ -91,6 +93,9 @@ def extract(n):
 
     def link_p0(name):
         return n.links_t.p0[name].clip(lower=0) if name in lk.index else zero.copy()
+
+    def link_cap(name):
+        return lk.at[name, "p_nom_opt"] / 1e3 if name in lk.index else 0.0   # GW_el
 
     def load_p(name):
         return n.loads_t.p_set[name] if name in n.loads_t.p_set.columns else zero.copy()
@@ -192,7 +197,14 @@ def extract(n):
         balans = prod_total + batt_net - load - h2 - heat - ev - spill \
                  - cont_export[z] - intern_export[z]
 
-        zone_data[z] = {"pris": price[z], "cap": cap, "prod": prod, "prod_total": prod_total,
+        loadcap = {
+            "Elektrolysör": link_cap(f"{z} electrolyser"),
+            "VP": link_cap(f"{z} heat hp"),
+            "Elpanna": link_cap(f"{z} heat elboiler"),
+            "EV-laddare": sum(link_cap(f"{z} EV {c} charger") for c in ("car", "heavy")),
+        }
+        zone_data[z] = {"pris": price[z], "cap": cap, "loadcap": loadcap,
+                        "prod": prod, "prod_total": prod_total,
                         "cons": cons, "kons_total": kons_total, "balans": balans}
     return zone_data, ntc_rows
 
@@ -220,6 +232,8 @@ def build():
         for c in PROD_ROWS:
             row[("Produktion TWh/år", c)] = zd_z["prod"][c]
         row[("Produktion TWh/år", "PRODUKTION TOTAL")] = zd_z["prod_total"]
+        for c in LOADCAP_COLS:
+            row[("Last-kapacitet GW", c)] = zd_z["loadcap"][c]
         for c in CONS_ROWS:
             row[("Konsumtion TWh/år", c)] = zd_z["cons"][c]
         row[("Konsumtion TWh/år", "KONSUMTION TOTAL")] = zd_z["kons_total"]
@@ -235,6 +249,7 @@ def build():
         # Norden-aggregat (summa över zoner; pris = NaN)
         agg = {"pris": np.nan,
                "cap": {c: sum(zd[z]["cap"][c] for z in ZONES) for c in CAP_CARRIERS},
+               "loadcap": {c: sum(zd[z]["loadcap"][c] for z in ZONES) for c in LOADCAP_COLS},
                "prod": {c: sum(zd[z]["prod"][c] for z in ZONES) for c in PROD_ROWS},
                "prod_total": sum(zd[z]["prod_total"] for z in ZONES),
                "cons": {c: sum(zd[z]["cons"][c] for z in ZONES) for c in CONS_ROWS},
