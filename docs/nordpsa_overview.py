@@ -305,6 +305,9 @@ def load_run(res_label):
                   >= 0.99 * float(nn.links.at[l, "p_nom"])).mean() * 100)
                   if float(nn.links.at[l, "p_nom"]) > 0 else 0.0) for l, b0, b1 in ntc},
         mkt_ntc=mkt_ntc, mkt_bind=mkt_bind, cap_binds=cap_binds,
+        # zon-snittpris (enkelt medel av buses_t.marginal_price, = run-loggens nivå)
+        zprice={z: float(nn.buses_t.marginal_price[z].mean())
+                for z in ZONES if z in nn.buses_t.marginal_price.columns},
     )
     return cyr, caps
 
@@ -509,11 +512,20 @@ for z in ["SE-S", "NO-S", "DK", "FI"]:
         if bp is not None:
             ax.text(lx + 2.5, y, f"{bp:.0f}%", ha="left", va="center", fontsize=5.6,
                     color="#c0392b", weight="bold", zorder=3)
+zprice = K.get("zprice", {})
+price_off = {  # (dx, dy) finjustering per zon; default (0, -3.9). Knuffa enskilda undan krock.
+    "NO-N": (-5, 0), "SE-N": (5, 1), "FI": (-5,0),
+    "NO-S": (-5, 0), "SE-S": (5, 0), "DK": (-5,0),
+}
 for z, (xz, yz) in zpos.items():
     ax.add_patch(Circle((xz, yz), 3.0, facecolor=C["bus"], edgecolor="white",
                  linewidth=1.4, zorder=4))
     ax.text(xz, yz, z, ha="center", va="center", fontsize=8.5, color="white",
             weight="bold", zorder=5)
+    if z in zprice:
+        dx, dy = price_off.get(z, (0, -3.9))
+        ax.text(xz + dx, yz + dy, f"{zprice[z]:.0f} EUR/MWh", ha="center", va="top",
+                fontsize=6.4, color=C["text"], weight="bold", zorder=5)
 
 # --- energibalans-tabell ---
 ax.text((103.0 + 138.0) / 2, 62.8, f"Energibalans  (TWh/år)  —  {RUN}",
