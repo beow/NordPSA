@@ -156,6 +156,26 @@ def extract(n):
     # Pris (objektivviktat snitt)
     price = {z: float((n.buses_t.marginal_price[z] * w).sum() / wsum) for z in ZONES}
 
+    # Tak-bindning: ligger ett kraftslags p_nom_opt vid sitt p_nom_max? (Bara EXTENDABLE
+    # komponenter kan binda; fast flotta hoppas över.) zone=None → Norden-aggregat.
+    def _binds(comp, carrier, zone):
+        m = (comp.carrier == carrier) & comp.p_nom_extendable
+        m &= (comp.bus == zone) if zone is not None else comp.bus.isin(ZONES)
+        if not m.any():
+            return False
+        opt, mx = comp.loc[m, "p_nom_opt"].sum(), comp.loc[m, "p_nom_max"].sum()
+        return bool(np.isfinite(mx) and mx > 0 and opt >= 0.999 * mx)
+
+    def binds_dict(zone):
+        return {
+            "Vattenkraft": _binds(su, "hydro", zone) or _binds(g, "hydro", zone),
+            "Kärnkraft": _binds(g, "nuclear", zone),
+            "Vind onshore": _binds(g, "wind_onshore", zone),
+            "Vind offshore": _binds(g, "wind_offshore", zone),
+            "Sol": _binds(g, "solar", zone), "KVV-el": False, "Termisk": False,
+            "Gas": _binds(g, "gas", zone), "Batteri": _binds(su, "battery", zone),
+        }
+
     zone_data = {}
     for z in ZONES:
         chp_c, chp_p = chp_cap_prod(z)
@@ -204,9 +224,9 @@ def extract(n):
             "EV-laddare": sum(link_cap(f"{z} EV {c} charger") for c in ("car", "heavy")),
         }
         zone_data[z] = {"pris": price[z], "cap": cap, "loadcap": loadcap,
-                        "prod": prod, "prod_total": prod_total,
+                        "prod": prod, "prod_total": prod_total, "binds": binds_dict(z),
                         "cons": cons, "kons_total": kons_total, "balans": balans}
-    return zone_data, ntc_rows
+    return zone_data, ntc_rows, binds_dict(None)
 
 
 def build():
@@ -240,12 +260,13 @@ def build():
         row[("Kontroll", "BALANS")] = zd_z["balans"]
         return row
 
-    master_rows, ntc_all = [], []
+    master_rows, ntc_all, binds_list = [], [], []
     for run, d in runs.items():
         n = pypsa.Network(str(d / "network.nc"))
-        zd, ntc = extract(n)
+        zd, ntc, binds_norden = extract(n)
         for z in ZONES:
             master_rows.append(((run, z), make_row(zd[z])))
+            binds_list.append(zd[z]["binds"])
         # Norden-aggregat (summa över zoner; pris = NaN)
         agg = {"pris": np.nan,
                "cap": {c: sum(zd[z]["cap"][c] for z in ZONES) for c in CAP_CARRIERS},
@@ -256,6 +277,7 @@ def build():
                "kons_total": sum(zd[z]["kons_total"] for z in ZONES),
                "balans": sum(zd[z]["balans"] for z in ZONES)}
         master_rows.append(((run, "Norden"), make_row(agg)))
+        binds_list.append(binds_norden)
         for r in ntc:
             ntc_all.append({"run": run, **r})
 
@@ -271,7 +293,23 @@ def build():
     with pd.ExcelWriter(out, engine="openpyxl") as xl:
         df.to_excel(xl, sheet_name="Master")
         ntc_df.to_excel(xl, sheet_name="NTC")
-    print(f"Skrev {out}  ({df.shape[0]} rader master, {ntc_df.shape[0]} NTC-rader)")
+        # Röd siffra där ett kraftslags kapacitet ligger vid sitt tak (p_nom_opt ≈ p_nom_max).
+        # Datarad 1 = headernivåer (2) + index-namnsrad (1) + 1 = rad 4 (1-based); datakol börjar
+        # efter index-kolumnerna (run, zon).
+        from openpyxl.styles import Font
+        ws = xl.book["Master"]
+        red = Font(color="FFCC0000")
+        row0 = df.columns.nlevels + 2
+        col0 = df.index.nlevels
+        cap_pos = {c: df.columns.get_loc(("Kapacitet GW", c)) for c in CAP_CARRIERS}
+        nred = 0
+        for i, bd in enumerate(binds_list):
+            for c, b in bd.items():
+                if b:
+                    ws.cell(row=row0 + i, column=col0 + cap_pos[c] + 1).font = red
+                    nred += 1
+    print(f"Skrev {out}  ({df.shape[0]} rader master, {ntc_df.shape[0]} NTC-rader, "
+          f"{nred} tak-bindande kapaciteter markerade rött)")
 
 
 if __name__ == "__main__":
