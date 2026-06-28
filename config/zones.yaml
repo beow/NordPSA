@@ -173,7 +173,7 @@ ev:
   enabled: false
   mode: svk                         # svk = SvK-formulering (flex/oflex-split); fleet = gammal per-fordon-modell
   flex_fraction: 0.5                # andel av förbrukningen som är flyttbar (SvK: hälften laddar flexibelt)
-  flex_battery_gwh_per_twh: 8.48    # LMA26 MM 2040: flotta 375 GWh, hälften flex = 187,5 GWh / 22,1 flex-TWh (var 12 → gav 265 GWh, +41% för högt)
+  flex_battery_gwh_per_twh: 12      # LMA26 §4.5.1: 12 GWh per TWh, appliceras på flex-TWh → flex-batteri = 12 × flex-TWh (LMA26 MM: 31,2 flex-TWh × 12 = 375 GWh, Figur 11). Med modellens konservativa 44,2 TWh EV: 22,1 flex-TWh × 12 = 265 GWh, laddtak 265/10h = 26,5 GW (30 kWh/flexibelt fordon = halva 60 kWh-packet). (8.48 var dubbelfel: halverade redan-flex 375 OCH delade med för-låg flex-TWh)
   charge_hours: 10                  # SvK: laddtid → flex-laddeffekt = flexbatteri / charge_hours
   morning_soc_floor: 0.7            # SOC-golv (e_min_pu) kl morning_soc_hour → tvingar daglig laddning
   morning_soc_hour: 6               # bryter perfekt-framsyn-flerdygnscoast (0 = inget golv)
@@ -408,7 +408,14 @@ cost_scenarios:
 # ovanpå dagens eSett-bas, fördelat på zoner och dekomponerat i:
 #   extra_load_mw  — inflexibel platålast (datacenter + ny industri + H&S/förluster-tillväxt)
 #   h2{...}        — vätgas: demand_mw (H2 LHV), electrolyser_mw (MW_el, fast), store_mwh (H2 LHV)
-#   ev_cars        — antal elfordon (smart charging; 2.5 MWh/bil, 60 kWh-batteri)
+#   ev_cars        — EV-el som PERSONBILS-EKVIVALENTER (= total EV-el ÷ 2.5 MWh/bil); buntar
+#                    in tung trafik → EJ fysisk flotta. KONSERVATIV nivå: Norden 44.2 TWh
+#                    (17.68M bil-ekv ≈ ~13M personbils-EV + ~130k tunga), ~71% av LMA26 MM
+#                    Figur 11 (62.5 TWh). Vald så landstotalerna håller MM-envelopen (SE 243 /
+#                    NO 194 / FI 145 / DK 81 ≈ 663) — full MM-EV (62.5) skulle överskjuta med
+#                    ~18 TWh (se run180 vs run170). Flexkvoten (ev.flex_battery_gwh_per_twh: 12)
+#                    är LMA26-korrekt oberoende av totalen → 265 GWh flex / 26.5 GW laddtak.
+#                    60 kWh batteriantagandet används EJ i svk-läget.
 #   pnom_max_mw    — utbyggnadspotential (Bilaga B, TWh→MW via modell-CF) som p_nom_max-tak
 # ntc_overrides    — NTC-höjningar till 2040 (Tabell 10), appliceras på cfg['links']
 # ⚠️ Princip: ADDITIV (eSett-bas bevaras) → modell-2040 ≈ 8–13 TWh/land UNDER SvK absolut
@@ -419,9 +426,15 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
+      - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 (var 1674)
+      - [SE-S, DK,    2300]   # SE4↔DK2 + Konti-Skan 2040 (var 2007)
     # Kontinentkablar (market_connections) — matchas på namn, ej zonpar
     market_ntc_overrides:
-      - [DK DE, 4000]         # DK↔DE 2040 (Tabell 10; sannolikt i underkant); var 3244
+      - [FI EE, 1700]         # FI↔EE 2040 (var 1016)
+      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; var 3244)
+      - [NO NL, 700]          # NO-S↔NL 2040 (var 640)
+      - [DK GB, 1400]         # DK↔GB 2040 (var 1456)
+      - [NO GB, 1400]         # NO-S↔GB 2040 (var 1449)
     # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
     # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
     # extendable). I expansionsläge går befintlig flotta över till syntetisk profil
@@ -446,14 +459,14 @@ demand_scenarios:
       SE-N:
         extra_load_mw: 4298   # 4110 + 188 (1,6 TWh basgap)
         h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
-        ev_cars: 1200000
+        ev_cars: 1200000   # konservativ: SE EV 15 TWh × split 0.20 (~71% av LMA26 MM 21.1)
         pnom_max_mw: {wind_onshore: 20394, wind_offshore:     0, solar:  1282}
         pnom_min_mw: {wind_onshore: 10197, solar:   380}   # SE-golv (install on 10050/sol 134)
         battery: {p_nom_mw: 1000, hours: 2}
       SE-S:
         extra_load_mw: 4378   # 3653 + 725 (6,4 TWh basgap)
         h2: {demand_mw:  452, electrolyser_mw:  850, store_mwh:  9900}
-        ev_cars: 4800000
+        ev_cars: 4800000   # konservativ: SE EV 15 TWh × split 0.80 (~71% av LMA26 MM 21.1)
         pnom_max_mw: {wind_onshore: 14376, wind_offshore: 16283, solar: 24000}
         pnom_min_mw: {wind_onshore:  7188, solar:  7104}   # SE-golv (install on 7092/sol 2778 → +~4,3 GW sol)
         battery: {p_nom_mw: 4500, hours: 2}
@@ -463,25 +476,25 @@ demand_scenarios:
       # NO total 195 TWh = eSett-bas 138 + Δ56. Δ flat 28 (alm −5, kraftint +15, petrol +6,
       # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel
       # (⚠️ ANTAGANDE — geografisk sektor-split ej upplöst; petroleum/datac/grön industri
-      # har egen geografi). EV nät-uttag 18 TWh / 2.78 MWh/bil = 6.48M bilar. H2 10 TWh.
+      # har egen geografi). EV = konservativ NO 16.2 TWh (~74% av LMA26 MM 21.8); split som ovan. H2 10 TWh.
       # NO (LMA2026): land 30, hav 21 (allt→NO-S), sol 20 TWh. Split NO→NO-N/NO-S install-andel
       # (onshore 61/39, sol 6/94; ⚠️ antagande). Inga golv för NO/DK/FI (bara tak).
       NO-N:
         extra_load_mw: 1138
         h2: {demand_mw:  406, electrolyser_mw:  494, store_mwh: 14045}
-        ev_cars: 2300000
+        ev_cars: 2300000   # konservativ: NO EV 16.2 TWh × split 0.356 (~74% av LMA26 MM 21.8)
         pnom_max_mw: {wind_onshore:  5537, wind_offshore:     0, solar:  1672}
       NO-S:
         extra_load_mw: 2058
         h2: {demand_mw:  735, electrolyser_mw:  806, store_mwh: 22915}
-        ev_cars: 4180000
+        ev_cars: 4180000   # konservativ: NO EV 16.2 TWh × split 0.644 (~74% av LMA26 MM 21.8)
         pnom_max_mw: {wind_onshore:  3730, wind_offshore:  4866, solar: 21560}
       DK:
         # +913 MW (8 TWh) allmän förbrukning ovanpå tidigare 2968 → stänger basgapet:
         # eSett-bas 36,5 < SvK 2026 ~45. DK total 2040 ≈ 81 TWh (= SvK MM DK).
         extra_load_mw: 3881
         h2: {demand_mw:   75, electrolyser_mw:  200, store_mwh:  3960}
-        ev_cars: 3600000
+        ev_cars: 3600000   # konservativ: DK EV 9.0 TWh (~72% av LMA26 MM 12.45)
         pnom_max_mw: {wind_onshore:  6757, wind_offshore: 27127, solar: 32843}   # DK LMA2026: land 17/hav 107/sol 41 TWh
         battery: {p_nom_mw: 3800, hours: 2}
       FI:
@@ -489,7 +502,7 @@ demand_scenarios:
         # eSett-bas 80,4 < SvK 2026 ~93. FI total 2040 ≈ 145 TWh (= SvK MM FI).
         extra_load_mw: 5822
         h2: {demand_mw:  913, electrolyser_mw: 1400, store_mwh:     0}   # 8,0 TWh/år (höjt från 678=5,9)
-        ev_cars: 1600000
+        ev_cars: 1600000   # konservativ: FI EV 4.0 TWh (~56% av LMA26 MM 7.13)
         pnom_max_mw: {wind_onshore: 28219, wind_offshore:  6686, solar: 33417}   # FI LMA2026: land 77/hav 21/sol 29 TWh
         battery: {p_nom_mw: 2700, hours: 2}
         # FI kärnkraft = befintlig 4400 MW (Olkiluoto 1-3 + Loviisa 1-2), must-run historisk

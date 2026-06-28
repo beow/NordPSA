@@ -11,6 +11,7 @@ samma sista siffra i varje batch:
   run{PREFIX}3_onshore80_3h    + onshore-tak −20%
   run{PREFIX}4_lowhydro06_3h   + torrt 2024 (hydro ×0,6)
   run{PREFIX}5_batt25_4h_3h    + 25 GW 4h batterier (ist. för 12 GW 2h)
+  run{PREFIX}6_notax_3h        + ingen elskatt på värme-el (VP+el-panna)
 
 Kör 3 samtidigt (default). En 3h-expansion ≈ 1–1,5h / ~3,5 GB RAM → en full batch
 om 6 körningar ≈ 2 vågor ≈ 3–3,5h. Varje körnings stdout hamnar i
@@ -56,6 +57,8 @@ SCENARIOS = [
         NUC_BASE + ["--low-hydro", "0.6"]),
     (5, "batt25_4h", "+ 25 GW 4h batterier (ist for 12 GW 2h)",
         NUC_BASE + ["--scenario-battery", "25:4"]),
+    (6, "notax", "+ ingen elskatt pa varme-el (VP+el-panna)",
+        NUC_BASE + ["--no-tax-heatpower"]),
 ]
 
 
