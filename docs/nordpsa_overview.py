@@ -305,8 +305,10 @@ def load_run(res_label):
                   >= 0.99 * float(nn.links.at[l, "p_nom"])).mean() * 100)
                   if float(nn.links.at[l, "p_nom"]) > 0 else 0.0) for l, b0, b1 in ntc},
         mkt_ntc=mkt_ntc, mkt_bind=mkt_bind, cap_binds=cap_binds,
-        # zon-snittpris (enkelt medel av buses_t.marginal_price, = run-loggens nivå)
-        zprice={z: float(nn.buses_t.marginal_price[z].mean())
+        # zon-snittpris: rakt tidsmedel (= LMA-troget per zon, = LMA:s årsmedelpris per
+        # elområde). Kapat vid NordPool-taket 4000 EUR/MWh för att utesluta ofysikaliska
+        # scarcity-spikar (FI 15195-artefakten); påverkar bara FI (övriga zoner ≤1980).
+        zprice={z: float(nn.buses_t.marginal_price[z].clip(upper=4000).mean())
                 for z in ZONES if z in nn.buses_t.marginal_price.columns},
     )
     return cyr, caps
@@ -574,5 +576,5 @@ ax.text(75, 5.0, "(F) fast   ·   (E) expanderbar (luft kvar)   ·   "
         ha="center", fontsize=9.5, color="#444",
         bbox=dict(boxstyle="round,pad=0.4", facecolor="#f4f4f4", edgecolor="#bbb"))
 
-plt.savefig(OUT, dpi=155, bbox_inches="tight", facecolor="white")
+plt.savefig(OUT, dpi=200, bbox_inches="tight", facecolor="white")
 print("sparad:", OUT)

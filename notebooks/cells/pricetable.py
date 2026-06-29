@@ -92,3 +92,40 @@ if len(years) > 1:
             a = ref_cmp.loc[ref_cmp.index.year == y, z]
             row.append((m - a).dropna().mean())
         print(f"{z:<7}" + "".join(f"{v:>+8.1f}" for v in row))
+
+# ── Landaggregat: tre viktningsvyer ─────────────────────────────────────────
+# LMA26 (SvK) räknar landpriser som elområdespriserna VOLYMVIKTADE med årlig
+# elanvändning (spatialt mellan zoner; temporalt = rakt årsmedel per område).
+# → kolumn 'energivikt' är den LMA-jämförbara siffran. För enzons-land = tidsmedel.
+# 'tidsmedel' = oviktat medel av zonernas tidsmedel; 'lastvikt(h)' = timvis Σpris·last/Σlast
+# (lyfter medlet via pris↔last-korrelation inom zonen — EJ LMA:s metod, men visas för kontext).
+_n = globals().get('n', None)
+if _n is not None:
+    _w = _n.snapshot_weightings.objective.reindex(model_cmp.index).fillna(1.0)
+    _ps = _n.loads_t.p_set
+    _lbus = _n.loads.bus
+    _E, _LZ = {}, {}
+    for z in ZONES:
+        _cols = [c for c in _lbus[_lbus == z].index if c in _ps.columns]
+        _lz = (_ps[_cols].sum(axis=1).reindex(model_cmp.index).fillna(0.0)
+               if _cols else pd.Series(0.0, index=model_cmp.index))
+        _LZ[z] = _lz
+        _E[z] = float((_lz * _w).sum())
+    _country = {}
+    for z in ZONES:                       # gruppera via prefix före '-' (SE-N→SE, DK→DK)
+        _country.setdefault(z.split('-')[0], []).append(z)
+    print(f"\nLandaggregat [{mtag}] (energivikt = LMA26-trogen):")
+    print(f"{'Land':<8}{'tidsmedel':>11}{'energivikt':>12}{'lastvikt(h)':>13}")
+    print('-' * 44)
+    for c, zs in _country.items():
+        zs = [z for z in zs if z in model_cmp.columns]
+        if not zs:
+            continue
+        simple = float(pd.Series({z: model_cmp[z].mean() for z in zs}).mean())
+        _Es = sum(_E[z] for z in zs)
+        ew = (sum(_E[z] * model_cmp[z].mean() for z in zs) / _Es) if _Es > 0 else float('nan')
+        _ln = sum(float((model_cmp[z] * _LZ[z] * _w).sum()) for z in zs)
+        lw = (_ln / _Es) if _Es > 0 else float('nan')
+        print(f"{c:<8}{simple:>11.1f}{ew:>12.1f}{lw:>13.1f}")
+else:
+    print("\n(Landaggregat hoppat över: global 'n' saknas — kör bootstrap-cellen.)")
