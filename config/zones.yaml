@@ -382,8 +382,9 @@ costs:
 # skriver över cfg['costs'] per teknik. Byggränta (IDC): overnight' = OC·(1 +
 # build_years/2·r); fom_fraction = fast_DoU/overnight' (bevarar absolut O&M).
 # Råvärden: oc_eur_per_kw (tab 30 OIC), fom_eur_per_kw (tab 31 fast DoU),
-# build_years (tab 29), lifetime_years (tab 29), vom_eur_per_mwh (SRMC, tab 9 +
-# antaganden η_kärn 0.33). I dessa scenarier representerar tekniken 'gas' (carrier
+# build_years (tab 29), lifetime_years (tab 29), vom_eur_per_mwh (SRMC = bränsle
+# tab 9 / η + rörlig DoU tab 32; η_kärn 0.33 → kärnkr 1.7/0.33 + 3.8 ≈ 9.0). I
+# dessa scenarier representerar tekniken 'gas' (carrier
 # 'gas') CCGT-CCS i st.f. OCGT — vom = full SRMC (bränsle + rest-CO2 + CTS + O&M;
 # antaganden η_CCS 0.50, fångst 90%, ef_gas 0.20, CTS 20 €/t). Hydro/heat/H2
 # behåller sina DEA-värden ovan; dispatch-basblockets gas (OCGT) är orört.
