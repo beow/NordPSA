@@ -9,7 +9,7 @@ BALANSERAD VY (stacktopp = lastlinje vid varje tidssteg):
   Produktionssida (areor): generering + Import (nettoimport>0) + Batteri urladdning.
   Lastlinje (svart):       baslast + H2 + värme + EV + batteriladdning + export  (ALLT utom spill).
   Split: batteri delas i urladdning (produktion) / laddning (last); handel i import (produktion) / export (last).
-Extra referenslinjer: H2-elektrolys och EV-laddning var för sig.
+Extra referenslinjer: H2-elektrolys, EV-laddning och batteriladdning var för sig.
 Produktion = DISPATCHAT (curtailad VRE ingår ej; jfr ebalance-cellens spill-rad).
 
 Förutsätter bootstrap.py (n, dispatch, hydro_d, zone_hydro_total, flows, zone_market,
@@ -95,7 +95,8 @@ prod = pd.DataFrame({
     'Import':             imp,
     'Batteri (urladdn.)': batt_dis,
 })
-lines = pd.DataFrame({'Last (totalt)': load_line, 'H2-elektrolys': h2, 'EV-laddning': ev})
+lines = pd.DataFrame({'Last (totalt)': load_line, 'H2-elektrolys': h2, 'EV-laddning': ev,
+                      'Batteriladdning': batt_chg})
 
 _div = 1e3 if UNIT == 'GW' else 1.0
 prod  = (prod.loc[START:END].resample(FREQ).mean().dropna(how='all')) / _div
@@ -114,6 +115,7 @@ ax.stackplot(prod.index, [prod[c].values for c in order],
 ax.plot(lines.index, lines['Last (totalt)'].values, color='black', lw=2.0, label='Last (totalt)')
 ax.plot(lines.index, lines['H2-elektrolys'].values, color='purple', lw=1.3, ls='--', label='H2-elektrolys')
 ax.plot(lines.index, lines['EV-laddning'].values, color='saddlebrown', lw=1.3, ls=':', label='EV-laddning')
+ax.plot(lines.index, lines['Batteriladdning'].values, color='#bcbd22', lw=1.3, ls='-.', label='Batteriladdning')
 
 ax.set_ylabel(f'Effekt ({UNIT}, medel per {FREQ})')
 ax.set_xlim(prod.index.min(), prod.index.max())
