@@ -6,10 +6,12 @@ t.ex. '3h','6h','D','W','ME','YE'). FREQ måste vara ≥ körningens egen upplö
 Hela Norden default, eller en enskild zon via ZONE.
 
 BALANSERAD VY (stacktopp = lastlinje vid varje tidssteg):
-  Produktionssida (areor): generering + Import (nettoimport>0) + Batteri urladdning.
+  Produktionssida (areor): generering + Import (kontinent + intern NTC) + Batteri urladdning.
   Lastlinje (svart):       baslast + H2 + värme + EV + batteriladdning + export  (ALLT utom spill).
-  Split: batteri delas i urladdning (produktion) / laddning (last); handel i import (produktion) / export (last).
+  Split: batteri delas i urladdning (produktion) / laddning (last); handel i import
+         (produktion, delad på kontinent vs intern NTC) / export (last). Intern NTC = 0 för hela Norden.
 Extra referenslinjer: H2-elektrolys, EV-laddning och batteriladdning var för sig.
+Om en enskild zon valts (ZONE) ritas zonpriset som tunn röd linje på höger y-axel.
 Produktion = DISPATCHAT (curtailad VRE ingår ej; jfr ebalance-cellens spill-rad).
 
 Förutsätter bootstrap.py (n, dispatch, hydro_d, zone_hydro_total, flows, zone_market,
@@ -55,9 +57,13 @@ else:
 batt_dis = batt_net.clip(lower=0)          # produktion
 batt_chg = (-batt_net).clip(lower=0)       # last
 
-# ── Handel: import (produktion) / export (last) ─────────────────────────────────
-#   kontinentventil (zone_market: + = import) + intern NTC in/ut ur scope.
-imp_cont = sum((zone_market(z) for z in _zones), _zero.copy())
+# ── Handel: import (produktion) / export (last), delad på källa ──────────────────
+#   Två komponenter: kontinentventil (zone_market: + = import) och intern NTC
+#   in/ut ur scope. Klipps var för sig → bruttoimport per källa (kontinent vs
+#   intern) syns separat. Balansen bevaras: exp = summan av båda källornas export,
+#   så (stacktopp − lastlinje) är oförändrad jämfört med nettoklippning.
+#   För hela Norden (ZONE=None) är intern NTC = 0 (inga länkar korsar scope-gränsen).
+cont_net = sum((zone_market(z) for z in _zones), _zero.copy())
 ntc = [(l, n.links.at[l, 'bus0'], n.links.at[l, 'bus1']) for l in n.links.index
        if n.links.at[l, 'bus0'] in ZONES and n.links.at[l, 'bus1'] in ZONES]
 ntc_in = _zero.copy()
@@ -65,9 +71,9 @@ for l, b0, b1 in ntc:
     f = flows.get(l, _zero)
     if   b1 in _zones and b0 not in _zones: ntc_in = ntc_in + f        # in i scope
     elif b0 in _zones and b1 not in _zones: ntc_in = ntc_in - f        # ut ur scope
-net_import = imp_cont + ntc_in
-imp = net_import.clip(lower=0)             # produktion
-exp = (-net_import).clip(lower=0)          # last
+imp_cont = cont_net.clip(lower=0)          # produktion: kontinental import
+imp_ntc  = ntc_in.clip(lower=0)            # produktion: intern NTC-import
+exp = (-cont_net).clip(lower=0) + (-ntc_in).clip(lower=0)   # last: all export (båda källor)
 
 # ── Lastkomponenter ─────────────────────────────────────────────────────────────
 base_load = sum((nl[f'{z} load'] for z in _zones if f'{z} load' in nl.columns), _zero.copy())
@@ -92,7 +98,8 @@ prod = pd.DataFrame({
     'Vind onshore':       _carrier_sum('wind_onshore'),
     'Vind offshore':      _carrier_sum('wind_offshore'),
     'Sol':                _carrier_sum('solar'),
-    'Import':             imp,
+    'Import kontinent':   imp_cont,
+    'Import intern (NTC)':imp_ntc,
     'Batteri (urladdn.)': batt_dis,
 })
 lines = pd.DataFrame({'Last (totalt)': load_line, 'H2-elektrolys': h2, 'EV-laddning': ev,
@@ -102,10 +109,16 @@ _div = 1e3 if UNIT == 'GW' else 1.0
 prod  = (prod.loc[START:END].resample(FREQ).mean().dropna(how='all')) / _div
 lines = (lines.loc[START:END].resample(FREQ).mean()).reindex(prod.index) / _div
 
+# Zonpris (endast om en enskild zon valts) → sekundär höger y-axel.
+price = None
+if ZONE is not None and ZONE in prices.columns:
+    _ps = prices[ZONE].copy(); _ps.index = pd.to_datetime(_ps.index).tz_localize(None)
+    price = _ps.reindex(dispatch.index).loc[START:END].resample(FREQ).mean().reindex(prod.index)
+
 COLORS = {
     'Kärnkraft': '#d62728', 'Vattenkraft': '#1f77b4', 'Termisk': '#8c564b', 'Gas': '#7f7f7f',
     'Vind onshore': '#2ca02c', 'Vind offshore': '#17becf', 'Sol': '#ff7f0e',
-    'Import': '#e377c2', 'Batteri (urladdn.)': '#bcbd22',
+    'Import kontinent': '#e377c2', 'Import intern (NTC)': '#c5b0d5', 'Batteri (urladdn.)': '#bcbd22',
 }
 order = [c for c in COLORS if c in prod.columns and prod[c].abs().sum() > 0]
 
@@ -122,7 +135,18 @@ ax.set_xlim(prod.index.min(), prod.index.max())
 ax.margins(x=0, y=0)
 ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=9))
 ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
-ax.legend(loc='upper left', ncol=5, fontsize=8.5, framealpha=0.9)
+
+# Zonpris på höger y-axel (tunn heldragen röd linje).
+_handles, _labels = ax.get_legend_handles_labels()
+if price is not None:
+    ax2 = ax.twinx()
+    _pl, = ax2.plot(price.index, price.values, color='red', lw=0.8, label='Pris (höger)')
+    ax2.set_ylabel('Pris (EUR/MWh)', color='red')
+    ax2.tick_params(axis='y', labelcolor='red')
+    ax2.margins(x=0, y=0)
+    ax2.grid(False)
+    _handles.append(_pl); _labels.append('Pris (höger)')
+ax.legend(_handles, _labels, loc='upper left', ncol=5, fontsize=8.5, framealpha=0.9)
 _scope = 'Norden' if ZONE is None else ZONE
 _span  = f"{prod.index.min():%Y-%m-%d} – {prod.index.max():%Y-%m-%d}"
 ax.set_title(f'Stackad produktion + last — {LABEL} ({_scope}, {FREQ}-medel; {_span})', fontweight='bold')
