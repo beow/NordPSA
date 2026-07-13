@@ -39,7 +39,7 @@ CONS_ROWS = ["Last", "H2-elektrolys", "Värme (VP+panna)", "EV-laddning",
 def discover_runs(prefix):
     """{label: path} där label = 'run170 baseline' (run-nr + scenario-slogan ur mappnamnet)."""
     out = {}
-    for idx in range(6):
+    for idx in range(7):          # run{prefix}0 .. run{prefix}6 (t.ex. batch 19: run190–196 inkl. notax)
         hits = sorted((ROOT / "results").glob(f"run{prefix}{idx}_*"))
         hits = [h for h in hits if (h / "network.nc").exists()]
         if hits:
