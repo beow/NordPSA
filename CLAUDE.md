@@ -84,7 +84,7 @@ scripts/run_model.py → results/
 | Bus | AC | One per zone |
 | Link | — | Bidirectional NTC (p_min_pu=-1) |
 | StorageUnit | hydro | Reservoir with parametric inflow, cyclic SOC, no pumping |
-| Generator | nuclear | Load-following: p_min_pu = 0.6 × p_max_pu |
+| Generator | nuclear | Must-run: p_min_pu = p_max_pu (NUCLEAR_MIN_FRACTION = 1.0). Dispatch = availability profile × p_nom, no optimizer freedom |
 | Generator | wind_onshore/offshore, solar | VRE with capacity factor profiles |
 | Generator | thermal | Must-run: p_min_pu = p_max_pu = actual profile |
 | Generator | gas | Dispatchable peaker, extendable |
@@ -105,6 +105,8 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 ## Important design decisions
 
 **IPM with crossover:** Solver must use `run_crossover: "on"` for capacity expansion runs. Without crossover, p_nom_opt stays near p_nom_min even when investment is profitable (interior-point primal solution, not a vertex).
+
+**Nuclear as must-run Generator:** `p_min_pu = p_max_pu` via `NUCLEAR_MIN_FRACTION = 1.0` (`nordpsa/network.py`). Both the dispatch branch (actual `nuclear_profile`) and the synthetic-nuclear branch (`--add-nuclear`, `availability_timeseries`) set `p_min = p_max × min_frac` with `min_frac` defaulting to 1.0, so the optimizer cannot down-regulate nuclear. Consequence: dispatch (`n.generators_t.p`) equals the availability profile × p_nom in every snapshot. Synthetic mode can override via `min_load_frac` in `synthetic_nuclear["params"]`, but no CLI flag currently exposes it (default stays 1.0). NB: this is NOT the historical 0.6 load-following behavior — that fraction is no longer applied anywhere in the code.
 
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 

@@ -8,7 +8,10 @@ ovanpå full tillgänglighet:
      staggrad över april–sep så reaktorerna inte ligger nere samtidigt.
      Längd ~ Uniform(min_days, max_days).
   2. Forcerade avbrott (stokastiskt): Poisson-process med rat lambda_fail
-     (händelser/reaktor/år); varje avbrott varar ~ Exp(mean = mttr_hours).
+     (händelser/reaktor/år); varje avbrott varar ~ min_outage_hours +
+     Exp(mean = mttr_hours - min_outage_hours). Golvet (min_outage_hours) kapar
+     sub-dygns-avbrott som annars gör profilen "taggig"; det SKIFTADE upplägget
+     bevarar medelvaraktigheten = mttr_hours så CF-kalibreringen är oförändrad.
 
 Zonprofilen p_max_pu(t) = andel tillgängliga reaktorer (lika reaktorstorlek).
 
@@ -26,7 +29,8 @@ import pandas as pd
 # Defaultparametrar (kan överstyras via params-dict, jfr nuclear_synth i zones.yaml)
 DEFAULTS = {
     "target_cf":              0.85,
-    "mttr_hours":             120.0,        # medel reparationstid forcerat avbrott (~5 dygn)
+    "mttr_hours":             300.0,        # medel reparationstid forcerat avbrott (~12.5 dygn)
+    "min_outage_hours":       72.0,         # varaktighetsGOLV: kapar sub-3dygns-avbrott (mot taggighet)
     "maintenance_window_doy": [105, 273],   # ~15 apr – 30 sep
     "maintenance_days":       [25, 45],     # uniform min/max revisionslängd
     "revision_frequency":     "annual",     # annual | biennial
@@ -97,14 +101,22 @@ def _schedule_maintenance(up: np.ndarray, rng: np.random.Generator,
 
 def _sample_forced_outages(up: np.ndarray, rng: np.random.Generator,
                            lambda_fail: float, mttr_hours: float,
-                           total_hours: float, dt_h: float) -> None:
-    """Poisson-process av forcerade avbrott, exp-fördelad reparationstid."""
+                           total_hours: float, dt_h: float,
+                           min_outage_hours: float = 0.0) -> None:
+    """Poisson-process av forcerade avbrott med SKIFTAD exp-varaktighet.
+
+    varaktighet = min_outage_hours + Exp(medel = mttr_hours - min_outage_hours)
+      → minsta varaktighet = min_outage_hours, MEDEL = mttr_hours (oförändrad).
+    Eftersom medlet är oförändrat är lambda-kalibreringen (och därmed CF) intakt;
+    golvet tar bort de korta avbrotten som annars ger taggiga sub-dygns-dippar.
+    """
     if lambda_fail <= 0.0:
         return
+    scale = max(mttr_hours - min_outage_hours, 1e-6)   # exp-medel efter skiftet
     n_events = rng.poisson(lambda_fail * total_hours / HOURS_PER_YEAR)
     for _ in range(int(n_events)):
         start_h = rng.uniform(0.0, total_hours)
-        dur_h   = rng.exponential(mttr_hours)
+        dur_h   = min_outage_hours + rng.exponential(scale)
         _apply_outage(up, start_h, dur_h, dt_h)
 
 
@@ -149,7 +161,8 @@ def availability_timeseries(params: Dict, timestamps: pd.DatetimeIndex,
         up = np.ones(T, dtype=float)
         _schedule_maintenance(up, rng, r, n_reactors, timestamps, dt_h,
                               p["maintenance_window_doy"], p["maintenance_days"], biennial)
-        _sample_forced_outages(up, rng, lambda_fail, p["mttr_hours"], total_hours, dt_h)
+        _sample_forced_outages(up, rng, lambda_fail, p["mttr_hours"], total_hours, dt_h,
+                               min_outage_hours=p["min_outage_hours"])
         avail_mw += mw[r] * up
 
     p_max_pu = avail_mw / mw.sum()
