@@ -788,6 +788,10 @@ def main() -> None:
     parser.add_argument("--effective-ntc", action="store_true",
                         help="Använd effektiv kontinentkapacitet (P80 av faktiska flöden, "
                              "market_connections_effective_mw) istället för märkkapacitet")
+    parser.add_argument("--ntc-override", nargs="+", default=None, metavar="Z0:Z1:MW",
+                        help="Sätt intern NTC-länk Z0-Z1 till MW (t.ex. SE-S:DK:2007). "
+                             "Appliceras EFTER demand-scenariots ntc_overrides → pinnar/ersätter "
+                             "en enskild länk. Kan anges flera gånger.")
     # Pris-elastisk kontinentgräns är PÅ som default; --no-market-elast stänger av.
     # --market-elasticity behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
     parser.add_argument("--market-elasticity", action="store_true", default=True,
@@ -994,6 +998,19 @@ def main() -> None:
             cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries,
             scenario_battery=scenario_battery)
 
+    if args.ntc_override:
+        for spec in args.ntc_override:
+            z0, z1, mw = spec.split(":")
+            mw = float(mw)
+            hit = False
+            for link in cfg.get("links", []):
+                if link[0] == z0 and link[1] == z1:
+                    print(f"  → NTC-override {z0}-{z1}: {link[2]} → {mw:.0f} MW (CLI)")
+                    link[2] = mw
+                    hit = True
+            if not hit:
+                raise SystemExit(f"--ntc-override: hittade ingen intern länk {z0}-{z1} i cfg['links']")
+
     if args.no_market:
         cfg["market_connections"] = []
 
@@ -1099,6 +1116,7 @@ def main() -> None:
     if args.no_expansion:               flags.append("no-expansion")
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
+    if args.ntc_override:               flags.append("ntc-override-" + "_".join(args.ntc_override))
     if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
     if args.no_tax_heatpower:           flags.append("no-tax-heatpower")
