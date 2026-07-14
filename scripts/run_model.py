@@ -792,6 +792,10 @@ def main() -> None:
                         help="Sätt intern NTC-länk Z0-Z1 till MW (t.ex. SE-S:DK:2007). "
                              "Appliceras EFTER demand-scenariots ntc_overrides → pinnar/ersätter "
                              "en enskild länk. Kan anges flera gånger.")
+    parser.add_argument("--market-ntc-override", nargs="+", default=None, metavar="NAMN:MW",
+                        help="Sätt kontinentkabel (market_connection) NAMN till MW (t.ex. "
+                             "'SE-S DE:1315' för Hansa Power Bridge +700). Appliceras EFTER "
+                             "demand-scenariots market_ntc_overrides. Kan anges flera gånger.")
     # Pris-elastisk kontinentgräns är PÅ som default; --no-market-elast stänger av.
     # --market-elasticity behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
     parser.add_argument("--market-elasticity", action="store_true", default=True,
@@ -1011,6 +1015,20 @@ def main() -> None:
             if not hit:
                 raise SystemExit(f"--ntc-override: hittade ingen intern länk {z0}-{z1} i cfg['links']")
 
+    if args.market_ntc_override:
+        for spec in args.market_ntc_override:
+            name, mw = spec.rsplit(":", 1)
+            mw = float(mw)
+            hit = False
+            for mc in cfg.get("market_connections", []):
+                if mc[0] == name:
+                    print(f"  → Marknads-NTC-override {name}: {mc[2]} → {mw:.0f} MW (CLI)")
+                    mc[2] = mw
+                    hit = True
+            if not hit:
+                raise SystemExit(f"--market-ntc-override: hittade ingen kontinentkabel '{name}' "
+                                 f"i cfg['market_connections']")
+
     if args.no_market:
         cfg["market_connections"] = []
 
@@ -1117,6 +1135,7 @@ def main() -> None:
     if args.no_market:                  flags.append("no-market")
     if args.effective_ntc:              flags.append("effective-ntc")
     if args.ntc_override:               flags.append("ntc-override-" + "_".join(args.ntc_override))
+    if args.market_ntc_override:        flags.append("market-ntc-" + "_".join(args.market_ntc_override))
     if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
     if args.no_tax_heatpower:           flags.append("no-tax-heatpower")
