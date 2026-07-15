@@ -796,6 +796,18 @@ def main() -> None:
                         help="Sätt kontinentkabel (market_connection) NAMN till MW (t.ex. "
                              "'SE-S DE:1315' för Hansa Power Bridge +700). Appliceras EFTER "
                              "demand-scenariots market_ntc_overrides. Kan anges flera gånger.")
+    parser.add_argument("--move-load", nargs="+", default=None, metavar="ZFROM:ZTO:FRAC",
+                        help="Flytta en ANDEL (0-1) av ZFROM:s last-timserie till ZTO, profil-troget "
+                             "(t.ex. SE-S:SE-N:0.30 för Stockholm-remsan). Bevarar lastform + total "
+                             "nordisk last. Kan anges flera gånger.")
+    parser.add_argument("--move-nuclear", nargs="+", default=None, metavar="ZFROM:ZTO:MW",
+                        help="Flytta MW installerad kärnkraft ZFROM→ZTO (t.ex. SE-S:SE-N:3300 för "
+                             "Forsmark). I dispatch-läge kopieras ZFROM:s tillgänglighetsprofil till "
+                             "ZTO. Kan anges flera gånger.")
+    parser.add_argument("--move-link", nargs="+", default=None, metavar="ZFROM:ZOTHER:ZTO",
+                        help="Relokera intern länk ZFROM-ZOTHER så den ansluter ZTO-ZOTHER (t.ex. "
+                             "SE-S:FI:SE-N för Fenno-Skan). Slås ihop med ev. befintlig ZTO-ZOTHER-länk. "
+                             "Kan anges flera gånger.")
     # Pris-elastisk kontinentgräns är PÅ som default; --no-market-elast stänger av.
     # --market-elasticity behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
     parser.add_argument("--market-elasticity", action="store_true", default=True,
@@ -1136,6 +1148,9 @@ def main() -> None:
     if args.effective_ntc:              flags.append("effective-ntc")
     if args.ntc_override:               flags.append("ntc-override-" + "_".join(args.ntc_override))
     if args.market_ntc_override:        flags.append("market-ntc-" + "_".join(args.market_ntc_override))
+    if args.move_load:                  flags.append("move-load-" + "_".join(args.move_load))
+    if args.move_nuclear:               flags.append("move-nuclear-" + "_".join(args.move_nuclear))
+    if args.move_link:                  flags.append("move-link-" + "_".join(args.move_link))
     if not args.market_elasticity:      flags.append("no-market-elast")
     if args.add_heat:                   flags.append("heat-store-ext" if args.heat_store_ext else "heat")
     if args.no_tax_heatpower:           flags.append("no-tax-heatpower")
@@ -1231,6 +1246,59 @@ def main() -> None:
               f"nya extendable {[(z, n, s) for z, n, s in extra_nuclear]}; "
               f"nya FASTA {dict(fixed_nuclear)} "
               f"(target_cf={synthetic_nuclear['params'].get('target_cf', 0.85)})")
+
+    # Zon-omdragning (komposerbara spakar; appliceras på inputs/cfg före build_network).
+    # Bevarar total nordisk last/kärnkraft — flyttar bara MW/andel mellan zon-etiketter.
+    if args.move_load:
+        ld = inputs["load"]
+        for spec in args.move_load:
+            zf, zt, frac = spec.split(":"); frac = float(frac)
+            if zf not in ld.columns or zt not in ld.columns:
+                raise SystemExit(f"--move-load: okänd zon i '{spec}' (finns: {list(ld.columns)})")
+            moved = frac * ld[zf]
+            ld[zt] = ld[zt] + moved          # ZTO först (från ursprunglig ZFROM-serie)
+            ld[zf] = ld[zf] * (1.0 - frac)   # sedan skala ned ZFROM
+            print(f"  → move-load {zf}→{zt}: {frac:.0%} av {zf}-last "
+                  f"({moved.mean():.0f} MW snitt) profil-troget flyttad")
+
+    if args.move_nuclear:
+        if synthetic_nuclear["active"]:
+            raise SystemExit("--move-nuclear stöds bara i dispatch-läge (ej --add-nuclear/synth); "
+                             "synth-läget kräver en nuclear_synth_existing-post för målzonen.")
+        nprof = inputs["nuclear_profile"]
+        for spec in args.move_nuclear:
+            zf, zt, mw = spec.split(":"); mw = float(mw)
+            cur = cfg["zones"].get(zf, {}).get("nuclear_p_nom_mw", 0)
+            if mw > cur:
+                raise SystemExit(f"--move-nuclear: {zf} har bara {cur} MW, kan ej flytta {mw:.0f}")
+            prev_zt = cfg["zones"].setdefault(zt, {}).get("nuclear_p_nom_mw", 0)
+            cfg["zones"][zt]["nuclear_p_nom_mw"] = prev_zt + mw
+            cfg["zones"][zf]["nuclear_p_nom_mw"] = cur - mw
+            # Tillgänglighetsprofil (0-1) för målzonen. Obs: kolumnen kan redan finnas
+            # (t.ex. SE-N = nollor) → sätt den ALLTID, inte bara vid saknad kolumn.
+            if prev_zt <= 0 or zt not in nprof.columns:
+                nprof[zt] = nprof[zf]                              # målet ärver källans form
+            else:
+                nprof[zt] = (nprof[zt] * prev_zt + nprof[zf] * mw) / (prev_zt + mw)  # kap-viktad
+            print(f"  → move-nuclear {zf}→{zt}: {mw:.0f} MW ({zf} {cur}→{cur-mw}, "
+                  f"{zt} {prev_zt}→{cfg['zones'][zt]['nuclear_p_nom_mw']:.0f}); "
+                  f"profil {'ärvd från' if prev_zt <= 0 else 'blandad med'} {zf}")
+
+    if args.move_link:
+        for spec in args.move_link:
+            zf, zo, zt = spec.split(":")
+            src = next((l for l in cfg["links"] if {l[0], l[1]} == {zf, zo}), None)
+            if src is None:
+                raise SystemExit(f"--move-link: hittade ingen länk {zf}-{zo} i cfg['links']")
+            mw = src[2]; cfg["links"].remove(src)
+            dst = next((l for l in cfg["links"] if {l[0], l[1]} == {zt, zo}), None)
+            if dst is not None:
+                dst[2] += mw
+                print(f"  → move-link {zf}-{zo} → {zt}-{zo}: {mw:.0f} MW hopslagen "
+                      f"(→ {zt}-{zo} = {dst[2]:.0f} MW)")
+            else:
+                cfg["links"].append([zt, zo, mw])
+                print(f"  → move-link {zf}-{zo} → {zt}-{zo}: {mw:.0f} MW (ny länk)")
 
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
