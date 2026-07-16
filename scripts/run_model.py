@@ -81,6 +81,31 @@ def make_vre_extendable(n, cfg: dict, zones: list, n_years: float,
     return touched
 
 
+def make_link_extendable(n, cfg: dict, link_name: str, overnight_eur_per_w: float,
+                         n_years: float, p_nom_min=None, p_nom_max: float = 30000.0,
+                         lifetime: int = 40):
+    """Gör en intern NTC-länk kapacitetsexpanderbar med annualiserad overnight-kostnad.
+
+    overnight_eur_per_w: t.ex. 2.0 för 2 M€/MW. Annualiseras som övriga tekniker
+    (CRF(lifetime, r) + fom) × n_years och debiteras på p_nom_opt. p_min_pu=-1.0
+    behålls → flödesgränsen blir ±p_nom_opt (symmetrisk bidirektionell utbyggnad).
+    p_nom_min default = byggd p_nom (golvet). Returnerar (floor, ann €/MW/år)."""
+    r   = cfg["costs"]["discount_rate"]
+    fom = cfg["costs"]["fom_fraction"]
+    if link_name not in n.links.index:
+        raise SystemExit(f"--expand-link: länk '{link_name}' finns ej i nätverket")
+    built = float(n.links.at[link_name, "p_nom"])
+    floor = built if p_nom_min is None else float(p_nom_min)
+    ann   = _annualized_cost(overnight_eur_per_w, lifetime, r, fom)   # €/MW/år
+    n.links.at[link_name, "p_nom_extendable"] = True
+    n.links.at[link_name, "p_nom_min"]        = floor
+    n.links.at[link_name, "p_nom_max"]        = p_nom_max
+    n.links.at[link_name, "capital_cost"]     = ann * n_years
+    print(f"  → expanderbar länk: {link_name} (golv {floor:.0f} MW, tak {p_nom_max:.0f} MW, "
+          f"overnight {overnight_eur_per_w:.2f} €/W, annual.kap {ann/1e3:.0f} €/kW/år)")
+    return floor, ann
+
+
 def report_grid_cost(n, cfg: dict, n_years: float) -> None:
     """Post-solve nätkostnads-bokföring (--grid-cost): annualiserad nät-adder ×
     tillförd kapacitet (p_nom_opt − p_nom_min) per kraftslag × zon. Ren
@@ -572,6 +597,7 @@ def apply_dispatch_replay(parser, args):
     base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
     base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
+    base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -678,8 +704,10 @@ def main() -> None:
                              "ventil-bzn (DE-LU/EE/LT/PL/NL/GB), ej zon-priser. Se project_solar_overbuild_continent_spread.")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
-    parser.add_argument("--voll", action="store_true",
-                        help="Lägg till VOLL-slack (3000 EUR/MWh) i ALLA zoner — ger losslastmått och förhindrar dualexplosion")
+    parser.add_argument("--voll", nargs="?", type=float, const=3000.0, default=None, metavar="EUR",
+                        help="Lägg VOLL-slack i ALLA zoner vid EUR/MWh (bart --voll = 3000, EI ~8000). "
+                             "Ger LOLE/EENS-mått (slack-dispatch = osåld energi), cappar priser vid VOLL och "
+                             "förhindrar dualexplosion. Utelämnad = bara icke-marknadszoner @ 3000 (oförändrat).")
     parser.add_argument("--soc-pin", action="append", default=[], metavar="ZON:START:END",
                         help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
                              "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
@@ -796,6 +824,11 @@ def main() -> None:
                         help="Sätt kontinentkabel (market_connection) NAMN till MW (t.ex. "
                              "'SE-S DE:1315' för Hansa Power Bridge +700). Appliceras EFTER "
                              "demand-scenariots market_ntc_overrides. Kan anges flera gånger.")
+    parser.add_argument("--expand-link", nargs="+", default=None, metavar="Z0:Z1:MEUR[:FLOOR_MW[:MAX_MW]]",
+                        help="Gör intern länk Z0-Z1 kapacitetsexpanderbar med overnight-kostnad "
+                             "MEUR (M€/MW), annualiseras (40 år). FLOOR_MW=p_nom_min (default = "
+                             "byggd p_nom), MAX_MW=p_nom_max (default 30000). T.ex. SE-N:SE-S:2.0:7600. "
+                             "Kan anges flera gånger.")
     parser.add_argument("--move-load", nargs="+", default=None, metavar="ZFROM:ZTO:FRAC",
                         help="Flytta en ANDEL (0-1) av ZFROM:s last-timserie till ZTO, profil-troget "
                              "(t.ex. SE-S:SE-N:0.30 för Stockholm-remsan). Bevarar lastform + total "
@@ -1148,6 +1181,7 @@ def main() -> None:
     if args.effective_ntc:              flags.append("effective-ntc")
     if args.ntc_override:               flags.append("ntc-override-" + "_".join(args.ntc_override))
     if args.market_ntc_override:        flags.append("market-ntc-" + "_".join(args.market_ntc_override))
+    if args.expand_link:                flags.append("expand-link-" + "_".join(args.expand_link).replace(":", "_"))
     if args.move_load:                  flags.append("move-load-" + "_".join(args.move_load))
     if args.move_nuclear:               flags.append("move-nuclear-" + "_".join(args.move_nuclear))
     if args.move_link:                  flags.append("move-link-" + "_".join(args.move_link))
@@ -1156,7 +1190,7 @@ def main() -> None:
     if args.no_tax_heatpower:           flags.append("no-tax-heatpower")
     if args.chp_fixed_gw is not None:   flags.append(f"chpfixed-{args.chp_fixed_gw:g}gw")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
-    if args.voll:                       flags.append("voll")
+    if args.voll is not None:           flags.append(f"voll{int(args.voll)}")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
     if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
@@ -1340,6 +1374,20 @@ def main() -> None:
                       f"= {budget_eur/1e9:.2f} mdr€ (vid {USD_TO_EUR} USD/EUR, likhet)")
             extra_callbacks.append(
                 oc_budget_constraint(cfg, args.expand_vre, budget_eur, equality=True))
+
+    # Endogen snitt-expansion (--expand-link): gör intern NTC-länk kapacitetsexpanderbar
+    if args.expand_link:
+        n_years_link = len(snapshots) * res / 8760.0
+        print("Endogen länk-expansion:")
+        for spec in args.expand_link:
+            parts = spec.split(":")
+            if len(parts) < 3:
+                raise SystemExit(f"--expand-link: ogiltig spec '{spec}' (kräver Z0:Z1:MEUR[:FLOOR[:MAX]])")
+            z0, z1, meur = parts[0], parts[1], float(parts[2])
+            floor = float(parts[3]) if len(parts) > 3 else None
+            pmax  = float(parts[4]) if len(parts) > 4 else 30000.0
+            make_link_extendable(n, cfg, f"{z0}-{z1}", meur, n_years_link,
+                                 p_nom_min=floor, p_nom_max=pmax)
 
     # Nätkostnad (--grid-cost): egen objektiv-term på INKREMENTET för alla extendable
     # enheter (inkl. ny kärnkraft/vind), exkl. KVV. I tvingat budgetläge går grid via
