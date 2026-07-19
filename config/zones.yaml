@@ -203,6 +203,15 @@ links:
 links_expansion_overrides:
   - [SE-N, FI,    2000]   # Aurora post-go-live
 
+# Dagens (befintliga) batterier — laddas som FRIA (capital_cost=0, sunk) i dispatch/
+# dagens-värld-körningar (dvs när INGET --demand-scenario är aktivt). I demand-scenario-
+# körningar representeras batteriflottan i stället av scenariots egna 'battery:'-poster,
+# så baseline hoppas då över (undviker dubbelräkning). [zon, MW, timmar].
+baseline_batteries:
+  - [SE-S, 1500, 2]
+  - [FI,    500, 2]
+  - [DK,    400, 2]
+
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
 # Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
 

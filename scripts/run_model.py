@@ -716,7 +716,9 @@ def main() -> None:
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
-                        help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:1000:4'. "
+                        help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:5000:4'. BÄR "
+                             "annualiserad svk_2040-kapex (inkl. IDC) även fast i dispatch (konstant "
+                             "i objektivet). Med --battery-extendable optimeras effekten i stället. "
                              "Kan anges flera gånger.")
     parser.add_argument("--battery-extendable", action="store_true",
                         help="Gör --add-battery investerbart: modellen optimerar effekten "
@@ -784,12 +786,13 @@ def main() -> None:
                              "reaktorstorlek ≈ p_nom_opt/N), tak N×1500 MW. Befintlig flotta "
                              "finns med by default och byter då till syntetisk profil "
                              "(config.nuclear_synth_existing). Kan anges flera gånger.")
-    parser.add_argument("--add-nuclear-fixed", nargs="+", action="extend", default=[], metavar="ZON:N:MW",
-                        help="Lägg till N NYA EXOGENA (fasta, ej extendable) reaktorer à MW i en zon, "
-                             "t.ex. 'SE-S:3:500' = +1,5 GW (SvK MM 2040). Must-run syntetisk profil "
-                             "SAMMANVÄVD med befintliga flottan (heterogen effektviktad reaktorlista) → "
-                             "modellen får inte välja bort den. Aktiverar syntetiskt läge. "
-                             "Kan anges flera gånger.")
+    parser.add_argument("--add-nuclear-fixed", nargs="+", action="extend", default=[], metavar="ZON:N:MW[:SEED]",
+                        help="Lägg till N NYA EXOGENA (fasta, ej extendable) reaktorer à MW i en zon "
+                             "som EGEN must-run-generator '{zon} nuclear fixed', t.ex. 'SE-S:1:1000' = "
+                             "+1 GW. Syntetisk stokastisk tillgänglighet (valfri SEED, annars härledd). "
+                             "BÄR verklig annualiserad svk_2040-kapex (inkl. IDC) + VOM — laddas ÄVEN i "
+                             "dispatch (konstant i objektivet → synliggör kostnaden). Befintliga flottan "
+                             "lämnas orörd. Kan anges flera gånger.")
     parser.add_argument("--nuclear-discount-rate", nargs="+", action="extend", default=[], metavar="ZON:RATE",
                         help="Egen diskontoränta för NY kärnkraft (--add-nuclear) i en zon, "
                              "t.ex. 'SE-N:0.03 SE-S:0.03'. Påverkar bara den extendable expansionens "
@@ -893,7 +896,9 @@ def main() -> None:
             soc_pin_start[z] = float(parts[1])
             soc_pin_end[z] = float(parts[2])
 
-    # Batterier samlas som 4-tupler (zon, p_nom_mw, max_hours, extendable).
+    # Batterier samlas som tupler (zon, p_nom_mw, max_hours, extendable[, costed]).
+    # --add-battery: costed=True → bär svk_2040+IDC-kapex även fast (dispatch). Baseline/
+    # scenario/--battery lämnas 4-tupler (costed default False).
     batteries = []
     for spec in args.add_battery:   # bakåtkompatibel: --add-battery + --battery-extendable
         parts = spec.split(":")
@@ -901,7 +906,7 @@ def main() -> None:
             print(f"Ogiltigt --add-battery format: '{spec}' (förväntat ZON:MW:HOURS)")
             sys.exit(1)
         batteries.append((parts[0].strip(), float(parts[1]), float(parts[2]),
-                          bool(args.battery_extendable)))
+                          bool(args.battery_extendable), True))
     # --battery DURATION [ZON:MW ...]: utan zoner = expanderbart i ALLA zoner;
     # med zoner = fasta storlekar i de angivna, 0 i övriga. (Zoner expanderas
     # efter att cfg lästs in.)
@@ -934,11 +939,12 @@ def main() -> None:
     fixed_nuclear: dict = {}
     for spec in args.add_nuclear_fixed:
         parts = spec.split(":")
-        if len(parts) != 3:
-            print(f"Ogiltigt --add-nuclear-fixed format: '{spec}' (förväntat ZON:N:MW — "
-                  f"N fasta reaktorer à MW, exogen must-run)")
+        if len(parts) not in (3, 4):
+            print(f"Ogiltigt --add-nuclear-fixed format: '{spec}' (förväntat ZON:N:MW[:SEED] — "
+                  f"N fasta reaktorer à MW, exogen must-run, costed svk_2040)")
             sys.exit(1)
-        fixed_nuclear.setdefault(parts[0].strip(), []).append((int(parts[1]), float(parts[2])))
+        seed = int(parts[3]) if len(parts) == 4 else None
+        fixed_nuclear.setdefault(parts[0].strip(), []).append((int(parts[1]), float(parts[2]), seed))
 
     extra_wind = []
     for spec in args.add_wind:
@@ -1046,6 +1052,16 @@ def main() -> None:
         demand_pnom_max, demand_pnom_min = apply_demand_scenario(
             cfg, args.demand_scenario, hydrogen_overrides, ev_overrides, batteries,
             scenario_battery=scenario_battery)
+    else:
+        # Dagens värld (inget demand-scenario): ladda dagens FRIA baseline-batterier
+        # (costed=False). I demand-scenario-läge representeras flottan av scenario-
+        # batterierna → baseline hoppas över (undviker dubbelräkning).
+        base_bats = cfg.get("baseline_batteries", [])
+        for z, mw, h in base_bats:
+            batteries.append((z, float(mw), float(h), False, False))
+        if base_bats:
+            print("  Baseline-batterier (fria): "
+                  + ", ".join(f"{z} {mw:.0f}MW/{h:.0f}h" for z, mw, h in base_bats))
 
     if args.ntc_override:
         for spec in args.ntc_override:
@@ -1268,17 +1284,20 @@ def main() -> None:
     # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw) + ev. ny via --add-nuclear.
     # active=True (--add-nuclear angivet) → expansionsläge: befintlig flotta blir fast
     # + syntetisk (nuclear_synth_existing), nya reaktorer expanderas (_add_extra_nuclear).
+    # active = expansionsläge (--add-nuclear): befintlig flotta blir fast+syntetisk.
+    # --add-nuclear-fixed triggar INTE detta längre — den byggs som egen costed generator
+    # (_add_fixed_nuclear) och lämnar befintliga flottan orörd (faktisk profil).
     synthetic_nuclear = {
         "existing": cfg.get("nuclear_synth_existing", {}),
         "params":   cfg.get("nuclear_synth", {}),
-        "active":   bool(extra_nuclear or fixed_nuclear),
+        "active":   bool(extra_nuclear),
         "fixed":    fixed_nuclear,
     }
     if extra_nuclear or fixed_nuclear:
         ex = cfg.get("nuclear_synth_existing", {})
-        print(f"Kärnkraft EXPANSIONSLÄGE: befintlig flotta syntetisk {list(ex)}; "
+        print(f"Kärnkraft: befintlig flotta {'syntetisk ' + str(list(ex)) if extra_nuclear else 'orörd (faktisk profil)'}; "
               f"nya extendable {[(z, n, s) for z, n, s in extra_nuclear]}; "
-              f"nya FASTA {dict(fixed_nuclear)} "
+              f"nya FASTA (costed svk_2040) {dict(fixed_nuclear)} "
               f"(target_cf={synthetic_nuclear['params'].get('target_cf', 0.85)})")
 
     # Zon-omdragning (komposerbara spakar; appliceras på inputs/cfg före build_network).

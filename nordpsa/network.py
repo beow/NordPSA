@@ -8,6 +8,7 @@ Nätverksstruktur:
   - Last per zon
   - Load shedding (slack) per zon med högt pris
 """
+import zlib
 from pathlib import Path
 from typing import Callable, Dict
 
@@ -48,6 +49,24 @@ def _annualized_cost(overnight_eur_per_w: float, lifetime: int,
     return oc_mw * (_crf(lifetime, r) + fom_fraction)
 
 
+def _scenario_overnight_mw(cfg: dict, tech: str, name: str = "svk_2040",
+                           max_hours: float | None = None):
+    """Overnight €/MW (INKL. byggränta IDC) + (lifetime, fom_fraction, vom) för en
+    teknik ur cfg['cost_scenarios'][name]. Speglar IDC-matten i apply_cost_scenario
+    (run_model.py) men returnerar råtal utan att mutera cfg['costs']. Används för att
+    prissätta TILLAGD kapacitet (--add-battery / --add-nuclear-fixed) från SvK-2040
+    OBEROENDE av run:ens --cost-scenario."""
+    p   = cfg["cost_scenarios"][name][tech]
+    r   = cfg["costs"]["discount_rate"]
+    idc = 1.0 + p["build_years"] / 2 * r
+    if tech == "battery":
+        oc = (p["power_eur_per_kw"] + max_hours * p["energy_eur_per_kwh"]) * 1e3 * idc
+        return oc, p["lifetime_years"], p.get("fom_fraction", 0.025), 0.0
+    oc = p["oc_eur_per_kw"] * 1e3 * idc
+    return oc, p["lifetime_years"], p["fom_eur_per_kw"] / (p["oc_eur_per_kw"] * idc), \
+        p.get("vom_eur_per_mwh", 0.0)
+
+
 def _grid_capital_cost(carrier: str, zone: str, ccfg: dict, r: float,
                        fom_default: float, n_years: float) -> float:
     """Annualiserad nät-adder (EUR/MW × n_år) för byggd kapacitet av (carrier, zon).
@@ -83,7 +102,7 @@ def build_network(
     actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
     soc_initial_override:    dict | None = None,
-    voll:                    bool = False,
+    voll:                    float | None = None,
     batteries:               list | None = None,
     extra_nuclear:           list | None = None,
     extra_wind:              list | None = None,
@@ -141,7 +160,7 @@ def build_network(
     _add_buses(n, cfg)
     _add_links(n, cfg)
     _add_loads(n, load)
-    _add_slack(n, cfg, all_zones=voll)
+    _add_slack(n, cfg, all_zones=(voll is not None), voll_price=voll)
     _add_thermal(n, thermal_profile, cfg)
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
@@ -152,9 +171,11 @@ def build_network(
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
-    _add_batteries(n, batteries, ccfg, r, n_years)
+    _add_batteries(n, batteries, ccfg, r, n_years, cfg)
     _add_extra_nuclear(n, extra_nuclear, ccfg, r, n_years, snapshots,
                        (synthetic_nuclear or {}).get("params"), fom)
+    _add_fixed_nuclear(n, (synthetic_nuclear or {}).get("fixed"), cfg, ccfg, r, n_years,
+                       snapshots, (synthetic_nuclear or {}).get("params"))
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
     _add_heat(n, cfg, heat_demand, r, n_years)
@@ -191,14 +212,18 @@ def _add_loads(n: pypsa.Network, load: pd.DataFrame) -> None:
         n.add("Load", f"{zone} load", bus=zone, p_set=load[zone])
 
 
-def _add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False) -> None:
+def _add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False,
+               voll_price: float | None = None) -> None:
     """Load shedding-generator per zon.
 
     all_zones=False (standard): bara zoner utan marknadsanslutning.
     all_zones=True (--voll): alla zoner, inklusive de med marknadsanslutning.
-      Används som VOLL-mått: slack-dispatch × MC_SLACK = losskostnad i EUR.
-      Priser toppas vid MC_SLACK istf att dualvariabler exploderar.
+      Används som VOLL-mått: slack-dispatch × VOLL = losskostnad i EUR.
+      Priser toppas vid VOLL istf att dualvariabler exploderar.
+    voll_price: lossprislapp (EUR/MWh). None → MC_SLACK (3000). När satt
+      gäller den UNIFORMT i alla slack-zoner (även de utan marknad).
     """
+    mc = voll_price if voll_price is not None else MC_SLACK
     market_zones = {zone for _name, zone, *_ in cfg.get("market_connections", [])}
     for zone in cfg["zones"]:
         if not all_zones and zone in market_zones:
@@ -207,7 +232,7 @@ def _add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False) -> None:
             "Generator", f"{zone} slack",
             bus=zone,
             p_nom=1e6,
-            marginal_cost=MC_SLACK,
+            marginal_cost=mc,
             carrier="slack",
         )
 
@@ -392,18 +417,19 @@ def _add_hydro(
 
 
 def _add_batteries(n: pypsa.Network, batteries: list | None,
-                   ccfg: dict, r: float, n_years: float) -> None:
+                   ccfg: dict, r: float, n_years: float, cfg: dict | None = None) -> None:
     """Lägger till batterier som StorageUnit (carrier 'battery').
 
-    batteries: lista av (zon, p_nom_mw, max_hours, extendable). Round-trip ~90%
-    (0.95×0.95), kan ladda (p_min_pu=-1), cyklisk SOC, litet marginalkostnad för
-    att bryta degeneracy. Inget inflöde. Varaktigheten (max_hours) är fast — vid
-    extendable optimeras bara effekten (p_nom), energi = p_nom × max_hours.
+    batteries: lista av (zon, p_nom_mw, max_hours, extendable[, costed]). 5:e elementet
+    'costed' (default False) markerar TILLAGDA batterier (--add-battery) som ska bära
+    verklig annualiserad SvK-2040-kapex (inkl. IDC) ÄVEN när de är fasta i dispatch —
+    då som konstant i objektivet. Round-trip ~90% (0.95×0.95), kan ladda (p_min_pu=-1),
+    cyklisk SOC, litet marginalkostnad för att bryta degeneracy. Inget inflöde.
 
-    Kostnad delas i effektdel (€/kW på p_nom) + energidel (€/kWh × max_hours).
-    overnight €/MW = (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1000.
-    Annualiseras med batteriets egen livslängd (kort, ~15 år) och FOM. Fast
-    batteri (extendable=False) får capital_cost=0; extendable får finit p_nom_max.
+    Kapitalkostnad: fritt batteri (ext=False, costed=False) → 0 (sunk). costed ELLER
+    extendable → annualiserad overnight ((power + timmar×energi)×1000) med batteriets
+    egen livslängd (~15 år) och FOM. costed-tal hämtas från svk_2040+IDC (oberoende av
+    --cost-scenario); extendable använder aktiv cfg['costs']['battery'].
     """
     if not batteries:
         return
@@ -413,31 +439,58 @@ def _add_batteries(n: pypsa.Network, batteries: list | None,
     life    = bc["lifetime_years"]
     fom     = bc["fom_fraction"]
     pmax    = float(bc.get("p_nom_max_mw", 50000))
-    for zone, p_nom, max_h, ext in batteries:
+    # Bygg FRIA fasta batterier (baseline/scenario) först → de behåller kanoniska namn
+    # '{zon} battery'; costed/extendable tillägg får ev. suffix.
+    ordered = sorted(batteries, key=lambda e: e[3] or (bool(e[4]) if len(e) > 4 else False))
+    for entry in ordered:
+        zone, p_nom, max_h, ext = entry[:4]
+        costed = bool(entry[4]) if len(entry) > 4 else False
         if zone not in n.buses.index:
             print(f"  Varning: batteri-zon {zone} saknas — hoppar över")
             continue
-        overnight_mw = (p_kw + max_h * e_kwh) * 1e3          # €/MW
-        cap_cost     = overnight_mw * (_crf(life, r) + fom) * n_years
+        if costed and cfg is not None:                       # tillagt batteri: svk_2040+IDC
+            overnight_mw, c_life, c_fom, _ = _scenario_overnight_mw(cfg, "battery", max_hours=max_h)
+            cap_cost = overnight_mw * (_crf(c_life, r) + c_fom) * n_years
+        else:
+            overnight_mw = (p_kw + max_h * e_kwh) * 1e3      # €/MW
+            cap_cost     = overnight_mw * (_crf(life, r) + fom) * n_years
+        # Unikt namn: första batteriet i zonen = '{zon} battery', extra får suffix
+        # (så baseline-fritt + costed --add-battery i SAMMA zon inte krockar).
+        name = f"{zone} battery"
+        k = 2
+        while name in n.storage_units.index:
+            name = f"{zone} battery {k}"; k += 1
+        # Extendable-lägen: ext = investerbart 0..pmax; costed = FAST men pinnat
+        # (p_nom_min=p_nom_max) så kapexen hamnar i objective_constant (annars släpper
+        # PyPSA fasta kapitalkostnader helt). Fritt baseline/scenario = icke-extendable.
+        extendable = ext or costed
+        if ext:
+            pn, pmn, pmx = 0.0, 0.0, pmax
+        elif costed:
+            pn, pmn, pmx = p_nom, p_nom, p_nom          # pinnat → kapex i objective_constant
+        else:
+            pn, pmn, pmx = p_nom, p_nom, float("inf")
         n.add(
-            "StorageUnit", f"{zone} battery",
+            "StorageUnit", name,
             bus=zone,
             carrier="battery",
-            p_nom=0.0 if ext else p_nom,
-            p_nom_extendable=ext,
-            p_nom_min=0.0 if ext else p_nom,
-            p_nom_max=pmax if ext else float("inf"),
+            p_nom=pn,
+            p_nom_extendable=extendable,
+            p_nom_min=pmn,
+            p_nom_max=pmx,
             max_hours=max_h,
             efficiency_store=0.95,
             efficiency_dispatch=0.95,
             cyclic_state_of_charge=True,
             marginal_cost=0.01,
-            capital_cost=cap_cost if ext else 0.0,
+            capital_cost=cap_cost if extendable else 0.0,
         )
-        mode = f"extendable ≤{pmax:.0f} MW" if ext else f"fast {p_nom:.0f} MW"
-        print(f"  → batteri {zone}: {mode} / {max_h:.0f}h, "
-              f"overnight {overnight_mw/1e3:.0f} €/kW, "
-              f"annual.kap {overnight_mw*(_crf(life, r)+fom)/1e3:.0f} €/kW/år")
+        charged = ext or costed
+        mode = (f"extendable ≤{pmax:.0f} MW" if ext
+                else (f"fast {p_nom:.0f} MW (costed)" if costed else f"fast {p_nom:.0f} MW (fri)"))
+        kap = f"annual.kap {cap_cost/n_years/1e3:.0f} €/kW/år" if charged else "kapital=0 (sunk)"
+        print(f"  → batteri {name}: {mode} / {max_h:.0f}h, "
+              f"overnight {overnight_mw/1e3:.0f} €/kW, {kap}")
 
 
 def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
@@ -490,6 +543,59 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
               f"tak {p_nom_max:.0f} MW, realiserad CF={p_max.mean():.3f}, "
               f"r={r_zone:.0%}{' (override)' if zone in disc_by_zone else ''}, "
               f"kapital {cap_cost/n_years/1e3:.0f} €/kW/år→p_nom_opt")
+
+
+def _add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
+                       ccfg: dict, r: float, n_years: float, snapshots=None,
+                       synth_params: dict | None = None) -> None:
+    """Exogen FAST kärnkraft via --add-nuclear-fixed ZON:N:MW[:SEED] som EGEN generator
+    '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max),
+    SYNTETISK stokastisk tillgänglighet (seed → dekorrelerade avbrott), FAST p_nom.
+    Bär verklig annualiserad SvK-2040-kapex (inkl. IDC) + VOM — laddas på p_nom ÄVEN i
+    dispatch (konstant i objektivet → synliggör kostnaden). Befintliga flottan lämnas
+    orörd (faktisk profil, capital 0)."""
+    if not fixed_nuclear:
+        return
+    params = synth_params or {}
+    oc_mw, life, fom_n, vom = _scenario_overnight_mw(cfg, "nuclear")
+    cap_cost = oc_mw * (_crf(life, r) + fom_n) * n_years
+    for zone, adds in fixed_nuclear.items():
+        if zone not in n.buses.index:
+            print(f"  Varning: kärnkrafts-zon {zone} saknas — hoppar över")
+            continue
+        # adds: lista av (n_react, mw_each[, seed]); bygg heterogen reaktorlista + seed
+        reactor_mw, seed = [], None
+        for a in adds:
+            n_r, mw = int(a[0]), float(a[1])
+            reactor_mw += [mw] * n_r
+            if len(a) > 2 and a[2] is not None:
+                seed = int(a[2])
+        if seed is None:
+            # Deterministisk härledd seed (hash() randomiseras per process → ej reproducerbart)
+            seed = int(params.get("seed", 0)) + (zlib.crc32(zone.encode()) % 1000)
+        p_nom = float(sum(reactor_mw))
+        p_max = availability_timeseries(params, snapshots, reactor_mw, seed=seed)
+        p_min = p_max.clip(lower=0)                                          # must-run
+        # Extendable-pinnat (p_nom_min=p_nom_max=p_nom) → FAST kapacitet men kapexen
+        # hamnar i objective_constant (PyPSA släpper annars fasta kapitalkostnader).
+        # Must-run bevaras via p_min_pu=p_max_pu på den pinnade p_nom_opt.
+        n.add(
+            "Generator", f"{zone} nuclear fixed",
+            bus=zone,
+            carrier="nuclear",
+            p_nom=p_nom,
+            p_nom_min=p_nom,
+            p_nom_max=p_nom,
+            p_nom_extendable=True,
+            p_max_pu=p_max,
+            p_min_pu=p_min,
+            marginal_cost=vom,
+            capital_cost=cap_cost,
+        )
+        print(f"  → fast kärnkraft {zone}: {len(reactor_mw)} reaktorer à "
+              f"{'/'.join(str(int(m)) for m in sorted(set(reactor_mw)))} MW = {p_nom:.0f} MW "
+              f"synth (seed {seed}), CF={p_max.mean():.3f}, "
+              f"kapital {cap_cost/n_years/1e3:.0f} €/kW/år + vom {vom} €/MWh")
 
 
 def _add_extra_wind(n: pypsa.Network, extra_wind: list | None,
@@ -1024,45 +1130,35 @@ def _add_nuclear(
     # Expansionsläge (--add-nuclear angivet → synthetic_nuclear['active']): befintlig
     # flotta blir FAST (ej extendable) + SYNTETISK profil; ny kärnkraft expanderas
     # separat i _add_extra_nuclear. Dispatchläge: faktisk profil, extendable per config.
+    # OBS: exogen FAST kärnkraft (--add-nuclear-fixed) byggs numera i en EGEN generator
+    # (_add_fixed_nuclear) och rör INTE denna befintliga-flotta-funktion.
     syn          = synthetic_nuclear or {}
     syn_active   = bool(syn.get("active"))
     syn_existing = syn.get("existing", {}) or {}
     syn_params   = syn.get("params", {}) or {}
-    syn_fixed    = syn.get("fixed", {}) or {}           # {zon: [(n_react, mw_each), ...]} exogen fast
     min_frac     = float(syn_params.get("min_load_frac", NUCLEAR_MIN_FRACTION))
     extendable   = tcfg["extendable"] and not syn_active
 
     for zone, zcfg in cfg["zones"].items():
         p_nom_existing = zcfg.get("nuclear_p_nom_mw", 0)
-        fixed_adds     = syn_fixed.get(zone, [])         # exogena fasta reaktorer (--add-nuclear-fixed)
-        fixed_mw       = sum(int(n_r) * float(mw) for n_r, mw in fixed_adds)
-        if p_nom_existing == 0 and fixed_mw == 0 and not extendable:
+        if p_nom_existing == 0 and not extendable:
             continue
 
-        if syn_active and (zone in syn_existing or fixed_mw > 0):
-            # Kombinerad heterogen flotta: befintliga (lika stora) + ev. nya fasta reaktorer.
-            # availability_timeseries effektviktar per reaktor → SvK-stil blandflotta i EN profil.
-            reactor_mw = []
-            if zone in syn_existing and p_nom_existing > 0:
-                sc   = syn_existing[zone]
-                n_ex = int(sc["n_reactors"]); seed = int(sc["seed"])
-                reactor_mw += [p_nom_existing / n_ex] * n_ex
-            else:
-                seed = int(syn_params.get("seed", 0))
-            for n_r, mw in fixed_adds:
-                reactor_mw += [float(mw)] * int(n_r)
+        if syn_active and zone in syn_existing and p_nom_existing > 0:
+            # Befintlig flotta som syntetisk blandflotta (expansionsläge, --add-nuclear).
+            sc   = syn_existing[zone]
+            n_ex = int(sc["n_reactors"]); seed = int(sc["seed"])
+            reactor_mw = [p_nom_existing / n_ex] * n_ex
             p_max = availability_timeseries(syn_params, snapshots, reactor_mw, seed=seed)
             p_min = (p_max * min_frac).clip(lower=0)
-            fx = (f" + {sum(int(n) for n, _ in fixed_adds)}×fast à "
-                  f"{'/'.join(str(int(mw)) for _, mw in fixed_adds)} MW" if fixed_adds else "")
-            print(f"  → kärnkraft {zone}: {p_nom_existing + fixed_mw:.0f} MW "
-                  f"({len(reactor_mw)} reaktorer synth{fx}, seed {seed}), "
+            print(f"  → kärnkraft {zone}: {p_nom_existing:.0f} MW "
+                  f"({len(reactor_mw)} reaktorer synth, seed {seed}), "
                   f"realiserad CF={p_max.mean():.3f}")
         else:
             p_max = nuclear_profile[zone]
             p_min = (p_max * NUCLEAR_MIN_FRACTION).clip(lower=0)
 
-        p_nom_total = p_nom_existing + fixed_mw
+        p_nom_total = p_nom_existing
         p_nom_max   = max(tcfg.get("p_nom_max_mw", np.inf), p_nom_total)
         n.add(
             "Generator", f"{zone} nuclear",
