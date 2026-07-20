@@ -111,6 +111,8 @@ def build_network(
     heat_load:               pd.DataFrame | None = None,
     ev_profiles:             pd.DataFrame | None = None,
     ev_overrides:            dict | None = None,
+    add_oc_scale:            dict | None = None,
+    solar_adds:              list | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -171,12 +173,13 @@ def build_network(
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     _add_gas(n, cfg, ccfg, r, fom, n_years)
     _add_market_connections(n, cfg, market_prices)
-    _add_batteries(n, batteries, ccfg, r, n_years, cfg)
+    _add_batteries(n, batteries, ccfg, r, n_years, cfg, add_oc_scale)
     _add_extra_nuclear(n, extra_nuclear, ccfg, r, n_years, snapshots,
                        (synthetic_nuclear or {}).get("params"), fom)
     _add_fixed_nuclear(n, (synthetic_nuclear or {}).get("fixed"), cfg, ccfg, r, n_years,
-                       snapshots, (synthetic_nuclear or {}).get("params"))
+                       snapshots, (synthetic_nuclear or {}).get("params"), add_oc_scale)
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
+    _add_costed_solar(n, solar_adds, cfg, vre_profiles, r, n_years, add_oc_scale)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
     _add_heat(n, cfg, heat_demand, r, n_years)
     _add_chp(n, cfg, heat_demand, r, n_years)
@@ -417,7 +420,8 @@ def _add_hydro(
 
 
 def _add_batteries(n: pypsa.Network, batteries: list | None,
-                   ccfg: dict, r: float, n_years: float, cfg: dict | None = None) -> None:
+                   ccfg: dict, r: float, n_years: float, cfg: dict | None = None,
+                   add_oc_scale: dict | None = None) -> None:
     """Lägger till batterier som StorageUnit (carrier 'battery').
 
     batteries: lista av (zon, p_nom_mw, max_hours, extendable[, costed]). 5:e elementet
@@ -450,6 +454,7 @@ def _add_batteries(n: pypsa.Network, batteries: list | None,
             continue
         if costed and cfg is not None:                       # tillagt batteri: svk_2040+IDC
             overnight_mw, c_life, c_fom, _ = _scenario_overnight_mw(cfg, "battery", max_hours=max_h)
+            overnight_mw *= float((add_oc_scale or {}).get("battery", 1.0))   # --add-oc-scale
             cap_cost = overnight_mw * (_crf(c_life, r) + c_fom) * n_years
         else:
             overnight_mw = (p_kw + max_h * e_kwh) * 1e3      # €/MW
@@ -547,7 +552,8 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
 
 def _add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
                        ccfg: dict, r: float, n_years: float, snapshots=None,
-                       synth_params: dict | None = None) -> None:
+                       synth_params: dict | None = None,
+                       add_oc_scale: dict | None = None) -> None:
     """Exogen FAST kärnkraft via --add-nuclear-fixed ZON:N:MW[:SEED] som EGEN generator
     '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max),
     SYNTETISK stokastisk tillgänglighet (seed → dekorrelerade avbrott), FAST p_nom.
@@ -558,6 +564,7 @@ def _add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
         return
     params = synth_params or {}
     oc_mw, life, fom_n, vom = _scenario_overnight_mw(cfg, "nuclear")
+    oc_mw *= float((add_oc_scale or {}).get("nuclear", 1.0))     # --add-oc-scale
     cap_cost = oc_mw * (_crf(life, r) + fom_n) * n_years
     for zone, adds in fixed_nuclear.items():
         if zone not in n.buses.index:
@@ -629,6 +636,40 @@ def _add_extra_wind(n: pypsa.Network, extra_wind: list | None,
         )
         cf = vre_profiles[col].mean()
         print(f"  → ny vind {zone}: {p_nom:.0f} MW (CF {cf:.3f}, MC {mc} EUR/MWh)")
+
+
+def _add_costed_solar(n: pypsa.Network, solar_adds: list | None, cfg: dict,
+                      vre_profiles: pd.DataFrame, r: float, n_years: float,
+                      add_oc_scale: dict | None = None) -> None:
+    """Costad sol (--add-solar ZON:MW): egen generator '{zon} solar add', extendable-
+    pinnad (p_nom_min=p_nom_max) så svk_2040-kapexen (inkl. IDC) hamnar i
+    objective_constant. Variabel (p_max_pu=zonens solprofil), EJ must-run. Speglar
+    --add-battery/--add-nuclear-fixed costed-mönstret."""
+    if not solar_adds:
+        return
+    oc_mw, life, fom_s, vom = _scenario_overnight_mw(cfg, "solar")
+    oc_mw *= float((add_oc_scale or {}).get("solar", 1.0))     # --add-oc-scale
+    cap_cost = oc_mw * (_crf(life, r) + fom_s) * n_years
+    for zone, mw in solar_adds:
+        col = f"{zone}_solar"
+        if zone not in n.buses.index or col not in vre_profiles.columns:
+            print(f"  Varning: sol-tillägg {zone} saknar buss/profil — hoppar över")
+            continue
+        n.add(
+            "Generator", f"{zone} solar add",
+            bus=zone,
+            carrier="solar",
+            p_nom=mw,
+            p_nom_min=mw,
+            p_nom_max=mw,
+            p_nom_extendable=True,
+            p_max_pu=vre_profiles[col],
+            marginal_cost=vom,
+            capital_cost=cap_cost,
+        )
+        cf = vre_profiles[col].mean()
+        print(f"  → costad sol {zone}: {mw:.0f} MW (CF {cf:.3f}, kapital "
+              f"{cap_cost/n_years/1e3:.0f} €/kW/år, vom {vom} €/MWh)")
 
 
 def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,

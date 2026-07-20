@@ -724,6 +724,15 @@ def main() -> None:
                         help="Gör --add-battery investerbart: modellen optimerar effekten "
                              "0..MW (varaktighet fast) mot batterikostnad i config. "
                              "Utan flaggan är batteriet fast (dispatch-tillägg).")
+    parser.add_argument("--add-solar", action="append", default=[], metavar="ZON:MW",
+                        help="Lägg till COSTAD sol (Generator '{zon} solar add') i en zon, t.ex. "
+                             "'SE-S:3895'. Bär annualiserad svk_2040-kapex (inkl. IDC) i objektivet "
+                             "(extendable-pinnat), zonens solprofil. Kan anges flera gånger.")
+    parser.add_argument("--add-oc-scale", nargs="+", default=None, metavar="TECH:FAKTOR",
+                        help="Skala overnight-kostnaden för COSTADE tillägg per teknik, t.ex. "
+                             "'battery:0.5 nuclear:1.5'. Påverkar bara --add-battery / "
+                             "--add-nuclear-fixed (svk_2040-kapexen), ej befintlig flotta. "
+                             "Sensitivitetsanalys.")
     parser.add_argument("--battery", nargs="+", default=None, metavar="DURATION [ZON:MW ...]",
                         help="Batterier med given varaktighet (t.ex. '4h'). Utan zoner: "
                              "expanderbart 4h-batteri i VARJE zon (modellen optimerar effekten). "
@@ -1198,6 +1207,8 @@ def main() -> None:
     if args.ntc_override:               flags.append("ntc-override-" + "_".join(args.ntc_override))
     if args.market_ntc_override:        flags.append("market-ntc-" + "_".join(args.market_ntc_override))
     if args.expand_link:                flags.append("expand-link-" + "_".join(args.expand_link).replace(":", "_"))
+    if args.add_oc_scale:               flags.append("ocscale-" + "_".join(args.add_oc_scale).replace(":", ""))
+    for spec in args.add_solar:         flags.append(f"solar-{spec.replace(':','_')}")
     if args.move_load:                  flags.append("move-load-" + "_".join(args.move_load))
     if args.move_nuclear:               flags.append("move-nuclear-" + "_".join(args.move_nuclear))
     if args.move_link:                  flags.append("move-link-" + "_".join(args.move_link))
@@ -1353,6 +1364,18 @@ def main() -> None:
                 cfg["links"].append([zt, zo, mw])
                 print(f"  → move-link {zf}-{zo} → {zt}-{zo}: {mw:.0f} MW (ny länk)")
 
+    add_oc_scale = {}
+    for spec in (args.add_oc_scale or []):
+        tech, fac = spec.split(":")
+        add_oc_scale[tech.strip()] = float(fac)
+    if add_oc_scale:
+        print(f"  OC-skala för costade tillägg: {add_oc_scale}")
+
+    solar_adds = []
+    for spec in args.add_solar:
+        z, mw = spec.split(":")
+        solar_adds.append((z.strip(), float(mw)))
+
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
                       cyclic_soc=cyclic_soc,
@@ -1363,7 +1386,9 @@ def main() -> None:
                       synthetic_nuclear=synthetic_nuclear,
                       soc_initial_override=soc_pin_start or None,
                       hydrogen_overrides=hydrogen_overrides or None,
-                      ev_overrides=ev_overrides or None)
+                      ev_overrides=ev_overrides or None,
+                      add_oc_scale=add_oc_scale or None,
+                      solar_adds=solar_adds or None)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt
         apply_low_hydro(n, args.low_hydro)
