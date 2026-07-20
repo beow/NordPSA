@@ -113,6 +113,7 @@ def build_network(
     ev_overrides:            dict | None = None,
     add_oc_scale:            dict | None = None,
     solar_adds:              list | None = None,
+    onshore_adds:            list | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -179,7 +180,10 @@ def build_network(
     _add_fixed_nuclear(n, (synthetic_nuclear or {}).get("fixed"), cfg, ccfg, r, n_years,
                        snapshots, (synthetic_nuclear or {}).get("params"), add_oc_scale)
     _add_extra_wind(n, extra_wind, vre_profiles, ccfg)
-    _add_costed_solar(n, solar_adds, cfg, vre_profiles, r, n_years, add_oc_scale)
+    _add_costed_vre(n, solar_adds, cfg, vre_profiles, r, n_years,
+                    "solar", "solar", "solar add", add_oc_scale)
+    _add_costed_vre(n, onshore_adds, cfg, vre_profiles, r, n_years,
+                    "wind_onshore", "wind_onshore", "onshore add", add_oc_scale)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
     _add_heat(n, cfg, heat_demand, r, n_years)
     _add_chp(n, cfg, heat_demand, r, n_years)
@@ -638,27 +642,28 @@ def _add_extra_wind(n: pypsa.Network, extra_wind: list | None,
         print(f"  → ny vind {zone}: {p_nom:.0f} MW (CF {cf:.3f}, MC {mc} EUR/MWh)")
 
 
-def _add_costed_solar(n: pypsa.Network, solar_adds: list | None, cfg: dict,
-                      vre_profiles: pd.DataFrame, r: float, n_years: float,
-                      add_oc_scale: dict | None = None) -> None:
-    """Costad sol (--add-solar ZON:MW): egen generator '{zon} solar add', extendable-
-    pinnad (p_nom_min=p_nom_max) så svk_2040-kapexen (inkl. IDC) hamnar i
-    objective_constant. Variabel (p_max_pu=zonens solprofil), EJ must-run. Speglar
-    --add-battery/--add-nuclear-fixed costed-mönstret."""
-    if not solar_adds:
+def _add_costed_vre(n: pypsa.Network, adds: list | None, cfg: dict,
+                    vre_profiles: pd.DataFrame, r: float, n_years: float,
+                    tech: str, carrier: str, name_suffix: str,
+                    add_oc_scale: dict | None = None) -> None:
+    """Costad variabel VRE (--add-solar / --add-onshore ZON:MW): egen generator
+    '{zon} {name_suffix}', extendable-pinnad (p_nom_min=p_nom_max) så svk_2040-kapexen
+    (inkl. IDC) hamnar i objective_constant. Variabel (p_max_pu=zonens {carrier}-profil),
+    EJ must-run. Speglar --add-battery/--add-nuclear-fixed costed-mönstret."""
+    if not adds:
         return
-    oc_mw, life, fom_s, vom = _scenario_overnight_mw(cfg, "solar")
-    oc_mw *= float((add_oc_scale or {}).get("solar", 1.0))     # --add-oc-scale
+    oc_mw, life, fom_s, vom = _scenario_overnight_mw(cfg, tech)
+    oc_mw *= float((add_oc_scale or {}).get(tech, 1.0))        # --add-oc-scale
     cap_cost = oc_mw * (_crf(life, r) + fom_s) * n_years
-    for zone, mw in solar_adds:
-        col = f"{zone}_solar"
+    for zone, mw in adds:
+        col = f"{zone}_{carrier}"
         if zone not in n.buses.index or col not in vre_profiles.columns:
-            print(f"  Varning: sol-tillägg {zone} saknar buss/profil — hoppar över")
+            print(f"  Varning: {tech}-tillägg {zone} saknar buss/profil — hoppar över")
             continue
         n.add(
-            "Generator", f"{zone} solar add",
+            "Generator", f"{zone} {name_suffix}",
             bus=zone,
-            carrier="solar",
+            carrier=carrier,
             p_nom=mw,
             p_nom_min=mw,
             p_nom_max=mw,
@@ -668,7 +673,7 @@ def _add_costed_solar(n: pypsa.Network, solar_adds: list | None, cfg: dict,
             capital_cost=cap_cost,
         )
         cf = vre_profiles[col].mean()
-        print(f"  → costad sol {zone}: {mw:.0f} MW (CF {cf:.3f}, kapital "
+        print(f"  → costad {tech} {zone}: {mw:.0f} MW (CF {cf:.3f}, kapital "
               f"{cap_cost/n_years/1e3:.0f} €/kW/år, vom {vom} €/MWh)")
 
 
