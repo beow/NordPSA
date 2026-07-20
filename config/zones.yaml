@@ -398,6 +398,17 @@ costs:
 # antaganden η_CCS 0.50, fångst 90%, ef_gas 0.20, CTS 20 €/t). Hydro/heat/H2
 # behåller sina DEA-värden ovan; dispatch-basblockets gas (OCGT) är orört.
 cost_scenarios:
+  # Dagens (2025) kostnadsnivå, LMA26 Tabell 30 (OIC) / 31 (fast DoU) / 32 (rörlig DoU),
+  # 2025-kolumnen, 2024 års prisnivå. Batteri-split (power/energy) anpassad så alla tre
+  # varaktigheter reproduceras: 2h≈1013, 4h=1670, 8h≈2984 EUR/kW (Tab30). Gas=CCGT-CCS,
+  # vom = SRMC med 2030 bränslepriser (Tab9: naturgas 23.5, CO2 136.9 → 63.7 €/MWh).
+  svk_2025:
+    wind_onshore:  {oc_eur_per_kw: 1410, fom_eur_per_kw:  30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 3350, fom_eur_per_kw: 102.5, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  873, fom_eur_per_kw:   9.2, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 8000, fom_eur_per_kw:  95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}   # LMA26 6500 → höjt till 8000 (2025-nivån bedöms låg); FOM oförändrad
+    gas:           {oc_eur_per_kw: 3000, fom_eur_per_kw:  65.0, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 63.7}   # CCGT-CCS, 2030 bränsle
+    battery:       {power_eur_per_kw: 356, energy_eur_per_kwh: 328.5, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
   svk_2040:
     wind_onshore:  {oc_eur_per_kw: 1320, fom_eur_per_kw: 30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
     wind_offshore: {oc_eur_per_kw: 2400, fom_eur_per_kw: 97.5, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}

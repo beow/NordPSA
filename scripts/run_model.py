@@ -728,11 +728,21 @@ def main() -> None:
                         help="Lägg till COSTAD sol (Generator '{zon} solar add') i en zon, t.ex. "
                              "'SE-S:3895'. Bär annualiserad svk_2040-kapex (inkl. IDC) i objektivet "
                              "(extendable-pinnat), zonens solprofil. Kan anges flera gånger.")
-    parser.add_argument("--add-onshore", action="append", default=[], metavar="ZON:MW",
+    parser.add_argument("--add-onshore", action="append", default=[], metavar="ZON:MW[:UPLIFT]",
                         help="Lägg till COSTAD landbaserad vind (Generator '{zon} onshore add') "
                              "i en zon, t.ex. 'SE-S:5720'. Bär annualiserad svk_2040-kapex "
                              "(inkl. IDC) i objektivet (extendable-pinnat), zonens onshore-profil. "
-                             "Kan anges flera gånger.")
+                             "Valfri CF-uplift som 3:e fält (0.20 = +20%% medel-CF, potens-transform) "
+                             "boostar BARA detta tillägg — flottan orörd. Kan anges flera gånger.")
+    parser.add_argument("--add-offshore", action="append", default=[], metavar="ZON:MW[:UPLIFT]",
+                        help="Som --add-onshore men HAVSbaserad vind (Generator '{zon} offshore add', "
+                             "carrier wind_offshore, svk_2040-kapex). Zonens offshore-profil, valfri "
+                             "CF-uplift som 3:e fält. Kan anges flera gånger.")
+    parser.add_argument("--add-cost-scenario", default="svk_2040", metavar="NAMN",
+                        help="Kostnadsscenario (cost_scenarios i config) som COSTADE tillägg "
+                             "(--add-battery/--add-nuclear-fixed/--add-solar/--add-onshore/"
+                             "--add-offshore) prissätts från. Default svk_2040. T.ex. svk_2025 "
+                             "för dagens kostnadsnivå. Oberoende av --cost-scenario (driftsblocket).")
     parser.add_argument("--add-oc-scale", nargs="+", default=None, metavar="TECH:FAKTOR",
                         help="Skala overnight-kostnaden för COSTADE tillägg per teknik, t.ex. "
                              "'battery:0.5 nuclear:1.5'. Påverkar bara --add-battery / "
@@ -1215,6 +1225,8 @@ def main() -> None:
     if args.add_oc_scale:               flags.append("ocscale-" + "_".join(args.add_oc_scale).replace(":", ""))
     for spec in args.add_solar:         flags.append(f"solar-{spec.replace(':','_')}")
     for spec in args.add_onshore:       flags.append(f"onshore-{spec.replace(':','_')}")
+    for spec in args.add_offshore:      flags.append(f"offshore-{spec.replace(':','_')}")
+    if args.add_cost_scenario != "svk_2040": flags.append(f"addcost-{args.add_cost_scenario}")
     if args.move_load:                  flags.append("move-load-" + "_".join(args.move_load))
     if args.move_nuclear:               flags.append("move-nuclear-" + "_".join(args.move_nuclear))
     if args.move_link:                  flags.append("move-link-" + "_".join(args.move_link))
@@ -1379,8 +1391,17 @@ def main() -> None:
 
     onshore_adds = []
     for spec in args.add_onshore:
-        z, mw = spec.split(":")
-        onshore_adds.append((z.strip(), float(mw)))
+        parts = spec.split(":")
+        z, mw = parts[0], parts[1]
+        uplift = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
+        onshore_adds.append((z.strip(), float(mw), uplift))
+
+    offshore_adds = []
+    for spec in args.add_offshore:
+        parts = spec.split(":")
+        z, mw = parts[0], parts[1]
+        uplift = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
+        offshore_adds.append((z.strip(), float(mw), uplift))
 
     solar_adds = []
     for spec in args.add_solar:
@@ -1400,7 +1421,9 @@ def main() -> None:
                       ev_overrides=ev_overrides or None,
                       add_oc_scale=add_oc_scale or None,
                       solar_adds=solar_adds or None,
-                      onshore_adds=onshore_adds or None)
+                      onshore_adds=onshore_adds or None,
+                      offshore_adds=offshore_adds or None,
+                      add_cost_scenario=args.add_cost_scenario)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt
         apply_low_hydro(n, args.low_hydro)
