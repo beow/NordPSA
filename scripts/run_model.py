@@ -26,6 +26,7 @@ from nordpsa.network import (
     build_network,
     hydro_soc_initial_constraint,
     hydro_soc_terminal_pin_constraint,
+    soc_terminal_pin_mwh,
     oc_budget_constraint,
     grid_cost_objective,
     _annualized_cost,
@@ -523,6 +524,129 @@ def save_results(n, label: str) -> None:
     save_results_dict(extract_results(n), label)
 
 
+# ---------------------------------------------------------------------------
+# Tvåpass: fönstervis dispatch med hydro-SOC pinnad mot en källkörnings lagerbana
+# ---------------------------------------------------------------------------
+
+def load_soc_levels(label: str) -> pd.DataFrame:
+    """results/LABEL/hydro_soc.csv → lagernivåer (MWh) indexerade på VÄGGKLOCKAN.
+
+    PyPSA:s soc[t] är nivån vid SLUTET av tidssteget som börjar i t, alltså nivån vid
+    väggklockan t+dt. Indexet skiftas därför fram ett källtidssteg, så att linjär
+    interpolation i tid ger rätt nivå vid en godtycklig fönstergräns (källan kan ha
+    annan upplösning än dispatchkörningen).
+    """
+    path = RESULTS_DIR / label / "hydro_soc.csv"
+    if not path.exists():
+        raise SystemExit(f"--soc-pin-from: hittar inte {path}")
+    df = pd.read_csv(path, index_col=0, parse_dates=True)
+    if len(df) < 2:
+        raise SystemExit(f"--soc-pin-from: {path} har färre än 2 rader")
+    df.index = df.index + (df.index[1] - df.index[0])
+    return df
+
+
+def soc_levels_at(levels: pd.DataFrame, t: pd.Timestamp, units: list) -> dict:
+    """Lagernivå (MWh) för givna enheter vid väggklockan t, linjärt interpolerad."""
+    if t not in levels.index:
+        levels = levels.reindex(levels.index.union([t])).interpolate(method="time")
+    row = levels.ffill().bfill().loc[t]
+    return {u: float(row[u]) for u in units}
+
+
+def pin_windows(snapshots: pd.DatetimeIndex, freq: str) -> list:
+    """Delar snapshots i sammanhängande fönster per kalenderperiod (MS=månad, W=vecka)."""
+    s = pd.Series(0, index=snapshots)
+    return [g.index for _, g in s.groupby(pd.Grouper(freq=freq)) if len(g)]
+
+
+def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
+                     log_path: Path | None = None,
+                     extra_callbacks: list | None = None) -> tuple[bool, dict | None]:
+    """Tvåpass-dispatch: lös perioden fönster för fönster (freq) med hydro-SOC pinnad
+    i BÅDA ändar till källkörningens (src_label) lagerbana.
+
+    Ersätter cyklisk SOC + perfekt framsyn över hela perioden med källans säsongsbana
+    (exogen) + fritt optimerad dispatch inom fönstret. Säsongssignalen ärvs alltså från
+    källan; det fönstret tillför är intra-fönster-dynamik på finare upplösning.
+
+    Övriga lager (batteri, EV/värme-Stores) förblir cykliska PER FÖNSTER — ofarligt så
+    länge fönstret är långt mot deras cykeltid (månad ≫ 4h batteri / dygns-EV).
+    """
+    scfg    = cfg["solver"]
+    solver  = scfg["name"]
+    options = {k: v for k, v in scfg.items() if k != "name"}
+    if log_path is not None:
+        options["log_file"] = str(log_path)
+
+    levels = load_soc_levels(src_label)
+    units  = [u for u in n.storage_units.index
+              if n.storage_units.at[u, "carrier"] == "hydro" and u in levels.columns]
+    if not units:
+        raise SystemExit(f"--soc-pin-from: inga hydrolager i {src_label}/hydro_soc.csv "
+                         f"matchar nätverkets storage units")
+    missing = [u for u in n.storage_units.index
+               if n.storage_units.at[u, "carrier"] == "hydro" and u not in levels.columns]
+    n.storage_units.loc[units, "cyclic_state_of_charge"] = False
+    cap = {u: float(n.storage_units.at[u, "p_nom"]) * float(n.storage_units.at[u, "max_hours"])
+           for u in units}
+
+    windows = pin_windows(n.snapshots, freq)
+    dt = n.snapshots[1] - n.snapshots[0]
+    print(f"  → SOC-pin från {src_label}: {len(windows)} fönster ({freq}), "
+          f"{len(units)} hydrolager pinnade i båda ändar ({', '.join(units)})"
+          + (f"  ⚠️ {len(missing)} utan källdata, förblir cykliska: {missing}" if missing else ""))
+    if log_path is not None:
+        print(f"  HiGHS-logg: {log_path} (skrivs över per fönster — sista fönstret kvarstår)")
+
+    parts, keys = [], []
+    for i, sns in enumerate(windows, 1):
+        init = soc_levels_at(levels, sns[0], units)
+        term = soc_levels_at(levels, sns[-1] + dt, units)
+        # Skyddsklipp mot [0, cap]. Ska normalt inte bita — om det gör det avviker
+        # dispatchnätets reservoarvolym från källans och pinnen blir inte längre källans bana.
+        for tag, d in (("start", init), ("slut", term)):
+            for u, v in d.items():
+                c = min(max(v, 0.0), cap[u])
+                if abs(c - v) > 1e-4 * cap[u]:
+                    print(f"  ⚠️ fönster {i} {tag}-pin {u} klippt {v/1e6:.3f} → {c/1e6:.3f} TWh "
+                          f"(volym {cap[u]/1e6:.3f} TWh ≠ källans) — pinnen följer EJ källbanan")
+                d[u] = c
+        for u in units:
+            n.storage_units.at[u, "state_of_charge_initial"] = init[u]
+
+        callbacks = [soc_terminal_pin_mwh(term)] + list(extra_callbacks or [])
+
+        def extra_func(nn, snapshots, _cbs=callbacks):
+            for cb in _cbs:
+                cb(nn, snapshots)
+
+        status, condition = n.optimize(
+            snapshots=sns,
+            solver_name=solver,
+            solver_options=options,
+            extra_functionality=extra_func,
+            assign_all_duals=True,
+        )
+        span = " ".join(f"{u.split()[0]} {init[u]/cap[u]:.0%}→{term[u]/cap[u]:.0%}" for u in units)
+        print(f"  fönster {i:3d}/{len(windows)} {sns[0]:%Y-%m-%d}–{sns[-1]:%Y-%m-%d} "
+              f"({len(sns)} steg): {status}/{condition}   {span}")
+        if status != "ok":
+            print(f"  ✖ fönster {i} misslyckades ({status}/{condition}) — avbryter. "
+                  f"Vanligaste orsaken: pinnad ΔSOC ej nåbar på denna upplösning.")
+            return False, None
+
+        part = {k: v.loc[sns] for k, v in extract_results(n).items()
+                if v is not None and getattr(v, "shape", (0, 0))[1] > 0}
+        for k in part:
+            if k not in keys:
+                keys.append(k)
+        parts.append(part)
+
+    results = {k: pd.concat([p[k] for p in parts if k in p]).sort_index() for k in keys}
+    return True, results
+
+
 def _git_commit() -> str:
     """Aktuell git-commit (kort hash + ev. 'dirty'). Tom sträng om ej git."""
     import subprocess
@@ -598,6 +722,8 @@ def apply_dispatch_replay(parser, args):
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
     base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
     base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
+    base.soc_pin_from = args.soc_pin_from     # tvåpass-pin styrs av NYA kommandot
+    base.soc_pin_freq = args.soc_pin_freq
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -609,7 +735,14 @@ def apply_dispatch_replay(parser, args):
 def freeze_capacities_from(n, label):
     """Sätt p_nom = p_nom_opt (och extendable=False) på alla komponenter (gen/lager/länkar)
     som matchar namn i results/LABEL/network.nc → fryser kapaciteten till den körningens
-    optimum. Flexibilitet (dispatch, lager-SOC, handel) optimeras fortfarande fritt."""
+    optimum. Flexibilitet (dispatch, lager-SOC, handel) optimeras fortfarande fritt.
+
+    För lager kopieras även max_hours. Annars blandas källans p_nom med den NYA
+    upplösningens max_hours, och eftersom RoR-splitten (som bevarar reservoarvolymen
+    genom max_h = cap_mwh/p_nom) faller ut olika vid olika upplösning blir produkten
+    p_nom×max_hours — reservoarvolymen — fel. Konkret: FI fick 5,27 i stället för
+    5,50 TWh vid 2h-omdispatch av en 3h-körning (−4%).
+    """
     src = pypsa.Network()
     src.import_from_netcdf(RESULTS_DIR / label / "network.nc")
     print(f"  → fryser kapaciteter till {label}:s p_nom_opt:")
@@ -622,6 +755,13 @@ def freeze_capacities_from(n, label):
         ndf.loc[common, "p_nom"] = sdf.loc[common, "p_nom_opt"].astype(float)
         if "p_nom_extendable" in ndf.columns:
             ndf.loc[common, "p_nom_extendable"] = False
+        if "max_hours" in ndf.columns and "max_hours" in sdf.columns:
+            before = (ndf.loc[common, "p_nom"] * ndf.loc[common, "max_hours"]).sum()
+            ndf.loc[common, "max_hours"] = sdf.loc[common, "max_hours"].astype(float)
+            after = (ndf.loc[common, "p_nom"] * ndf.loc[common, "max_hours"]).sum()
+            if abs(after - before) > 1e-6 * max(after, 1.0):
+                print(f"      lagervolym korrigerad: {before/1e6:.2f} → {after/1e6:.2f} TWh "
+                      f"(max_hours ärvs från {label})")
         miss = [x for x in ndf.index if x not in sdf.index]
         msg = f"      {cname}: {len(common)} frysta"
         if miss:
@@ -685,6 +825,10 @@ def main() -> None:
                              "(cyklisk SOC buffrar i fleråriga). Realistiskt torrår ≈ 0.6–0.7.")
     parser.add_argument("--extra-load", type=float, default=0.0,
                         help="Extra flat last i MW per zon (utöver faktisk last, standard: 0)")
+    parser.add_argument("--extra-load-zone", action="append", default=[], metavar="ZON:MW",
+                        help="Extra flat last i MW i EN zon (t.ex. 'SE-S:1000'). Additivt över "
+                             "eSett-basen och över --extra-load. Kan anges flera gånger. Avsett "
+                             "för marginalkostnads-/LRMC-experiment (ΔObjektiv/ΔKonsumtion).")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
     parser.add_argument("--cost-scenario", default=None, metavar="NAMN",
@@ -712,6 +856,17 @@ def main() -> None:
                         help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
                              "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
                              "observerad reservoarnivå. Komma-separera flera eller upprepa flaggan.")
+    parser.add_argument("--soc-pin-from", default=None, metavar="LABEL",
+                        help="TVÅPASS: lös perioden fönstervis med hydro-SOC pinnad i BÅDA ändar "
+                             "till LABEL:s lagerbana (results/LABEL/hydro_soc.csv, interpoleras till "
+                             "denna körnings upplösning). Ersätter cyklisk SOC + perfekt framsyn över "
+                             "hela perioden med källans säsongsbana + fri dispatch inom fönstret. "
+                             "Avsedd ihop med --dispatch LABEL (frysta kapaciteter). Fönsterlängd: "
+                             "--soc-pin-freq.")
+    parser.add_argument("--soc-pin-freq", default="MS", metavar="FREQ",
+                        help="Fönsterlängd för --soc-pin-from (pandas-frekvens). Default 'MS' = "
+                             "kalendermånad; 'W' = vecka, 'QS' = kvartal. Fönstret måste vara långt "
+                             "mot batteri/EV-cykeln (de förblir cykliska per fönster).")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -905,6 +1060,14 @@ def main() -> None:
     if args.dispatch:                          # återspela källkörningens system-argv
         args = apply_dispatch_replay(parser, args)
 
+    if args.soc_pin_from:
+        if args.soc_pin:
+            parser.error("--soc-pin-from och --soc-pin är ömsesidigt uteslutande "
+                         "(fönstervis bana vs fasta ändpunkter för hela körningen)")
+        if not args.dispatch:
+            print("  ⚠️ --soc-pin-from utan --dispatch: kapaciteterna fryses INTE mot "
+                  f"{args.soc_pin_from} — pinnad SOC mot en annan flotta kan bli infeasible")
+
     soc_pin_start = {}   # zon → start-fraktion (→ soc_initial_override)
     soc_pin_end = {}     # zon → slut-fraktion (→ terminal-pin callback)
     for spec in args.soc_pin:
@@ -1043,6 +1206,9 @@ def main() -> None:
     if args.extra_load:
         for z in cfg["zones"]:
             cfg["additional_load_mw"][z] = args.extra_load
+    for tok in args.extra_load_zone:
+        z, mw = tok.split(":")
+        cfg["additional_load_mw"][z] = cfg["additional_load_mw"].get(z, 0.0) + float(mw)
 
     if args.no_expansion:
         for tech in cfg.get("costs", {}):
@@ -1214,6 +1380,7 @@ def main() -> None:
     if args.dispatch:                   flags.append(f"dispatch-{args.dispatch}")
     if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
+    for tok in args.extra_load_zone:    flags.append("xload-" + tok.replace(":", "-") + "mw")
     if args.cost_scenario:              flags.append(f"cost-{args.cost_scenario}")
     if args.demand_scenario:            flags.append(f"demand-{args.demand_scenario}")
     if args.no_expansion:               flags.append("no-expansion")
@@ -1258,6 +1425,7 @@ def main() -> None:
     if args.solar_cap is not None:      flags.append(f"solarcap-{args.solar_cap:.0f}")
     if args.grid_cost:                  flags.append("grid-cost")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
+    if args.soc_pin_from:               flags.append(f"soc-pin-from-{args.soc_pin_from}@{args.soc_pin_freq}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -1566,14 +1734,26 @@ def main() -> None:
     write_run_meta(label, args, res, args.year, flag_str)
 
     n.sanitize()
-    ok = solve(n, cfg, log_path=log_path,
-               soc_pin_end=soc_pin_end or None,
-               extra_callbacks=extra_callbacks)
+    if args.soc_pin_from:
+        ok, pinned_results = solve_soc_pinned(
+            n, cfg, args.soc_pin_from, args.soc_pin_freq,
+            log_path=log_path, extra_callbacks=extra_callbacks)
+    else:
+        ok = solve(n, cfg, log_path=log_path,
+                   soc_pin_end=soc_pin_end or None,
+                   extra_callbacks=extra_callbacks)
     if not ok:
         print("Lösning misslyckades — kontrollera nätverket")
         sys.exit(1)
 
-    save_results(n, label)
+    if args.soc_pin_from:
+        # CSV:erna byggs av de fönstervisa lösningarna (sanningskälla); network.nc
+        # exporteras också — PyPSA ackumulerar fönstren i n.*_t via update().
+        (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)
+        n.export_to_netcdf(RESULTS_DIR / label / "network.nc")
+        save_results_dict(pinned_results, label)
+    else:
+        save_results(n, label)
 
     if args.grid_cost:
         report_grid_cost(n, cfg, len(snapshots) * res / 8760.0)

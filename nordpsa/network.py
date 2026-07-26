@@ -1589,6 +1589,28 @@ def hydro_soc_initial_constraint(cfg: dict):
     return _extra_functionality
 
 
+def soc_terminal_pin_mwh(targets: dict):
+    """Returnerar en extra_functionality-callback som pinnar SOC vid SISTA snapshot
+    till ett givet MWh-värde per lagernamn: {"SE-N hydro": 1.8e7, ...}.
+
+    Byggsten för både --soc-pin (fraktioner ur config, hela körningen) och
+    --soc-pin-from (fönstervis pin mot en källkörnings lagerbana).
+    """
+    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
+        if not targets:
+            return
+        m = n.model
+        soc = m.variables["StorageUnit-state_of_charge"]
+        tT = snapshots[-1]
+        for su_name, term_mwh in targets.items():
+            m.add_constraints(
+                soc.sel(name=su_name, snapshot=tT) == term_mwh,
+                name=f"soc_terminal_pin-{su_name}",
+            )
+
+    return _extra_functionality
+
+
 def hydro_soc_terminal_pin_constraint(cfg: dict, end_fracs: dict):
     """Returnerar en extra_functionality-callback som pinnar slut-SOC till
     end_frac × kapacitet per zon (icke-cyklisk drift).
@@ -1610,16 +1632,4 @@ def hydro_soc_terminal_pin_constraint(cfg: dict, end_fracs: dict):
         cap = p_nom * max_h
         targets[f"{zone} hydro"] = end_fracs.get(zone, frac) * cap
 
-    def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
-        if not targets:
-            return
-        m = n.model
-        soc = m.variables["StorageUnit-state_of_charge"]
-        tT = snapshots[-1]
-        for su_name, term_mwh in targets.items():
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=tT) == term_mwh,
-                name=f"soc_terminal_pin-{su_name}",
-            )
-
-    return _extra_functionality
+    return soc_terminal_pin_mwh(targets)
