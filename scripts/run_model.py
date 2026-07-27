@@ -10,6 +10,7 @@ Användning:
     python scripts/run_model.py --year 2024        # kör ett enstaka år
 """
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
@@ -561,6 +562,7 @@ def pin_windows(snapshots: pd.DatetimeIndex, freq: str) -> list:
 
 
 def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
+                     band_frac: float = 0.0,
                      log_path: Path | None = None,
                      extra_callbacks: list | None = None) -> tuple[bool, dict | None]:
     """Tvåpass-dispatch: lös perioden fönster för fönster (freq) med hydro-SOC pinnad
@@ -591,17 +593,23 @@ def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
     cap = {u: float(n.storage_units.at[u, "p_nom"]) * float(n.storage_units.at[u, "max_hours"])
            for u in units}
 
+    band = {u: max(band_frac, 0.0) * cap[u] for u in units}
     windows = pin_windows(n.snapshots, freq)
     dt = n.snapshots[1] - n.snapshots[0]
     print(f"  → SOC-pin från {src_label}: {len(windows)} fönster ({freq}), "
-          f"{len(units)} hydrolager pinnade i båda ändar ({', '.join(units)})"
+          f"{len(units)} hydrolager pinnade i båda ändar ({', '.join(units)}); "
+          + (f"band ±{band_frac:.1%} av kapaciteten (start = FÖREGÅENDE FÖNSTERS UPPNÅDDA nivå)"
+             if band_frac > 0 else "HÅRD likhet (band 0)")
           + (f"  ⚠️ {len(missing)} utan källdata, förblir cykliska: {missing}" if missing else ""))
     if log_path is not None:
         print(f"  HiGHS-logg: {log_path} (skrivs över per fönster — sista fönstret kvarstår)")
 
-    parts, keys = [], []
+    parts, keys, achieved = [], [], None
     for i, sns in enumerate(windows, 1):
-        init = soc_levels_at(levels, sns[0], units)
+        # Med band gäller inte achieved == target, så nästa fönster startar på den
+        # UPPNÅDDA nivån. Målet hämtas fortfarande ur källan → avvikelsen kan inte
+        # ackumulera (varje fönster re-ankras mot källbanan), den är bunden av bandet.
+        init = achieved if achieved is not None else soc_levels_at(levels, sns[0], units)
         term = soc_levels_at(levels, sns[-1] + dt, units)
         # Skyddsklipp mot [0, cap]. Ska normalt inte bita — om det gör det avviker
         # dispatchnätets reservoarvolym från källans och pinnen blir inte längre källans bana.
@@ -615,7 +623,7 @@ def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
         for u in units:
             n.storage_units.at[u, "state_of_charge_initial"] = init[u]
 
-        callbacks = [soc_terminal_pin_mwh(term)] + list(extra_callbacks or [])
+        callbacks = [soc_terminal_pin_mwh(term, band)] + list(extra_callbacks or [])
 
         def extra_func(nn, snapshots, _cbs=callbacks):
             for cb in _cbs:
@@ -629,8 +637,14 @@ def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
             assign_all_duals=True,
         )
         span = " ".join(f"{u.split()[0]} {init[u]/cap[u]:.0%}→{term[u]/cap[u]:.0%}" for u in units)
+        dev = ""
+        if status == "ok":
+            achieved = {u: float(n.storage_units_t.state_of_charge.at[sns[-1], u]) for u in units}
+            worst = max(units, key=lambda u: abs(achieved[u] - term[u]) / cap[u])
+            d = (achieved[worst] - term[worst]) / cap[worst]
+            dev = f"   maxavvik {worst.split()[0]} {d:+.2%}"
         print(f"  fönster {i:3d}/{len(windows)} {sns[0]:%Y-%m-%d}–{sns[-1]:%Y-%m-%d} "
-              f"({len(sns)} steg): {status}/{condition}   {span}")
+              f"({len(sns)} steg): {status}/{condition}   {span}{dev}")
         if status != "ok":
             print(f"  ✖ fönster {i} misslyckades ({status}/{condition}) — avbryter. "
                   f"Vanligaste orsaken: pinnad ΔSOC ej nåbar på denna upplösning.")
@@ -680,7 +694,9 @@ def write_run_meta(label: str, args, res: int, year, flag_str: str) -> None:
         f"upplösning:  {res}h",
         f"år:          {year or '2023-2025'}",
         f"flaggor:     {flag_str.strip().strip('[]') or '(inga)'}",
-        f"argv:        {' '.join(sys.argv)}",
+        # shlex.join → argument som innehåller mellanslag (t.ex. --market-ntc-override
+        # "SE-S DE:1315") överlever round-trip via --dispatch-replayen.
+        f"argv:        {shlex.join(sys.argv)}",
     ]
     out.write_text("\n".join(lines) + "\n")
     print(f"  → run_meta.txt")
@@ -703,7 +719,11 @@ def apply_dispatch_replay(parser, args):
     argv_line = next((l for l in meta.read_text().splitlines() if l.startswith("argv:")), None)
     if argv_line is None:
         parser.error(f"--dispatch: ingen argv-rad i {meta}")
-    toks = argv_line.split(":", 1)[1].split()
+    raw = argv_line.split(":", 1)[1]
+    try:
+        toks = shlex.split(raw)          # nya run_meta är shlex-citerade
+    except ValueError:                   # äldre okiterade rader kan ha obalanserade '
+        toks = raw.split()
     if toks and toks[0].endswith(".py"):
         toks = toks[1:]
     if "--desc" in toks:                      # ociterad fritext sist → klipp bort
@@ -724,6 +744,7 @@ def apply_dispatch_replay(parser, args):
     base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
     base.soc_pin_from = args.soc_pin_from     # tvåpass-pin styrs av NYA kommandot
     base.soc_pin_freq = args.soc_pin_freq
+    base.soc_pin_band = args.soc_pin_band
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -863,6 +884,14 @@ def main() -> None:
                              "hela perioden med källans säsongsbana + fri dispatch inom fönstret. "
                              "Avsedd ihop med --dispatch LABEL (frysta kapaciteter). Fönsterlängd: "
                              "--soc-pin-freq.")
+    parser.add_argument("--soc-pin-band", type=float, default=0.0, metavar="FRAC",
+                        help="Band kring SOC-pinnen: målet blir target ± FRAC × kapaciteten. "
+                             "Default 0 = hård likhet (oförändrat beteende) — men den blir lätt "
+                             "INFEASIBLE när dispatchen körs på annan upplösning än källan "
+                             "(uttappningen ryms ej i timbalansen). Med band > 0 startar varje "
+                             "fönster på föregående fönsters UPPNÅDDA nivå; målet re-ankras "
+                             "mot källan varje fönster så avvikelsen ackumuleras ej. "
+                             "OBS: bandgrenen är ännu inte verifierad i en lyckad körning.")
     parser.add_argument("--soc-pin-freq", default="MS", metavar="FREQ",
                         help="Fönsterlängd för --soc-pin-from (pandas-frekvens). Default 'MS' = "
                              "kalendermånad; 'W' = vecka, 'QS' = kvartal. Fönstret måste vara långt "
@@ -977,6 +1006,12 @@ def main() -> None:
                              "t.ex. 'SE-N:0.03 SE-S:0.03'. Påverkar bara den extendable expansionens "
                              "annualiserade kapitalkostnad (befintlig flotta är fast). Default = global "
                              "costs.discount_rate. Kan anges flera gånger / som lista.")
+    parser.add_argument("--nuclear-min-load", type=float, default=None, metavar="FRAC",
+                        help="Lastföljande NY kärnkraft: p_min_pu = FRAC × p_max_pu (t.ex. 0.6). "
+                             "Gäller både expanderbar (--add-nuclear) och exogen fast "
+                             "(--add-nuclear-fixed) NY kärnkraft. Befintliga flottan förblir ren "
+                             "must-run (nuclear_synth.min_load_frac = 1.0). Utan flaggan är all "
+                             "kärnkraft must-run (oförändrat).")
     parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
                         help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
                              "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
@@ -1426,6 +1461,7 @@ def main() -> None:
     if args.grid_cost:                  flags.append("grid-cost")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     if args.soc_pin_from:               flags.append(f"soc-pin-from-{args.soc_pin_from}@{args.soc_pin_freq}")
+    if args.nuclear_min_load is not None: flags.append(f"nucminload-{args.nuclear_min_load:g}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
@@ -1484,9 +1520,14 @@ def main() -> None:
     # active = expansionsläge (--add-nuclear): befintlig flotta blir fast+syntetisk.
     # --add-nuclear-fixed triggar INTE detta längre — den byggs som egen costed generator
     # (_add_fixed_nuclear) och lämnar befintliga flottan orörd (faktisk profil).
+    synth_params = dict(cfg.get("nuclear_synth", {}))   # kopia: mutera ej configen
+    if args.nuclear_min_load is not None:
+        synth_params["min_load_frac_exp"] = args.nuclear_min_load
+        print(f"Ny kärnkraft LASTFÖLJANDE: p_min_pu = {args.nuclear_min_load:g} × p_max_pu "
+              f"(befintlig flotta oförändrat must-run)")
     synthetic_nuclear = {
         "existing": cfg.get("nuclear_synth_existing", {}),
-        "params":   cfg.get("nuclear_synth", {}),
+        "params":   synth_params,
         "active":   bool(extra_nuclear),
         "fixed":    fixed_nuclear,
     }
@@ -1737,6 +1778,7 @@ def main() -> None:
     if args.soc_pin_from:
         ok, pinned_results = solve_soc_pinned(
             n, cfg, args.soc_pin_from, args.soc_pin_freq,
+            band_frac=args.soc_pin_band,
             log_path=log_path, extra_callbacks=extra_callbacks)
     else:
         ok = solve(n, cfg, log_path=log_path,

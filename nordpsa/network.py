@@ -527,7 +527,9 @@ def _add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
     # kostnad räknas om per zon. Default = global r. Påverkar bara EXTENDABLE expansion.
     disc_by_zone = tcfg.get("discount_rate_by_zone") or {}
     params   = synth_params or {}
-    min_frac = float(params.get("min_load_frac", 1.0))
+    # min_load_frac_exp (--nuclear-min-load) gäller BARA NY kärnkraft; befintliga flottan
+    # styrs av min_load_frac och förblir ren must-run. <1.0 = lastföljande ny kärnkraft.
+    min_frac = float(params.get("min_load_frac_exp", params.get("min_load_frac", 1.0)))
     mw_each  = float(params.get("mw_per_reactor", 1500.0))
     for zone, n_react, seed in extra_nuclear:
         if zone not in n.buses.index:
@@ -566,7 +568,8 @@ def _add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
                        add_oc_scale: dict | None = None,
                        add_cost_scenario: str = "svk_2040") -> None:
     """Exogen FAST kärnkraft via --add-nuclear-fixed ZON:N:MW[:SEED] som EGEN generator
-    '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max),
+    '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max) om
+    inte min_load_frac_exp/--nuclear-min-load sänker golvet (lastföljande ny kärnkraft),
     SYNTETISK stokastisk tillgänglighet (seed → dekorrelerade avbrott), FAST p_nom.
     Bär verklig annualiserad SvK-2040-kapex (inkl. IDC) + VOM — laddas på p_nom ÄVEN i
     dispatch (konstant i objektivet → synliggör kostnaden). Befintliga flottan lämnas
@@ -593,7 +596,10 @@ def _add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
             seed = int(params.get("seed", 0)) + (zlib.crc32(zone.encode()) % 1000)
         p_nom = float(sum(reactor_mw))
         p_max = availability_timeseries(params, snapshots, reactor_mw, seed=seed)
-        p_min = p_max.clip(lower=0)                                          # must-run
+        # min_load_frac_exp (--nuclear-min-load) gäller även denna exogena NYA kärnkraft;
+        # utan flaggan = 1.0 = must-run (oförändrat beteende).
+        min_frac = float(params.get("min_load_frac_exp", params.get("min_load_frac", 1.0)))
+        p_min = (p_max * min_frac).clip(lower=0)
         # Extendable-pinnat (p_nom_min=p_nom_max=p_nom) → FAST kapacitet men kapexen
         # hamnar i objective_constant (PyPSA släpper annars fasta kapitalkostnader).
         # Must-run bevaras via p_min_pu=p_max_pu på den pinnade p_nom_opt.
@@ -1589,9 +1595,15 @@ def hydro_soc_initial_constraint(cfg: dict):
     return _extra_functionality
 
 
-def soc_terminal_pin_mwh(targets: dict):
-    """Returnerar en extra_functionality-callback som pinnar SOC vid SISTA snapshot
+def soc_terminal_pin_mwh(targets: dict, tol: dict | None = None):
+    """Returnerar en extra_functionality-callback som binder SOC vid SISTA snapshot
     till ett givet MWh-värde per lagernamn: {"SE-N hydro": 1.8e7, ...}.
+
+    tol: {lagernamn: band i MWh}. Saknat/0 → LIKHET (hård pin). >0 → målet blir ett
+    BAND, target ± tol, vilket är det som gör fönstervis pinning robust: en hård
+    likhet kan bli infeasible när dispatchen körs på annan upplösning än källan
+    (uttappningen ryms inte i timbalansen, och PyPSA:s spill är begränsad till
+    inflödet — magasinerat vatten kan inte dumpas, bara genereras ut).
 
     Byggsten för både --soc-pin (fraktioner ur config, hela körningen) och
     --soc-pin-from (fönstervis pin mot en källkörnings lagerbana).
@@ -1603,10 +1615,13 @@ def soc_terminal_pin_mwh(targets: dict):
         soc = m.variables["StorageUnit-state_of_charge"]
         tT = snapshots[-1]
         for su_name, term_mwh in targets.items():
-            m.add_constraints(
-                soc.sel(name=su_name, snapshot=tT) == term_mwh,
-                name=f"soc_terminal_pin-{su_name}",
-            )
+            band = float((tol or {}).get(su_name, 0.0))
+            var = soc.sel(name=su_name, snapshot=tT)
+            if band <= 0:
+                m.add_constraints(var == term_mwh, name=f"soc_terminal_pin-{su_name}")
+            else:
+                m.add_constraints(var >= term_mwh - band, name=f"soc_terminal_lo-{su_name}")
+                m.add_constraints(var <= term_mwh + band, name=f"soc_terminal_hi-{su_name}")
 
     return _extra_functionality
 
