@@ -773,6 +773,19 @@ def freeze_capacities_from(n, label):
         if "p_nom_opt" not in sdf.columns or ndf.empty:
             continue
         common = [x for x in ndf.index if x in sdf.index]
+        skipped = []
+        if cname == "generatorer" and "p_nom_extendable" in sdf.columns:
+            # p_nom_opt bär BARA information för extendable komponenter. För databestämda
+            # must-run-generatorer (thermal, hydro_ror) är p_nom = profilens max i KÄLLANS
+            # snapshot-fönster, medan p_min_pu = p_max_pu = profil/max normaliseras mot den
+            # NYA körningens fönster. Att frysa p_nom skalar då om produktionen med
+            # (källans max / nya fönstrets max) — och för must-run ÄR p_nom × pu dispatchen.
+            # Konkret: 1h-dispatch per år av en 3-årig källa gav NO-N termik ×2,6 (2023) och
+            # ×2,8 (2025), NO-S ×2,5/×3,1, eftersom årsmaxen ligger långt under 3-årsmaxet.
+            fixed = [x for x in common if not bool(sdf.at[x, "p_nom_extendable"])]
+            if fixed:
+                skipped = fixed
+                common = [x for x in common if x not in set(fixed)]
         ndf.loc[common, "p_nom"] = sdf.loc[common, "p_nom_opt"].astype(float)
         if "p_nom_extendable" in ndf.columns:
             ndf.loc[common, "p_nom_extendable"] = False
@@ -785,6 +798,9 @@ def freeze_capacities_from(n, label):
                       f"(max_hours ärvs från {label})")
         miss = [x for x in ndf.index if x not in sdf.index]
         msg = f"      {cname}: {len(common)} frysta"
+        if skipped:
+            msg += (f", {len(skipped)} databestämda ej frysta (behåller egen p_nom: "
+                    f"{', '.join(skipped[:3])}{' …' if len(skipped) > 3 else ''})")
         if miss:
             msg += f"  ⚠️ {len(miss)} saknas i {label} ({miss[:3]})"
         print(msg)
