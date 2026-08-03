@@ -745,6 +745,7 @@ def apply_dispatch_replay(parser, args):
     base.soc_pin_from = args.soc_pin_from     # tvåpass-pin styrs av NYA kommandot
     base.soc_pin_freq = args.soc_pin_freq
     base.soc_pin_band = args.soc_pin_band
+    base.solver_option = args.solver_option   # numerik-flaggor hör till NYA körningen
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -912,6 +913,12 @@ def main() -> None:
                         help="Fönsterlängd för --soc-pin-from (pandas-frekvens). Default 'MS' = "
                              "kalendermånad; 'W' = vecka, 'QS' = kvartal. Fönstret måste vara långt "
                              "mot batteri/EV-cykeln (de förblir cykliska per fönster).")
+    parser.add_argument("--solver-option", action="append", default=[], metavar="KEY=VALUE",
+                        help="Skriv över/lägg till en solver-option ur config/zones.yaml:solver, "
+                             "t.ex. 'user_bound_scale=-6' (HiGHS: skala modellens gränser med "
+                             "2^VALUE — mot 'excessively large row bounds' när lager i MWh ger "
+                             "RHS ~6e7 och IPM:s dual divergerar). Typ tolkas automatiskt "
+                             "(int/float/bool/sträng). Kan anges flera gånger.")
     parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
                         help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
                              "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
@@ -1241,6 +1248,22 @@ def main() -> None:
     cfg = load_config()
     res = args.resolution or cfg["snapshots"].get("resolution_hours", 1)
 
+    # --solver-option KEY=VALUE: skriv över cfg["solver"] (allt utom "name" går rakt
+    # till solver_options i solve()). Typ tolkas som i YAML så att t.ex. -6 blir int.
+    for spec in args.solver_option:
+        if "=" not in spec:
+            print(f"Ogiltigt --solver-option format: '{spec}' (förväntat KEY=VALUE)")
+            sys.exit(1)
+        k, v = spec.split("=", 1)
+        k = k.strip()
+        raw = v.strip()
+        val = yaml.safe_load(raw)                # '-6' → int, '1e-6' → float
+        if isinstance(val, bool) and raw.lower() not in ("true", "false"):
+            val = raw                            # YAML 1.1 gör 'on'/'off' till bool — HiGHS vill ha strängen
+        old = cfg["solver"].get(k, "(ej satt)")
+        cfg["solver"][k] = val
+        print(f"  → solver-option {k}: {old} → {val!r}")
+
     # --soc-pin: start-fraktion → MWh (soc_initial_override förväntas i MWh, ej fraktion)
     soc_pin_start = {z: f * cfg["zones"][z]["hydro_p_nom_mw"] * cfg["zones"][z]["hydro_max_hours"]
                      for z, f in soc_pin_start.items()}
@@ -1478,6 +1501,7 @@ def main() -> None:
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     if args.soc_pin_from:               flags.append(f"soc-pin-from-{args.soc_pin_from}@{args.soc_pin_freq}")
     if args.nuclear_min_load is not None: flags.append(f"nucminload-{args.nuclear_min_load:g}")
+    for spec in args.solver_option:     flags.append(f"solveropt-{spec.replace('=','')}")
     flag_str = f"  [{', '.join(flags)}]" if flags else ""
     print(f"Konfiguration: upplösning={res}h, år={args.year or '2023-2025'}{flag_str}")
 
