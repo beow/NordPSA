@@ -30,6 +30,9 @@ from nordpsa.network import (
     soc_terminal_pin_mwh,
     oc_budget_constraint,
     grid_cost_objective,
+    hydro_operation_bounds,
+    hydro_operation_constraints,
+    hydro_operation_feasibility_report,
     _annualized_cost,
     _grid_capital_cost,
 )
@@ -1007,6 +1010,32 @@ def main() -> None:
                              "från lasten drar mer nätutbyggnad per MW än kärnkraft nära. "
                              "Default AV (capital_cost identisk med idag). ⚠️ grid-siffrorna "
                              "är PLATSHÅLLARE tills de förankrats i källor (ENTSO-E TYNDP/NREL).")
+    parser.add_argument("--hydro-restrictions", action="store_true",
+                        help="Aktivera driftrestriktioner på RESERVOARvattenkraften "
+                             "(hydro_operation i zones.yaml): min timproduktion, min "
+                             "dygnsproduktion och max veckoproduktion som andel av "
+                             "installerad reservoareffekt. Hindrar både total avstängning "
+                             "under lågprisperioder och maxeffekt vecka efter vecka. "
+                             "Default AV. ⚠️ veckotaket 0.77 är Ek Fälth m.fl. (2025) för "
+                             "SE1 och är PLATSHÅLLARE för NordPSA:s aggregerade zoner.")
+    parser.add_argument("--hydro-min-hourly", type=float, default=None, metavar="FRAC",
+                        help="Override på min timproduktion (andel av reservoar-p_nom). "
+                             "Implicerar --hydro-restrictions. 0 = av.")
+    parser.add_argument("--hydro-min-daily", type=float, default=None, metavar="FRAC",
+                        help="Override på min dygnsproduktion (andel av max dygnsproduktion). "
+                             "Implicerar --hydro-restrictions. 0 = av.")
+    parser.add_argument("--hydro-max-weekly", nargs="+", action="extend", default=None,
+                        metavar="FRAC|ZON:FRAC",
+                        help="Override på max veckoproduktion (andel av max veckoproduktion). "
+                             "Ett ensamt tal gäller alla zoner; 'ZON:FRAC' sätter en zon, "
+                             "t.ex. '--hydro-max-weekly 0.77 NO-S:0.80'. "
+                             "Implicerar --hydro-restrictions. 0 = av.")
+    parser.add_argument("--hydro-bypass-spill", type=float, default=None, metavar="KOEF",
+                        help="Aktivera spill förbi mindre stationer när veckoproduktionen "
+                             "ligger inom threshold_below_max under veckotaket. KOEF = MWh "
+                             "spill per MWh produktion över tröskeln. Implicerar "
+                             "--hydro-restrictions. ⚠️ kan ge INFEASIBLE: PyPSA:s spill är "
+                             "begränsad av tillrinningen i samma snapshot.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Bygg nätverket och skriv en komponent-sammanfattning "
                              "(kärnkraft m.m.), men SOLVE:a inte. För verifiering före körning.")
@@ -1498,6 +1527,10 @@ def main() -> None:
     if args.onshore_lower != 1.0:       flags.append(f"onshorelow-{args.onshore_lower:g}")
     if args.solar_cap is not None:      flags.append(f"solarcap-{args.solar_cap:.0f}")
     if args.grid_cost:                  flags.append("grid-cost")
+    if (args.hydro_restrictions or args.hydro_min_hourly is not None
+            or args.hydro_min_daily is not None or args.hydro_max_weekly is not None
+            or args.hydro_bypass_spill is not None):
+        flags.append("hydro-restrictions")
     if soc_pin_end:                     flags.append("soc-pin-" + "_".join(soc_pin_end.keys()))
     if args.soc_pin_from:               flags.append(f"soc-pin-from-{args.soc_pin_from}@{args.soc_pin_freq}")
     if args.nuclear_min_load is not None: flags.append(f"nucminload-{args.nuclear_min_load:g}")
@@ -1725,6 +1758,61 @@ def main() -> None:
     if args.grid_cost and not _forced:
         n_years_grid = len(snapshots) * res / 8760.0
         extra_callbacks.append(grid_cost_objective(cfg, n_years_grid))
+
+    # Driftrestriktioner på reservoarvattenkraften (--hydro-restrictions).
+    ocfg = dict(cfg.get("hydro_operation") or {})
+    _hydro_flags = (args.hydro_min_hourly is not None or args.hydro_min_daily is not None
+                    or args.hydro_max_weekly is not None
+                    or args.hydro_bypass_spill is not None)
+    if args.hydro_restrictions or _hydro_flags:
+        ocfg["active"] = True
+        if args.hydro_min_hourly is not None:
+            ocfg["min_hourly_frac"] = args.hydro_min_hourly
+        if args.hydro_min_daily is not None:
+            ocfg["min_daily_frac"] = args.hydro_min_daily
+        if args.hydro_max_weekly is not None:
+            by_zone = dict(ocfg.get("max_weekly_frac_by_zone") or {})
+            for spec in args.hydro_max_weekly:
+                if ":" in spec:
+                    zone, val = spec.split(":", 1)
+                    if zone not in cfg["zones"]:
+                        raise SystemExit(f"--hydro-max-weekly: okänd zon '{zone}'")
+                    by_zone[zone] = float(val)
+                else:
+                    ocfg["max_weekly_frac"] = float(spec)
+            ocfg["max_weekly_frac_by_zone"] = by_zone
+        if args.hydro_bypass_spill is not None:
+            bs = dict(ocfg.get("bypass_spill") or {})
+            bs["active"] = True
+            bs["coefficient"] = args.hydro_bypass_spill
+            ocfg["bypass_spill"] = bs
+
+    if ocfg.get("active"):
+        by_zone = ocfg.get("max_weekly_frac_by_zone") or {}
+        print("Hydro-driftrestriktioner (reservoardelen):")
+        print(f"  min tim {ocfg.get('min_hourly_frac', 0) or 0:.2f} × p_nom, "
+              f"min dygn {ocfg.get('min_daily_frac', 0) or 0:.2f} × max dygn, "
+              f"max vecka {ocfg.get('max_weekly_frac', 0) or 0:.2f} × max vecka"
+              + (f" (per zon: {by_zone})" if by_zone else ""))
+        if (ocfg.get("bypass_spill") or {}).get("active"):
+            bs = ocfg["bypass_spill"]
+            print(f"  bypass-spill PÅ: κ={bs.get('coefficient')} över "
+                  f"(veckotak − {bs.get('threshold_below_max', 0.10)})")
+        bounds = hydro_operation_bounds(n)
+        if not bounds.empty:
+            print(f"  {'zon':7s}{'p_nom MW':>10s}{'tillrinn TWh':>14s}"
+                  f"{'andel av max':>14s}   förenligt med [min dygn, max vecka]")
+            lo = float(ocfg.get("min_daily_frac", 0) or 0)
+            for zone, row in bounds.iterrows():
+                hi = float((ocfg.get("max_weekly_frac_by_zone") or {}).get(
+                    zone, ocfg.get("max_weekly_frac", 0)) or 0)
+                frac = row["inflow_frac"]
+                ok = (frac >= lo) and (hi <= 0 or frac <= hi)
+                print(f"  {zone:7s}{row['p_nom_mw']:10.0f}{row['inflow_mwh']/1e6:14.2f}"
+                      f"{frac:14.3f}   {'ja' if ok else 'NEJ'}")
+        for w in hydro_operation_feasibility_report(n, ocfg):
+            print(f"  ⚠️  {w}")
+        extra_callbacks.append(hydro_operation_constraints(ocfg))
 
     # Onshore-expansionstak per zon (override på default p_nom_max)
     for zone, cap in onshore_caps.items():

@@ -215,6 +215,32 @@ baseline_batteries:
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
 # Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
 
+# Driftrestriktioner på RESERVOARvattenkraften (REN OPTION, default av).
+# Aktiveras med --hydro-restrictions. Hindrar LP:ns två orealistiska ytterligheter:
+# (a) att stänga av vattenkraften helt under långa lågprisperioder — små magasin i
+# älvsystemen skulle svämma över; (b) att köra maxeffekt vecka efter vecka, ett
+# vanligt utfall i ELLI-liknande modeller.
+# Alla andelar avser RESERVOARDELENS p_nom (efter ev. RoR-split), inte hela flottan.
+hydro_operation:
+  active: false
+  min_hourly_frac: 0.10    # min timproduktion / installerad reservoareffekt
+  min_daily_frac:  0.20    # min dygnsproduktion / maximal dygnsproduktion
+  max_weekly_frac: 0.77    # max veckoproduktion / maximal veckoproduktion
+  # ⚠️ ANTAGANDE: 0.77 är Ek Fälth m.fl. (2025) för prisområde SE1. NordPSA:s zoner är
+  # AGGREGAT (SE-N = SE1+SE2, SE-S = SE3+SE4, NO-N = NO3+NO4, NO-S = NO1+NO2+NO5), så
+  # 0.77 är en PLATSHÅLLARE för övriga zoner tills per-område-värden förts in nedan.
+  max_weekly_frac_by_zone: {}   # t.ex. {SE-N: 0.77, NO-S: 0.80}
+  # Spill förbi mindre stationer, som krävs för att hålla hög produktion länge.
+  # Linjärt gångjärn: Σ_vecka spill ≥ coefficient × (Σ_vecka prod − tröskel), där
+  # tröskel = (max_weekly_frac − threshold_below_max) × p_nom × veckans timmar.
+  # ⚠️ Default AV: PyPSA:s spill är uppåt begränsad av tillrinningen i samma snapshot,
+  # så en vecka med hög produktion men låg tillrinning kan bli INFEASIBLE. 'coefficient'
+  # (MWh spill per MWh produktion över tröskeln) anges inte i källan — måste kalibreras.
+  bypass_spill:
+    active: false
+    threshold_below_max: 0.10
+    coefficient: 0.15
+
 # Simulation period
 snapshots:
   start: "2023-01-01"

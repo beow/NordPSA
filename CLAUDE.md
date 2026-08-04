@@ -114,6 +114,21 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 
 **Hydro SOC cycling:** `cyclic_state_of_charge=True` + `extra_functionality` callback pins SOC[t=0] = target from `hydro_soc_initial` in `zones.yaml`. This forces start = end = target (e.g. 70%) while the LP optimizes freely in between.
 
+**Hydro operation restrictions (`--hydro-restrictions`, default OFF):** Optional constraints on the *reservoir* StorageUnits (after any RoR split), configured under `hydro_operation` in `zones.yaml` and implemented as an `extra_functionality` callback (`hydro_operation_constraints` in `nordpsa/network.py`):
+
+| Constraint | Form | Default |
+|---|---|---|
+| `min_hourly_frac` | `p_dispatch[t] ≥ f × p_nom` | 0.10 |
+| `min_daily_frac` | `Σ_day p·w ≥ f × p_nom × H_day` | 0.20 |
+| `max_weekly_frac` | `Σ_week p·w ≤ f × p_nom × H_week` | 0.77 |
+| `bypass_spill` | `Σ_week spill·w ≥ κ × (Σ_week p·w − threshold)` | off |
+
+Purpose: stop the LP from (a) shutting hydro off entirely through long low-price periods (small river reservoirs would overflow) and (b) running at full power week after week — a common ELLI-type artefact. Window sums use the actual `snapshot_weightings`, so they are correct at 1h/2h/3h and partial windows at the series edges are not over-tightened. Constraint names are prefixed `custom-`.
+
+With cyclic SOC, annual production equals inflow, so the constraints are mutually consistent only if `min_daily_frac ≤ inflow/(p_nom×H) ≤ max_weekly_frac`. `hydro_operation_bounds()` reports that ratio per zone and `run_model.py` prints it plus warnings before solving. For 2024 the ratio is 0.46–0.55 in all zones, comfortably inside [0.20, 0.77].
+
+⚠️ `max_weekly_frac = 0.77` is Ek Fälth et al. (2025) **for SE1**; NordPSA's zones are aggregates (SE-N = SE1+SE2 etc.), so it is a placeholder for the other zones until per-area values are entered in `max_weekly_frac_by_zone`. ⚠️ `bypass_spill` is off by default: PyPSA bounds spill by the inflow in the same snapshot, so a high-production/low-inflow week can go infeasible; κ is not given in the source and must be calibrated. Verify with `python scripts/test_hydro_operation.py`.
+
 **p_nom_max bounds:** All extendable generators have finite `p_nom_max_mw` in config (20k for nuclear/gas, 50k for VRE per zone). Without these, HiGHS sees ~3e10 column bounds and prints scaling warnings (harmless but ugly).
 
 ## Config
