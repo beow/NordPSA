@@ -1771,11 +1771,21 @@ def hydro_operation_constraints(ocfg: dict):
         if len(have) == 0:
             return
 
+        # κ per zon (coefficient_by_zone) med globalt 'coefficient' som fallback
+        coef_zone = dict(bcfg.get("coefficient_by_zone") or {})
+        kappa = pd.Series(coef, index=have, dtype=float)
+        for zone, val in coef_zone.items():
+            su_name = f"{zone} hydro"
+            if su_name in kappa.index:
+                kappa[su_name] = float(val)
+        k_da = xr.DataArray(kappa.to_numpy(dtype=float),
+                            coords={"name": have}, dims="name")
+
         thr = (fw_da.sel(name=have) - below) * p_nom.sel(name=have) * hours_w
         weekly_spill = (spill.sel(name=have) * w).groupby(gw).sum()
         # spill_vecka ≥ κ · (prod_vecka − tröskel); slak när prod < tröskel
         m.add_constraints(
-            weekly_spill - coef * weekly_prod.sel(name=have) >= -coef * thr,
+            weekly_spill - k_da * weekly_prod.sel(name=have) >= -k_da * thr,
             name="custom-hydro_bypass_spill",
         )
 

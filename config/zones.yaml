@@ -225,21 +225,47 @@ hydro_operation:
   active: false
   min_hourly_frac: 0.10    # min timproduktion / installerad reservoareffekt
   min_daily_frac:  0.20    # min dygnsproduktion / maximal dygnsproduktion
-  max_weekly_frac: 0.77    # max veckoproduktion / maximal veckoproduktion
-  # ⚠️ ANTAGANDE: 0.77 är Ek Fälth m.fl. (2025) för prisområde SE1. NordPSA:s zoner är
-  # AGGREGAT (SE-N = SE1+SE2, SE-S = SE3+SE4, NO-N = NO3+NO4, NO-S = NO1+NO2+NO5), så
-  # 0.77 är en PLATSHÅLLARE för övriga zoner tills per-område-värden förts in nedan.
-  max_weekly_frac_by_zone: {}   # t.ex. {SE-N: 0.77, NO-S: 0.80}
+  max_weekly_frac: 0       # 0 = inget globalt tak; sätts per zon nedan (provenienser skiljer sig)
+  # Källa: Ek Fälth m.fl. (2025), supplementary material (docs/hydro_restrictions.pdf),
+  # Figur A.2 "Sustained capacity", scenariot Present regime, 1 vecka. Avläsning ur
+  # violinplottar → osäkerhet ca ±2–3 procentenheter. Studien täcker BARA Sverige.
+  # Per prisområde: SE1 0.77, SE2 0.87, SE3 0.77. Aggregeras till NordPSA-zoner viktat
+  # med installerad vattenkraft (SE1 5.2 / SE2 8.1 / SE3 2.6 / SE4 0.3 GW).
+  # Kontroll: samma viktning på hela Sverige ger 0.82 mot figurens ~0.84 → viktningen håller.
+  max_weekly_frac_by_zone:
+    SE-N: 0.83   # KÄLLA: SE1 0.77 + SE2 0.87, kapacitetsviktat
+    SE-S: 0.77   # KÄLLA: SE3 (SE4 saknar värde i studien, 0.3 GW → försumbart)
+    NO-N: 0.85   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 3148 h mot SE-N 2723 h
+    NO-S: 0.85   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 3131 h; högfallsverk med
+                 #   stora magasin direkt uppströms → bör hålla minst SE-N:s nivå
+    FI:   0.80   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 2363 h, lågfallsverk med
+                 #   små magasin (1/3 av energin redan avskild som RoR) → närmare SE-S
+  # ⚠️ Alternativ tolkning: Figur A.3 "Sustained production" mäter veckoENERGI och är
+  # formellt närmare detta villkor än A.2 (som mäter uthållig EFFEKT). Den ger SE-N 0.85,
+  # SE-S 0.80. Värdena ovan följer A.2 eftersom referenstexten anger 0.77 för SE1, vilket
+  # är A.2-siffran. A.2 är den konservativa (hårdare) av de två.
+  # ⚠️ Stark säsongsvariation i Figur A.4 (SE1: ~72 % i mars, ~91 % i maj–juni) fångas INTE
+  # av ett årskonstant tak. Kräver månadsvis tak — ej implementerat.
   # Spill förbi mindre stationer, som krävs för att hålla hög produktion länge.
   # Linjärt gångjärn: Σ_vecka spill ≥ coefficient × (Σ_vecka prod − tröskel), där
   # tröskel = (max_weekly_frac − threshold_below_max) × p_nom × veckans timmar.
   # ⚠️ Default AV: PyPSA:s spill är uppåt begränsad av tillrinningen i samma snapshot,
   # så en vecka med hög produktion men låg tillrinning kan bli INFEASIBLE. 'coefficient'
   # (MWh spill per MWh produktion över tröskeln) anges inte i källan — måste kalibreras.
+  # κ kalibrerad mot Figur A.5 "Loss of total annual production" (Present regime, 1 vecka):
+  # SE1 0.12 %, SE2 0.13 %, SE3 0.22 % av årsproduktionen per uthållig högprisvecka.
+  # En vecka som ligger på taket överskrider tröskeln med threshold_below_max × p_nom × 168,
+  # så κ = förlust × tillrinningsandel × 8760 / (threshold_below_max × 168).
   bypass_spill:
     active: false
     threshold_below_max: 0.10
-    coefficient: 0.15
+    coefficient: 0.34          # fallback = SE-N
+    coefficient_by_zone:
+      SE-N: 0.34   # KÄLLA: A.5 SE1 0.12 % / SE2 0.13 %, tillrinningsandel 0.510
+      SE-S: 0.59   # KÄLLA: A.5 SE3 0.22 %, tillrinningsandel 0.512
+      NO-N: 0.30   # ⚠️ ANTAGANDE: ej i studien; stora magasin → mindre förbiledning
+      NO-S: 0.30   # ⚠️ ANTAGANDE: som NO-N
+      FI:   0.55   # ⚠️ ANTAGANDE: ej i studien; små magasin → nära SE-S
 
 # Simulation period
 snapshots:

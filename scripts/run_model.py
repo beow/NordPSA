@@ -1790,10 +1790,12 @@ def main() -> None:
     if ocfg.get("active"):
         by_zone = ocfg.get("max_weekly_frac_by_zone") or {}
         print("Hydro-driftrestriktioner (reservoardelen):")
+        _gw = float(ocfg.get("max_weekly_frac", 0) or 0)
+        _wk = (f"max vecka {_gw:.2f} × max vecka" if _gw > 0
+               else "max vecka: enbart per zon")
         print(f"  min tim {ocfg.get('min_hourly_frac', 0) or 0:.2f} × p_nom, "
               f"min dygn {ocfg.get('min_daily_frac', 0) or 0:.2f} × max dygn, "
-              f"max vecka {ocfg.get('max_weekly_frac', 0) or 0:.2f} × max vecka"
-              + (f" (per zon: {by_zone})" if by_zone else ""))
+              + _wk + (f" ({by_zone})" if by_zone else ""))
         if (ocfg.get("bypass_spill") or {}).get("active"):
             bs = ocfg["bypass_spill"]
             print(f"  bypass-spill PÅ: κ={bs.get('coefficient')} över "
