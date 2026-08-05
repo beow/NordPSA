@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is NordPSA
 
-Nordic power system model built on PyPSA. Combines LP dispatch optimization with capacity expansion (investment) for 6 aggregated zones: SE-N, SE-S, NO-N, NO-S, DK, FI. Covers 2023–2025 at hourly/3h resolution.
+Nordic power system model built on PyPSA. Combines LP dispatch optimization with capacity expansion (investment) for 6 aggregated zones: SE-N, SE-S, NO-N, NO-S, DK, FI. Covers 2023–2025; the canonical baseline runs at 2h, and 1h/3h are available via `--resolution`.
 
 ## Setup
 
@@ -85,12 +85,12 @@ scripts/run_model.py → results/
 | Bus | AC | One per zone |
 | Link | — | Bidirectional NTC (p_min_pu=-1) |
 | StorageUnit | hydro | Reservoir with parametric inflow, cyclic SOC, no pumping |
-| Generator | nuclear | Must-run: p_min_pu = p_max_pu (NUCLEAR_MIN_FRACTION = 1.0). Dispatch = availability profile × p_nom, no optimizer freedom |
+| Generator | nuclear | Existing fleet must-run: p_min_pu = p_max_pu, dispatch = availability × p_nom. New build (`--add-nuclear`) load-follows at 0.6 × p_max by default |
 | Generator | wind_onshore/offshore, solar | VRE with capacity factor profiles |
 | Generator | thermal | Must-run: p_min_pu = p_max_pu = actual profile |
 | Generator | gas | Dispatchable peaker, extendable |
 | Generator | market | Import/export valve: p_min_pu=-1, marginal_cost=DE-LU price |
-| Generator | slack | Load shedding (3000 EUR/MWh), only zones without market connection |
+| Generator | slack | Load shedding (3000 EUR/MWh). All six zones by default (`--voll`); `--no-voll` limits it to the zones without a market connection |
 
 ### Cost model
 
@@ -100,7 +100,7 @@ Capital cost is charged on `p_nom_opt` (total installed capacity, not just incre
 
 ### Zones and market connections
 
-SE-N and NO-N have no direct continental market connection — only slack generators.
+SE-N and NO-N have no direct continental market connection — with `--no-voll` they have only slack generators.
 SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU day-ahead).
 
 ## Important design decisions
