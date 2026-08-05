@@ -44,6 +44,33 @@ PROC_DIR    = Path(__file__).resolve().parents[1] / "data" / "processed"
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "zones.yaml"
 
+# --- Kanonisk expansions-baseline (run250-konfen) ---------------------------
+# Optionerna nedan är DEFAULT sedan 2026-08-05, så `python scripts/run_model.py`
+# utan flaggor kör baselinen. Varje post har en avstängningsväg (se --help).
+# Motsvarande config-default: snapshots.resolution_hours = 2.
+DEFAULT_ADD_NUCLEAR = ["SE-S:10:201", "SE-N:10:202", "FI:10:203"]
+
+# Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
+# omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
+BASELINE_DEFAULTS_TAG = "baseline-v1 (run250-konfen)"
+
+# Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
+# som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
+# run240 utan --hydro-restrictions ska omdispatchen också göra det. Nycklarna är
+# dest-namn, värdena de gamla defaultarna, och tokens de flaggor som i källans
+# argv innebär att användaren valde värdet MEDVETET (då rörs det inte).
+PRE_BASELINE_DEFAULTS = {
+    "hydro_restrictions":      (False, ("--hydro-restrictions", "--no-hydro-restrictions")),
+    "add_heat":                (False, ("--add-heat", "--no-add-heat")),
+    "spill_cost":              (None,  ("--spill-cost",)),
+    "cost_scenario":           (None,  ("--cost-scenario",)),
+    "demand_scenario":         (None,  ("--demand-scenario",)),
+    "onwind_capfac_increase":  (0.0,   ("--onwind-capfac-increase",)),
+    "offwind_capfac_increase": (0.0,   ("--offwind-capfac-increase",)),
+    "nuclear_min_load":        (None,  ("--nuclear-min-load",)),
+    "add_nuclear":             ([],    ("--add-nuclear", "--no-add-nuclear")),
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -697,6 +724,10 @@ def write_run_meta(label: str, args, res: int, year, flag_str: str) -> None:
         f"upplösning:  {res}h",
         f"år:          {year or '2023-2025'}",
         f"flaggor:     {flag_str.strip().strip('[]') or '(inga)'}",
+        # Markör för att argv nedan skrevs mot den KANONISKA baselinens defaults.
+        # --dispatch-replayen använder den för att avgöra om utelämnade optioner ska
+        # tolkas som dagens defaults (raden finns) eller dåtidens (raden saknas).
+        f"defaults:    {BASELINE_DEFAULTS_TAG}",
         # shlex.join → argument som innehåller mellanslag (t.ex. --market-ntc-override
         # "SE-S DE:1315") överlever round-trip via --dispatch-replayen.
         f"argv:        {shlex.join(sys.argv)}",
@@ -739,12 +770,32 @@ def apply_dispatch_replay(parser, args):
             continue
         cleaned.append(toks[i]); i += 1
     base = parser.parse_args(cleaned)
+    # Källans argv skrevs mot DÅTIDENS defaults. Sedan 2026-08-05 är run250-konfen
+    # default, så en oförändrad parse skulle smyga in t.ex. hydro-restriktioner i
+    # omdispatchen av en körning som aldrig hade dem. Körningar gjorda EFTER
+    # omläggningen bär en 'defaults:'-rad i run_meta och ska tvärtom behålla dagens
+    # defaults — annars skulle en replay av run260 tappa hela baselinen.
+    if not any(l.startswith("defaults:") for l in meta.read_text().splitlines()):
+        restored = []
+        for dest, (old, tokens) in PRE_BASELINE_DEFAULTS.items():
+            if any(t in cleaned for t in tokens):
+                continue                  # källan valde värdet medvetet → rör inte
+            if getattr(base, dest) != old:
+                setattr(base, dest, list(old) if isinstance(old, list) else old)
+                restored.append(dest)
+        if restored:
+            print(f"--dispatch: {label} saknar 'defaults:'-rad (gjord före "
+                  f"baseline-omläggningen) — återställer {', '.join(sorted(restored))} "
+                  f"till dåtidens default")
     base.resolution = args.resolution or 1    # default 1h för omdispatch
     base.output     = args.output
     base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
     base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
     base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
+    base.no_voll    = args.no_voll            # ...och dess av-knapp måste följa med, annars
+                                              # läses den ur KÄLLANS argv och --dispatch X
+                                              # --no-voll blir tyst verkningslös
     base.soc_pin_from = args.soc_pin_from     # tvåpass-pin styrs av NYA kommandot
     base.soc_pin_freq = args.soc_pin_freq
     base.soc_pin_band = args.soc_pin_band
@@ -872,15 +923,17 @@ def main() -> None:
                              "för marginalkostnads-/LRMC-experiment (ΔObjektiv/ΔKonsumtion).")
     parser.add_argument("--no-expansion", action="store_true",
                         help="Lås alla teknologier som non-extendable — ren dispatch-körning")
-    parser.add_argument("--cost-scenario", default=None, metavar="NAMN",
+    parser.add_argument("--cost-scenario", default="svk_2040", metavar="NAMN",
                         help="Skriv över cfg['costs'] med ett kostnadsscenario ur "
                              "cost_scenarios i zones.yaml (t.ex. svk_2040, svk_2050). "
-                             "Inkl. byggränta (IDC). Avsett för expansionskörningar.")
-    parser.add_argument("--demand-scenario", default=None, metavar="NAMN",
+                             "Inkl. byggränta (IDC). DEFAULT svk_2040 (kanonisk baseline); "
+                             "'none' använder dagens kostnader i config.")
+    parser.add_argument("--demand-scenario", default="svk_2040_mm", metavar="NAMN",
                         help="Addera ett efterfrågescenario ur demand_scenarios i "
                              "zones.yaml (t.ex. svk_2040_mm): per-zon extra-last, H2, EV, "
                              "utbyggnadstak (p_nom_max) och NTC-höjningar. Additivt över "
-                             "eSett-basen. Avsett för expansionskörningar.")
+                             "eSett-basen. DEFAULT svk_2040_mm (kanonisk baseline); "
+                             "'none' kör dagens efterfrågan.")
     parser.add_argument("--continent-diurnal-scale", type=float, default=1.0, metavar="FAKTOR",
                         help="Komprimera kontinent-ventilprisets DYGNSSVÄNG (hour-of-day-komponent) "
                              "med FAKTOR (1.0=oförändrat, 0.5=halverad). Behåller nivå + dag-till-dag-"
@@ -889,10 +942,13 @@ def main() -> None:
                              "ventil-bzn (DE-LU/EE/LT/PL/NL/GB), ej zon-priser. Se project_solar_overbuild_continent_spread.")
     parser.add_argument("--no-market", action="store_true",
                         help="Stäng ned alla externa marknadsanslutningar (p_nom=0)")
-    parser.add_argument("--voll", nargs="?", type=float, const=3000.0, default=None, metavar="EUR",
+    parser.add_argument("--voll", nargs="?", type=float, const=3000.0, default=3000.0, metavar="EUR",
                         help="Lägg VOLL-slack i ALLA zoner vid EUR/MWh (bart --voll = 3000, EI ~8000). "
                              "Ger LOLE/EENS-mått (slack-dispatch = osåld energi), cappar priser vid VOLL och "
-                             "förhindrar dualexplosion. Utelämnad = bara icke-marknadszoner @ 3000 (oförändrat).")
+                             "förhindrar dualexplosion. DEFAULT 3000 (kanonisk baseline); --no-voll ger det "
+                             "gamla beteendet: slack bara i icke-marknadszoner (SE-N, NO-N) @ 3000.")
+    parser.add_argument("--no-voll", action="store_true",
+                        help="Ingen VOLL-slack i marknadszonerna (bara SE-N/NO-N får slack, som före 2026-08-05).")
     parser.add_argument("--soc-pin", action="append", default=[], metavar="ZON:START:END",
                         help="Icke-cyklisk: lås BÅDA ändpunkterna till faktiska fyllnadsfraktioner per zon, "
                              "t.ex. 'SE-N:0.577:0.709' (start 57.7%%, slut 70.9%% av kapacitet). Kalibrering mot "
@@ -922,9 +978,10 @@ def main() -> None:
                              "2^VALUE — mot 'excessively large row bounds' när lager i MWh ger "
                              "RHS ~6e7 och IPM:s dual divergerar). Typ tolkas automatiskt "
                              "(int/float/bool/sträng). Kan anges flera gånger.")
-    parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
-                        help="Hydro-spillkostnad (EUR/MWh). Default 0.1 (tillåter spill vid full reservoar). "
-                             "Högt värde (t.ex. 50) bryter LP-degeneracy i expansionskörningar.")
+    parser.add_argument("--spill-cost", type=float, default=50.0, metavar="EUR",
+                        help="Hydro-spillkostnad (EUR/MWh). DEFAULT 50 (kanonisk baseline) — "
+                             "bryter LP-degeneracy i expansionskörningar. Sätt 0.1 för det "
+                             "gamla beteendet (tillåter fritt spill vid full reservoar).")
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
                         help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:5000:4'. BÄR "
                              "annualiserad svk_2040-kapex (inkl. IDC) även fast i dispatch (konstant "
@@ -978,15 +1035,16 @@ def main() -> None:
     parser.add_argument("--expand-budget-meur", type=float, default=None, metavar="MEUR",
                         help="Som --expand-budget-musd men direkt i miljoner EUR. "
                              "T.ex. 20000 = 20 mdr€. Har företräde om båda anges.")
-    parser.add_argument("--onwind-capfac-increase", type=float, default=0.0, metavar="FRAC",
+    parser.add_argument("--onwind-capfac-increase", type=float, default=0.30, metavar="FRAC",
                         help="Höj landbaserad vinds kapacitetsfaktor med denna relativa "
                              "andel (0.1 = +10%%). Olinjär potens-transform per zon: lyfter "
-                             "låga effektnivåer mest, märkeffekt (cf_max) oförändrad.")
-    parser.add_argument("--offwind-capfac-increase", type=float, default=0.0, metavar="FRAC",
+                             "låga effektnivåer mest, märkeffekt (cf_max) oförändrad. "
+                             "DEFAULT 0.30 (kanonisk baseline); 0 = dagens flotta.")
+    parser.add_argument("--offwind-capfac-increase", type=float, default=0.10, metavar="FRAC",
                         help="Som --onwind-capfac-increase men för HAVSbaserad vind "
                              "(0.1 = +10%%). Speglar 2040:s nybyggnadsflotta (moderna 15 MW-"
                              "turbiner). Påverkar genereringen; potential-MW i config förutsätter "
-                             "matchande CF.")
+                             "matchande CF. DEFAULT 0.10 (kanonisk baseline); 0 = dagens flotta.")
     parser.add_argument("--offwind-discount-rate", nargs="+", action="extend", default=[], metavar="ZON:RATE",
                         help="Egen diskontoränta för HAVSbaserad vind i en zon, t.ex. "
                              "'SE-N:0.03 SE-S:0.03'. Påverkar bara den annualiserade kapitalkostnaden "
@@ -1010,14 +1068,20 @@ def main() -> None:
                              "från lasten drar mer nätutbyggnad per MW än kärnkraft nära. "
                              "Default AV (capital_cost identisk med idag). ⚠️ grid-siffrorna "
                              "är PLATSHÅLLARE tills de förankrats i källor (ENTSO-E TYNDP/NREL).")
-    parser.add_argument("--hydro-restrictions", action="store_true",
-                        help="Aktivera driftrestriktioner på RESERVOARvattenkraften "
+    # Driftrestriktionerna är PÅ som default; --no-hydro-restrictions stänger av.
+    # --hydro-restrictions behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
+    parser.add_argument("--hydro-restrictions", action="store_true", default=True,
+                        dest="hydro_restrictions",
+                        help="(default PÅ) Driftrestriktioner på RESERVOARvattenkraften "
                              "(hydro_operation i zones.yaml): min timproduktion, min "
                              "dygnsproduktion och max veckoproduktion som andel av "
                              "installerad reservoareffekt. Hindrar både total avstängning "
                              "under lågprisperioder och maxeffekt vecka efter vecka. "
-                             "Default AV. ⚠️ veckotaket 0.77 är Ek Fälth m.fl. (2025) för "
-                             "SE1 och är PLATSHÅLLARE för NordPSA:s aggregerade zoner.")
+                             "⚠️ veckotaken för NO-N/NO-S/FI är ANTAGANDEN — Ek Fälth m.fl. "
+                             "(2025) täcker bara Sverige.")
+    parser.add_argument("--no-hydro-restrictions", action="store_false",
+                        dest="hydro_restrictions",
+                        help="Stäng av hydro-driftrestriktionerna (fri reservoardrift).")
     parser.add_argument("--hydro-min-hourly", type=float, default=None, metavar="FRAC",
                         help="Override på min timproduktion (andel av reservoar-p_nom). "
                              "Implicerar --hydro-restrictions. 0 = av.")
@@ -1039,13 +1103,20 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Bygg nätverket och skriv en komponent-sammanfattning "
                              "(kärnkraft m.m.), men SOLVE:a inte. För verifiering före körning.")
-    parser.add_argument("--add-nuclear", nargs="+", action="extend", default=[], metavar="ZON:N:SEED",
+    # OBS: default=None är en sentinel, inte "tom lista". Med action="extend" och en
+    # icke-tom default skulle ett eget --add-nuclear EXTENDA baslistan i stället för att
+    # ersätta den. Den kanoniska listan sätts därför efter parse_args.
+    parser.add_argument("--add-nuclear", nargs="+", action="extend", default=None, metavar="ZON:N:SEED",
                         help="Lägg till N NYA kärnkraftsreaktorer i en zon med syntetisk "
                              "stokastisk tillgänglighet (RNG-seed), t.ex. "
                              "'SE-S:10:101'. EXTENDABLE — kapaciteten optimeras (implicit "
                              "reaktorstorlek ≈ p_nom_opt/N), tak N×1500 MW. Befintlig flotta "
                              "finns med by default och byter då till syntetisk profil "
-                             "(config.nuclear_synth_existing). Kan anges flera gånger.")
+                             "(config.nuclear_synth_existing). Kan anges flera gånger. "
+                             f"DEFAULT {' '.join(DEFAULT_ADD_NUCLEAR)} (kanonisk baseline); "
+                             "--no-add-nuclear bygger ingen ny kärnkraft.")
+    parser.add_argument("--no-add-nuclear", action="store_true",
+                        help="Stäng av den kanoniska nya kärnkraften (tom --add-nuclear-lista).")
     parser.add_argument("--add-nuclear-fixed", nargs="+", action="extend", default=[], metavar="ZON:N:MW[:SEED]",
                         help="Lägg till N NYA EXOGENA (fasta, ej extendable) reaktorer à MW i en zon "
                              "som EGEN must-run-generator '{zon} nuclear fixed', t.ex. 'SE-S:1:1000' = "
@@ -1058,12 +1129,12 @@ def main() -> None:
                              "t.ex. 'SE-N:0.03 SE-S:0.03'. Påverkar bara den extendable expansionens "
                              "annualiserade kapitalkostnad (befintlig flotta är fast). Default = global "
                              "costs.discount_rate. Kan anges flera gånger / som lista.")
-    parser.add_argument("--nuclear-min-load", type=float, default=None, metavar="FRAC",
-                        help="Lastföljande NY kärnkraft: p_min_pu = FRAC × p_max_pu (t.ex. 0.6). "
+    parser.add_argument("--nuclear-min-load", type=float, default=0.6, metavar="FRAC",
+                        help="Lastföljande NY kärnkraft: p_min_pu = FRAC × p_max_pu. "
                              "Gäller både expanderbar (--add-nuclear) och exogen fast "
                              "(--add-nuclear-fixed) NY kärnkraft. Befintliga flottan förblir ren "
-                             "must-run (nuclear_synth.min_load_frac = 1.0). Utan flaggan är all "
-                             "kärnkraft must-run (oförändrat).")
+                             "must-run (nuclear_synth.min_load_frac = 1.0). DEFAULT 0.6 "
+                             "(kanonisk baseline); 1.0 gör även ny kärnkraft till ren must-run.")
     parser.add_argument("--add-wind", action="append", default=[], metavar="ZON:MW",
                         help="Lägg till fast landbaserad vindkraft (dispatch, ej extendable), "
                              "t.ex. 'SE-S:9893'. Samma CF-profil som zonens befintliga wind_onshore. "
@@ -1120,10 +1191,16 @@ def main() -> None:
     parser.add_argument("--no-market-elast", action="store_false",
                         dest="market_elasticity",
                         help="Stäng av den pris-elastiska kontinentgränsen (fast gränspris).")
-    parser.add_argument("--add-heat", action="store_true",
-                        help="Aktivera fjärrvärmesektorn (config heat): per-zon heat-buss "
+    # Fjärrvärmesektorn är PÅ som default; --no-add-heat stänger av.
+    # --add-heat behålls (no-op) för bakåtkompatibilitet med äldre kommandon.
+    parser.add_argument("--add-heat", action="store_true", default=True,
+                        dest="add_heat",
+                        help="(default PÅ) Fjärrvärmesektorn (config heat): per-zon heat-buss "
                              "(FV-behov + ackumulator + el-panna + stor-VP + bio/KVV). Drar bort "
                              "dagens FV-el ur AC-lasten. Kräver data/processed/heat_load.parquet.")
+    parser.add_argument("--no-add-heat", action="store_false",
+                        dest="add_heat",
+                        help="Kör utan fjärrvärmesektorn (ren elmodell).")
     parser.add_argument("--heat-store-ext", action="store_true",
                         help="Gör värmeackumulatorn investerbar: modellen dimensionerar lagret "
                              "fritt mot TES-kostnad (config heat.store_overnight_eur_per_kwh) i "
@@ -1146,6 +1223,22 @@ def main() -> None:
 
     if args.dispatch:                          # återspela källkörningens system-argv
         args = apply_dispatch_replay(parser, args)
+
+    # --cost-scenario/--demand-scenario har numera scenarionamn som default. 'none'
+    # (eller tom sträng) är avstängningsvägen tillbaka till dagens kostnader/last.
+    for _attr in ("cost_scenario", "demand_scenario"):
+        if str(getattr(args, _attr) or "").strip().lower() in ("none", "-", ""):
+            setattr(args, _attr, None)
+
+    # --add-nuclear: None = "orörd" → kanonisk lista. Se sentinel-kommentaren vid
+    # add_argument (action="extend" gör en icke-tom default farlig).
+    if args.no_add_nuclear:
+        args.add_nuclear = []
+    elif args.add_nuclear is None:
+        args.add_nuclear = list(DEFAULT_ADD_NUCLEAR)
+
+    if args.no_voll:                      # tillbaka till slack enbart i icke-marknadszoner
+        args.voll = None
 
     if args.soc_pin_from:
         if args.soc_pin:

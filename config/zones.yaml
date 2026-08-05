@@ -271,7 +271,7 @@ hydro_operation:
 snapshots:
   start: "2023-01-01"
   end:   "2026-01-01"   # exclusive, i.e. up to and including 2025-12-31
-  resolution_hours: 1   # set to 2, 3 or 6 to coarsen
+  resolution_hours: 2   # kanonisk expansions-baseline (run250-konfen); 1 = full timupplösning
 
 # Technology costs
 # discount_rate and fom_fraction apply to all technologies.

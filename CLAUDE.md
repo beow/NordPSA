@@ -25,15 +25,16 @@ make build        # build processed parquet inputs (scripts/build_inputs.py)
 make solve        # run model (scripts/run_model.py)
 ```
 
-Common solve variants:
+**The bare command runs the canonical expansion baseline** (see below) — no flags needed:
 ```bash
-python scripts/run_model.py --resolution 3 --output run01_description   # 3h, 2023-2025
-python scripts/run_model.py --resolution 3 --year 2024 --output run02_2024only
+python scripts/run_model.py --output run01_description              # baseline: 2h, 2023-2025
+python scripts/run_model.py --year 2024 --output run02_2024only     # baseline, single year
+python scripts/run_model.py --resolution 3 --output run03_coarse    # coarser, everything else baseline
 ```
 
 **Run discipline:** commit *after* a successful simulation, not before. This ensures only good runs are traced to code state. Always propose the commit message and wait for user approval before committing. Name the output directory in the commit message so results are traceable:
 ```bash
-python scripts/run_model.py --resolution 3 --output run02_fleet_factors
+python scripts/run_model.py --output run02_fleet_factors
 # verify results, then:
 git commit -m "Change X → ran: run02_fleet_factors"
 ```
@@ -104,6 +105,32 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 
 ## Important design decisions
 
+**Canonical expansion baseline (defaults since 2026-08-05):** `python scripts/run_model.py` with no flags *is* the baseline — the configuration of `run250_hydroops_2h`, adopted so that experiments differ from the baseline only by the flags they actually name. Every default has an off-switch:
+
+| Setting | Default | Off-switch |
+|---|---|---|
+| resolution | 2h (`snapshots.resolution_hours` in `zones.yaml`) | `--resolution N` |
+| `--spill-cost` | 50 EUR/MWh | `--spill-cost 0.1` |
+| `--cost-scenario` | `svk_2040` | `--cost-scenario none` |
+| `--demand-scenario` | `svk_2040_mm` | `--demand-scenario none` |
+| `--add-heat` | ON | `--no-add-heat` |
+| `--hydro-restrictions` | ON | `--no-hydro-restrictions` |
+| `--onwind-capfac-increase` | 0.30 | `--onwind-capfac-increase 0` |
+| `--offwind-capfac-increase` | 0.10 | `--offwind-capfac-increase 0` |
+| `--nuclear-min-load` | 0.6 | `--nuclear-min-load 1.0` |
+| `--add-nuclear` | `SE-S:10:201 SE-N:10:202 FI:10:203` | `--no-add-nuclear` |
+| `--voll` | 3000 EUR/MWh in **all** zones | `--no-voll` |
+| `--market-elasticity` | ON (predates this change) | `--no-market-elast` |
+
+`--voll` is the one default that does *not* reproduce `run250_hydroops_2h` exactly. It does not change the shedding price — `MC_SLACK` is already 3000 — only *where* slack exists: without it only the zones lacking a market connection (SE-N, NO-N) have a backstop, with it all six do. In an expansion run this gives the optimizer a new option: shed load at 3000 EUR/MWh instead of building peak capacity. Break-even against gas (~180 kEUR/MW/yr annualized) is roughly 60 scarcity hours per year, so FI — whose price tail is ~29 scarcity h/yr — is where a difference is most likely to show up as slightly less gas capacity. Also note `--voll` is taken from the *new* command on a `--dispatch` replay (as is `--no-voll`), so redispatch now gets VOLL by default; this removes the old trap where the flag had to be repeated manually.
+
+Two traps this created, both handled in `scripts/run_model.py`:
+
+- **`--add-nuclear` uses `action="extend"`**, so a non-empty argparse default would make a user-supplied `--add-nuclear` *append to* the baseline list instead of replacing it. The default is therefore the sentinel `None`, resolved to `DEFAULT_ADD_NUCLEAR` after `parse_args`.
+- **`--dispatch` replays a source run's argv**, which was written against whatever defaults existed then. Replaying a pre-change run unmodified would silently inject the new defaults (e.g. give run240 hydro restrictions it never had). `write_run_meta` therefore stamps a `defaults:` line (`BASELINE_DEFAULTS_TAG`); `apply_dispatch_replay` restores `PRE_BASELINE_DEFAULTS` only for source runs *lacking* that line. Runs made after the change keep today's defaults.
+
+`--resolution` deliberately stays `default=None` in argparse: `apply_dispatch_replay` relies on `args.resolution or 1` to keep redispatch at 1h, so the 2h baseline lives in config instead.
+
 **IPM with crossover:** Solver must use `run_crossover: "on"` for capacity expansion runs. Without crossover, p_nom_opt stays near p_nom_min even when investment is profitable (interior-point primal solution, not a vertex).
 
 **Nuclear as must-run Generator:** `p_min_pu = p_max_pu` via `NUCLEAR_MIN_FRACTION = 1.0` (`nordpsa/network.py`). Both the dispatch branch (actual `nuclear_profile`) and the synthetic-nuclear branch (`--add-nuclear`, `availability_timeseries`) set `p_min = p_max × min_frac` with `min_frac` defaulting to 1.0, so the optimizer cannot down-regulate nuclear. Consequence: dispatch (`n.generators_t.p`) equals the availability profile × p_nom in every snapshot. Synthetic mode can override via `min_load_frac` in `synthetic_nuclear["params"]`, but no CLI flag currently exposes it (default stays 1.0). NB: this is NOT the historical 0.6 load-following behavior — that fraction is no longer applied anywhere in the code.
@@ -114,7 +141,7 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 
 **Hydro SOC cycling:** `cyclic_state_of_charge=True` + `extra_functionality` callback pins SOC[t=0] = target from `hydro_soc_initial` in `zones.yaml`. This forces start = end = target (e.g. 70%) while the LP optimizes freely in between.
 
-**Hydro operation restrictions (`--hydro-restrictions`, default OFF):** Optional constraints on the *reservoir* StorageUnits (after any RoR split), configured under `hydro_operation` in `zones.yaml` and implemented as an `extra_functionality` callback (`hydro_operation_constraints` in `nordpsa/network.py`):
+**Hydro operation restrictions (`--hydro-restrictions`, default ON since 2026-08-05, off via `--no-hydro-restrictions`):** Constraints on the *reservoir* StorageUnits (after any RoR split), configured under `hydro_operation` in `zones.yaml` and implemented as an `extra_functionality` callback (`hydro_operation_constraints` in `nordpsa/network.py`):
 
 | Constraint | Form | Default |
 |---|---|---|
