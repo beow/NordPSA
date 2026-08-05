@@ -12,9 +12,15 @@ Testfall:
   E  förhandskontrollen fångar omöjliga parametrar FÖRE solve
   F  bypass-spill-gångjärnet uppfylls exakt vecka för vecka
 """
+import sys
+from pathlib import Path
+
 import pandas as pd
 pd.set_option('future.infer_string', False)
 import numpy as np, pypsa
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from nordpsa.network import hydro_operation_constraints, hydro_operation_feasibility_report
 
 RES, DAYS, P_NOM = 3, 21, 1000.0
