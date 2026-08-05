@@ -15,16 +15,21 @@ build/
 
 # Notebooks
 .ipynb_checkpoints/
+# Arbetsyta-notebook — cellkällorna versioneras i notebooks/cells/
+notebooks/explore.ipynb
 
 # Editors
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+# WSL/Windows-nedladdningsrester
+*:Zone.Identifier
 
 # Env
 .env
@@ -32,3 +37,12 @@ Thumbs.db
 
 # Genererade översiktsfigurer (per-run, regenereras ur results/)
 docs/nordpsa_overview*.png
+
+# Externa källdokument (stora binärer — hämtas från källan, versioneras ej)
+docs/*.pdf
+docs/indata_lma2026.xlsx
+docs/vindkraft_cf.xlsx
+
+# Claude Code, lokala artefakter
+.claude/worktrees/
+.claude/scheduled_tasks.lock
