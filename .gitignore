@@ -40,8 +40,13 @@ docs/nordpsa_overview*.png
 
 # Externa källdokument (stora binärer — hämtas från källan, versioneras ej)
 docs/*.pdf
-docs/indata_lma2026.xlsx
-docs/vindkraft_cf.xlsx
+
+# Kalkylblad — arbetsmaterial och Excels låsfiler (~$…). OBS: gitignore påverkar
+# INTE redan spårade filer; docs/batch17_mastersheet.xlsx och
+# docs/batch19_mastersheet.xlsx är committade sedan tidigare och fortsätter
+# spåras. Kör `git rm --cached <fil>` om även de ska sluta versioneras.
+*.xlsx
+~$*
 
 # Claude Code, lokala artefakter
 .claude/worktrees/
