@@ -1082,6 +1082,13 @@ def main() -> None:
     parser.add_argument("--no-hydro-restrictions", action="store_false",
                         dest="hydro_restrictions",
                         help="Stäng av hydro-driftrestriktionerna (fri reservoardrift).")
+    parser.add_argument("--no-hydro-price-proxy", action="store_true",
+                        help="Ge reservoarvattenkraften platt VOM som marginal_cost i "
+                             "stället för zonens FAKTISKA historiska day-ahead-pris. "
+                             "Proxyn (network.py, 'water value proxy' från run23) ligger "
+                             "sedan run57 STAPLAD ovanpå det äkta endogena vattenvärdet "
+                             "och står för HELA tidsvariationen i hydrons bud. Denna "
+                             "flagga isolerar dess effekt. Default: proxyn PÅ (oförändrat).")
     parser.add_argument("--hydro-min-hourly", type=float, default=None, metavar="FRAC",
                         help="Override på min timproduktion (andel av reservoar-p_nom). "
                              "Implicerar --hydro-restrictions. 0 = av.")
@@ -1599,6 +1606,7 @@ def main() -> None:
     if args.chp_fixed_gw is not None:   flags.append(f"chpfixed-{args.chp_fixed_gw:g}gw")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll is not None:           flags.append(f"voll{int(args.voll)}")
+    if args.no_hydro_price_proxy:       flags.append("no-hydro-price-proxy")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
     if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
@@ -1798,6 +1806,7 @@ def main() -> None:
                       solar_adds=solar_adds or None,
                       onshore_adds=onshore_adds or None,
                       offshore_adds=offshore_adds or None,
+                      hydro_price_proxy=not args.no_hydro_price_proxy,
                       add_cost_scenario=args.add_cost_scenario)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt

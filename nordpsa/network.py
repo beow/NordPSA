@@ -101,6 +101,7 @@ def build_network(
     market_prices:           Dict[str, pd.Series],
     actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
+    hydro_price_proxy:       bool = True,
     soc_initial_override:    dict | None = None,
     voll:                    float | None = None,
     batteries:               list | None = None,
@@ -160,7 +161,10 @@ def build_network(
             if el_twh > 0 and dh_e > 0 and zone in load.columns:
                 load[zone] = load[zone] - dh * (el_twh * 1e6 * n_years / dh_e)
 
-    zone_prices = {z: market_prices[z] for z in cfg["zones"] if z in market_prices}
+    # zone_prices används ENBART som reservoarvattenkraftens marginal_cost (_add_hydro).
+    # hydro_price_proxy=False → platt VOM i stället; se kommentaren vid mc-tilldelningen.
+    zone_prices = ({z: market_prices[z] for z in cfg["zones"] if z in market_prices}
+                   if hydro_price_proxy else None)
 
     _add_buses(n, cfg)
     _add_links(n, cfg)
@@ -407,6 +411,18 @@ def _add_hydro(
             frac = zcfg.get("hydro_soc_initial", 0.5)
             soc_init = frac * p_nom * max_h
 
+        # ⚠️ VATTENVÄRDES-PROXY — läs detta innan du tolkar hydrons prissättning.
+        # Reservoarens marginal_cost sätts till zonens FAKTISKA HISTORISKA day-ahead-pris
+        # (golvat på VOM). Infört i 947ec81 (run23, 2026-05-18) uttryckligen som
+        # "water value proxy", när modellen ännu inte extraherade något vattenvärde och
+        # mc var en platt VOM. Tretton dagar senare (c08906f, run57) kom det ÄKTA
+        # endogena vattenvärdet — dualen på SOC-balansen — men proxyn togs aldrig bort.
+        # Sedan dess ligger de STAPLADE: hydrons bud är
+        #     historiskt pris[t]  +  mu_energy_balance[t]/efficiency_dispatch
+        # och all TIDSVARIATION kommer från prisserien (dualen har 1-6 unika värden per
+        # zon över tre år). I en 2040-expansion är det cirkulärt: dispatchen ankras till
+        # den prisform modellen ska förutsäga.
+        # hydro_price_proxy=False (--no-hydro-price-proxy) ger platt VOM i stället.
         if zone_prices and zone in zone_prices:
             mc = zone_prices[zone].reindex(snapshots).ffill().clip(lower=mc_default)
         else:

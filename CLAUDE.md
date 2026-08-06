@@ -140,6 +140,16 @@ Two traps this created, both handled in `scripts/run_model.py`:
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
 
+**⚠️ Hydro bids at the HISTORICAL zone price (water-value proxy, `--no-hydro-price-proxy` to disable):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
+
+```
+historical price[t]  +  mu_energy_balance[t] / efficiency_dispatch
+```
+
+Introduced in `947ec81` (run23, 2026-05-18) explicitly as a *"water value proxy"*, replacing a flat VOM, at a time when the model did not yet extract a water value. Thirteen days later `c08906f` (run57) added `assign_all_duals=True` and the genuine endogenous water value — the SOC-balance dual — but the proxy was never removed. They have been stacked ever since; the line has not been touched since run23.
+
+This matters because the endogenous water value is nearly constant (1–6 unique values per zone over three years; SE-S has exactly one), so **all** the time variation in hydro's bid comes from the 2023–25 price series, none from the model. In a 2040 expansion that is circular: hydro's dispatch, and hence the price shape the model produces, is anchored to the price shape it is meant to predict. Use `--no-hydro-price-proxy` (flat VOM) to isolate the effect; the default is unchanged, so existing runs stay reproducible.
+
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 
 **Hydro inflow model:** Parameters are manually calibrated spring-flood profiles stored in `config/hydro_params.yaml` (NOT `data/processed/hydro_params.yaml` which is auto-generated and must never be used). SE-N: A=10000 MW spring flood, mu=day 135 (May 15), phi=183 (summer-high cosine). `build_inputs.py` does NOT regenerate these — they are a config artifact. Verify correct hydrology after each run: SE-N inflow should peak ~15000 MW in May, ~2600 MW in January; reservoir SOC should peak ~85% in July.
