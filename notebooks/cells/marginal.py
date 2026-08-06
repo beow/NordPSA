@@ -84,11 +84,20 @@ def marginal_source(ts_str, tol_price=0.6, tol_couple=0.6):
             # eff = 1.0 och påverkas inte; batterier (0.95) låg 5 % fel — vid ett
             # scarcity-pris på 1782 EUR/MWh blev det 89 EUR och batteriet missades
             # som prissättare trots att WV/eff träffade priset på decimalen.
+            # ...och lagrets EGNA marginalkostnad måste med. Vattenkraften får
+            # marginal_cost = zonens FAKTISKA historiska pris (network.py:410-411,
+            # zone_prices ur market_prices.parquet, golvat på VOM 0.6), så budet är
+            # historiskt pris + vattenvärde. Med enbart WV träffade hydro priset i
+            # ~1 % av de snapshots där magasinet är interiört; med mc+WV i 64-76 %
+            # (NO-N/NO-S) och då på decimalen.
             for s in n.storage_units[n.storage_units.bus == z].index:
                 if (spn[s] - sp[s]) > 1.0:
                     eff = n.storage_units.at[s, 'efficiency_dispatch']
-                    bud = wv[s] / eff
-                    lab = ('hydro (vattenvärde)'
+                    smc = (n.storage_units_t.marginal_cost.at[ts, s]
+                           if s in n.storage_units_t.marginal_cost.columns
+                           else n.storage_units.at[s, 'marginal_cost'])
+                    bud = smc + wv[s] / eff
+                    lab = ('hydro (hist. pris + vattenvärde)'
                            if n.storage_units.at[s, 'carrier'] == 'hydro'
                            else 'batteri (urladdningsbud)')
                     cands.append((abs(bud - pr), s, bud, lab))
