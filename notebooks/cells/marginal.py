@@ -79,9 +79,19 @@ def marginal_source(ts_str, tol_price=0.6, tol_couple=0.6):
             for g in n.generators[n.generators.bus == z].index:
                 if head_up[g] > 1.0:
                     cands.append((abs(mc[g] - pr), g, mc[g], carlabel(n.generators.at[g, 'carrier'])))
+            # mu_energy_balance värderar LAGRAD energi. För att leverera 1 MWh till
+            # nätet tas 1/eff MWh ur lagret, så urladdningsbudet är WV/eff. Hydro har
+            # eff = 1.0 och påverkas inte; batterier (0.95) låg 5 % fel — vid ett
+            # scarcity-pris på 1782 EUR/MWh blev det 89 EUR och batteriet missades
+            # som prissättare trots att WV/eff träffade priset på decimalen.
             for s in n.storage_units[n.storage_units.bus == z].index:
                 if (spn[s] - sp[s]) > 1.0:
-                    cands.append((abs(wv[s] - pr), s, wv[s], 'hydro (vattenvärde)'))
+                    eff = n.storage_units.at[s, 'efficiency_dispatch']
+                    bud = wv[s] / eff
+                    lab = ('hydro (vattenvärde)'
+                           if n.storage_units.at[s, 'carrier'] == 'hydro'
+                           else 'batteri (urladdningsbud)')
+                    cands.append((abs(bud - pr), s, bud, lab))
         cands.sort()
         setter[root] = (True, cands[0][1], cands[0][2], cands[0][3]) if (cands and cands[0][0] < tol_price) else (False,)
 
