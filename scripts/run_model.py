@@ -27,6 +27,8 @@ from nordpsa.network import (
     build_network,
     hydro_soc_initial_constraint,
     hydro_soc_terminal_pin_constraint,
+    hydro_terminal_value,
+    DEFAULT_TERMINAL_PROFILE,
     soc_terminal_pin_mwh,
     oc_budget_constraint,
     grid_cost_objective,
@@ -702,6 +704,192 @@ def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
     return True, results
 
 
+# ---------------------------------------------------------------------------
+# Rullande horisont: sekventiella fönster + terminalvärde på slut-SOC
+# ---------------------------------------------------------------------------
+
+def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int):
+    """Delar snapshots i sekventiella, ICKE-överlappande fönster."""
+    for s in range(0, len(snapshots), window_steps):
+        yield snapshots[s: s + window_steps]
+
+
+def terminal_lambdas(args, cfg: dict, market_prices: dict, units: list,
+                     t_last: pd.Timestamp, lookahead_steps: int) -> dict:
+    """λ per hydrolager (EUR/MWh) för terminalvärdet −λ×SOC[T].
+
+    Default: framåtriktat medelvärde av DE-LU över NÄSTA fönster — alltså
+    alternativkostnaden för att exportera vattnet till kontinenten. Det är exogen
+    indata (modellen prissätter redan marknadsventilen med den), så till skillnad
+    från zonens EGET observerade pris är det inte cirkulärt.
+
+    ⚠️ DE-LU övervärderar ändå vattnet i trängselinlåsta norra zoner, vars pris
+    inte kan följa kontinenten. Använd --terminal-lambda ZON:VÄRDE för att sätta
+    per zon manuellt.
+    """
+    # λ_zon(t) = α_zon × DE-LU_framåt(t): behåll kontinentprisets TIDSFORM, skala NIVÅN
+    # per zon. Ett KONSTANT λ per zon fungerar inte — run271 tömde SE-N till 9 % och
+    # NO-N till 0 % i februari 2024 och blev infeasible, eftersom vattnets
+    # alternativkostnad är hög före vårfloden och låg efter, inte lika året runt.
+    # Flaggan åsidosätter config-värdena (terminal_value.lambda_scale).
+    alpha = None
+    if args.terminal_lambda_scale:
+        alpha = {z.strip(): float(v) for z, v in
+                 (pair.split(":") for pair in args.terminal_lambda_scale.split(","))}
+    elif not args.terminal_lambda:
+        alpha = (cfg.get("terminal_value", {}) or {}).get("lambda_scale") or None
+    if alpha is not None:
+        de = market_prices.get("DE-LU")
+        if de is None:
+            base = 60.0
+        else:
+            idx   = de.index.get_indexer([t_last], method="nearest")[0]
+            ahead = de.iloc[idx: idx + lookahead_steps]
+            base  = float(ahead.mean()) if len(ahead) else float(de.mean())
+        return {u: base * alpha.get(u.split()[0], 1.0) for u in units}
+
+    if args.terminal_lambda:
+        if ":" in args.terminal_lambda:
+            per_zone = {z.strip(): float(v) for z, v in
+                        (pair.split(":") for pair in args.terminal_lambda.split(","))}
+        else:
+            per_zone = {u.split()[0]: float(args.terminal_lambda) for u in units}
+        return {u: per_zone.get(u.split()[0], 0.0) for u in units}
+
+    de = market_prices.get("DE-LU")
+    if de is None:
+        lam = 60.0
+    else:
+        idx   = de.index.get_indexer([t_last], method="nearest")[0]
+        ahead = de.iloc[idx: idx + lookahead_steps]
+        lam   = float(ahead.mean()) if len(ahead) else float(de.mean())
+    return {u: lam for u in units}
+
+
+def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
+                          log_path: Path | None = None,
+                          extra_callbacks: list | None = None) -> tuple[bool, dict | None]:
+    """Rullande horisont: lös perioden fönster för fönster med icke-cyklisk SOC,
+    carry-over av slut-SOC, och ett terminalvärde −λ×SOC[T] per fönster.
+
+    Syftet är att bryta den perfekta framsynen över hela perioden, som gör det
+    endogena vattenvärdet nästan konstant (1–6 unika värden per zon över tre år).
+
+    ⚠️ Fönstren är icke-överlappande, så varje fönster ser NOLL framåt och hela
+    säsongssignalen måste bäras av λ. Äkta receding horizon löser ett längre
+    fönster och behåller bara första delen; det är inte implementerat här.
+    """
+    scfg    = cfg["solver"]
+    options = {k: v for k, v in scfg.items() if k != "name"}
+    if log_path is not None:
+        options["log_file"] = str(log_path)
+
+    units = [u for u in n.storage_units.index
+             if n.storage_units.at[u, "carrier"] == "hydro"]
+    if not units:
+        raise SystemExit("--rolling-horizon: inga hydrolager i nätverket")
+    n.storage_units.loc[units, "cyclic_state_of_charge"] = False
+
+    cap = {u: float(n.storage_units.at[u, "p_nom"]) * float(n.storage_units.at[u, "max_hours"])
+           for u in units}
+    # Start-SOC. I rullande horisont finns INGET cykliskt villkor — nivån bärs över från
+    # fönster till fönster i hela perioden, så startvärdet är ett äkta begynnelsevillkor
+    # som propagerar i stället för att tvättas bort. Använd därför den FAKTISKA nivån
+    # (hydro_soc_start, ur Energy Charts) när den finns; hydro_soc_initial är cykliska
+    # körningars ankare för start = slut och är en annan sak.
+    start_cfg = cfg.get("hydro_soc_start", {}) or {}
+    soc_carry, start_src = {}, []
+    for u in units:
+        zone = u.split()[0]
+        if zone in start_cfg:
+            frac = float(start_cfg[zone]); src = "faktisk"
+        else:
+            frac = cfg["zones"].get(zone, {}).get("hydro_soc_initial", 0.5); src = "cyklisk-ankare"
+        soc_carry[u] = frac * cap[u]
+        start_src.append(f"{zone} {frac:.0%}({src})")
+    print("  → start-SOC: " + ", ".join(start_src))
+
+    # Terminalkurvan: --terminal-lambda-profile åsidosätter ALLA zoner; annars per zon ur
+    # config (terminal_value.profiles), med default_profile för zoner som saknas.
+    tvcfg = cfg.get("terminal_value", {}) or {}
+    if args.terminal_lambda_profile:
+        profile = [float(x) for x in args.terminal_lambda_profile.split(",") if x.strip()]
+    else:
+        dflt    = list(tvcfg.get("default_profile") or DEFAULT_TERMINAL_PROFILE)
+        byzone  = tvcfg.get("profiles") or {}
+        profile = {u: list(byzone.get(u.split()[0], dflt)) for u in units}
+
+    steps_per_week = max(1, (7 * 24) // res)
+    window_steps   = args.rolling_weeks * steps_per_week
+    windows        = list(rolling_windows(n.snapshots, window_steps))
+    print(f"  → rullande horisont: {args.rolling_weeks} veckor/fönster "
+          f"({window_steps} tidssteg), {len(windows)} fönster, {len(units)} hydrolager")
+    if isinstance(profile, dict):
+        K = len(next(iter(profile.values())))
+        print(f"  → terminalvärde KONKAVT per zon, {K} segment à {100.0/K:.0f} % av volymen:")
+        for u in units:
+            print(f"       {u.split()[0]:6} λ×[{', '.join(f'{p:g}' for p in profile[u])}]")
+    elif len(profile) == 1:
+        print(f"  ⚠️ terminalvärde LINJÄRT (profil {profile[0]:g}) — konstant marginalvärde "
+              f"oavsett fyllnadsgrad ger bang-bang: magasin i taket + priskollaps till VOM "
+              f"(run268). Använd flersegmentsprofil.")
+    else:
+        band = 100.0 / len(profile)
+        print(f"  → terminalvärde KONKAVT (global), {len(profile)} segment à {band:.0f} %: "
+              f"λ×[{', '.join(f'{p:g}' for p in profile)}] (tomt→fullt)")
+    if log_path is not None:
+        print(f"  HiGHS-logg: {log_path} (skrivs över per fönster — sista kvarstår)")
+
+    parts, keys = [], []
+    for i, sns in enumerate(windows, 1):
+        for u in units:
+            n.storage_units.at[u, "state_of_charge_initial"] = soc_carry[u]
+
+        lam = terminal_lambdas(args, cfg, market_prices, units, sns[-1], window_steps)
+        callbacks = [hydro_terminal_value(lam, cap, profile)] + list(extra_callbacks or [])
+
+        def extra_func(nn, snapshots, _cbs=callbacks):
+            for cb in _cbs:
+                cb(nn, snapshots)
+
+        status, condition = n.optimize(
+            snapshots=sns,
+            solver_name=scfg["name"],
+            solver_options=options,
+            extra_functionality=extra_func,
+            assign_all_duals=True,
+        )
+        start_txt = " ".join(f"{u.split()[0]} {soc_carry[u]/cap[u]:.0%}" for u in units)
+        if status == "ok":
+            soc_carry = {u: float(n.storage_units_t.state_of_charge.at[sns[-1], u])
+                         for u in units}
+            slut_txt = " ".join(f"→{soc_carry[u]/cap[u]:.0%}" for u in units)
+        else:
+            slut_txt = ""
+        print(f"  fönster {i:3d}/{len(windows)} {sns[0]:%Y-%m-%d}–{sns[-1]:%Y-%m-%d} "
+              f"({len(sns)} steg): {status}/{condition}  λ={list(lam.values())[0]:.1f}  "
+              f"{start_txt} {slut_txt}")
+        if status != "ok":
+            print(f"  ✖ fönster {i} misslyckades ({status}/{condition}) — avbryter.")
+            return False, None
+
+        part = {k: v.loc[sns] for k, v in extract_results(n).items()
+                if v is not None and getattr(v, "shape", (0, 0))[1] > 0}
+        for k in part:
+            if k not in keys:
+                keys.append(k)
+        parts.append(part)
+
+    fill = {u: soc_carry[u] / cap[u] for u in units}
+    print("  slut-SOC: " + " ".join(f"{u.split()[0]} {f:.0%}" for u, f in fill.items()))
+    if all(f > 0.95 for f in fill.values()):
+        print("  ⚠️ ALLA reservoarer >95 % vid periodens slut — hamstring. "
+              "Terminal-λ är för högt mot släppmarginalen (jfr run91–93).")
+
+    results = {k: pd.concat([p[k] for p in parts if k in p]).sort_index() for k in keys}
+    return True, results
+
+
 def _git_commit() -> str:
     """Aktuell git-commit (kort hash + ev. 'dirty'). Tom sträng om ej git."""
     import subprocess
@@ -1060,6 +1248,37 @@ def main() -> None:
                         help="Hydro-spillkostnad (EUR/MWh). DEFAULT 50 (kanonisk baseline) — "
                              "bryter LP-degeneracy i expansionskörningar. Sätt 0.1 för det "
                              "gamla beteendet (tillåter fritt spill vid full reservoar).")
+    parser.add_argument("--rolling-horizon", action="store_true",
+                        help="Lös perioden i sekventiella fönster (--rolling-weeks) med "
+                             "icke-cyklisk SOC, carry-over av slut-SOC och terminalvärde "
+                             "−λ×SOC[T]. Bryter den perfekta framsynen som gör det endogena "
+                             "vattenvärdet nästan konstant. DISPATCH-ONLY: varje fönster är en "
+                             "egen LP, så kapaciteter måste vara frysta (--no-expansion/--dispatch). "
+                             "⚠️ Kör med --no-hydro-price-proxy — annars är λ på bruttoprisnivå "
+                             "medan marginalen är nettovattenvärdet, och reservoarerna hamstrar "
+                             "(felet i run91–93).")
+    parser.add_argument("--rolling-weeks", type=int, default=4, metavar="N",
+                        help="Fönsterlängd i veckor för --rolling-horizon (default 4).")
+    parser.add_argument("--terminal-lambda-profile", default=None, metavar="M1,M2,...",
+                        help="Styckvis linjär KONKAV terminalvärdeskurva: multiplikatorer på "
+                             "bas-λ per lika stort SOC-segment, TOMT→FULLT. Måste vara "
+                             "icke-växande. DEFAULT "
+                             f"{','.join(f'{p:g}' for p in DEFAULT_TERMINAL_PROFILE)} "
+                             "(marginalvärde = bas-λ vid 60-80 % fyllnad, ~config-ankaret; "
+                             "2× nära tomt, 0,2× i toppbandet). '1.0' ger det gamla LINJÄRA "
+                             "beteendet, som ger bang-bang: magasin i taket och priskollaps "
+                             "till VOM (run268). ⚠️ Formen är ett ANTAGANDE, ej kalibrerad.")
+    parser.add_argument("--terminal-lambda-scale", default=None, metavar="ZON:α,...",
+                        help="λ_zon(t) = α_zon × framåtblickande DE-LU. Behåller kontinent"
+                             "prisets TIDSFORM men skalar NIVÅN per zon — en inlåst zon kan "
+                             "inte värdera sitt vatten till kontinentens pris. Föredras framför "
+                             "--terminal-lambda: ett KONSTANT λ tömmer magasinen före vårfloden "
+                             "(run271 blev infeasible, SE-N 9 % / NO-N 0 % i februari 2024), "
+                             "eftersom vattnets alternativkostnad är säsongsberoende.")
+    parser.add_argument("--terminal-lambda", default=None, metavar="VÄRDE|ZON:V,...",
+                        help="Fast terminal-λ (EUR/MWh) i stället för framåtblickande DE-LU. "
+                             "Skalär för alla hydrozoner, eller per zon "
+                             "('SE-N:30,NO-S:55'). Zoner som utelämnas får λ=0.")
     parser.add_argument("--vre-curtailment-cost", type=float, default=None, metavar="EUR",
                         help="Kostnad (EUR/MWh) för AVKORTAD vind/sol — ekvivalent med att VRE "
                              "bjuder vom − EUR. Enda vägen till NEGATIVA zonpriser: utan detta är "
@@ -1339,6 +1558,20 @@ def main() -> None:
     if args.vre_curtailment_cost is None:
         frozen = bool(args.dispatch) or bool(args.no_expansion)
         args.vre_curtailment_cost = DEFAULT_VRE_CURTAILMENT_COST if frozen else 0.0
+
+    if args.rolling_horizon:
+        # Varje fönster är en EGEN LP → investeringsbesluten skulle fattas oberoende
+        # per fönster (och dimensioneras mot fönstrets eget väder). Inkoherent.
+        if not (args.no_expansion or args.dispatch):
+            parser.error("--rolling-horizon är dispatch-only: varje fönster löses som en egen "
+                         "LP, så extendable kapaciteter skulle optimeras oberoende per fönster. "
+                         "Kör med --no-expansion, eller tvåpass: expansion först, sedan "
+                         "--dispatch <label> --rolling-horizon.")
+        if not args.no_hydro_price_proxy:
+            print("⚠️  --rolling-horizon MED vattenvärdes-proxyn påslagen: hydros marginal_cost "
+                  "är det historiska zonpriset, så släppmarginalen är nettovattenvärdet (~18–47) "
+                  "medan terminal-λ ligger på bruttoprisnivå (~73). Reservoarerna väntas hamstra "
+                  "mot 100 % — det var felet i run91–93. Lägg till --no-hydro-price-proxy.")
 
     if args.no_voll:                      # tillbaka till slack enbart i icke-marknadszoner
         args.voll = None
@@ -1679,6 +1912,13 @@ def main() -> None:
     if args.dispatch:                   flags.append(f"dispatch-{args.dispatch}")
     if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
     if args.vre_curtailment_cost:       flags.append(f"vrecurt-{args.vre_curtailment_cost:g}")
+    if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
+    if args.terminal_lambda:            flags.append(f"termlambda-{args.terminal_lambda.replace(':','_')}")
+    if args.terminal_lambda_scale:      flags.append(f"termscale-{args.terminal_lambda_scale.replace(':','_')}")
+    if args.rolling_horizon:
+        _p = (args.terminal_lambda_profile.split(",") if args.terminal_lambda_profile
+              else [f"{p:g}" for p in DEFAULT_TERMINAL_PROFILE])
+        flags.append("termprofil-" + "_".join(x.strip() for x in _p))
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     for tok in args.extra_load_zone:    flags.append("xload-" + tok.replace(":", "-") + "mw")
     if args.cost_scenario:              flags.append(f"cost-{args.cost_scenario}")
@@ -2107,7 +2347,11 @@ def main() -> None:
     write_run_meta(label, args, res, args.year, flag_str)
 
     n.sanitize()
-    if args.soc_pin_from:
+    if args.rolling_horizon:
+        ok, pinned_results = solve_rolling_horizon(
+            n, cfg, args, inputs["market_prices"], res,
+            log_path=log_path, extra_callbacks=extra_callbacks)
+    elif args.soc_pin_from:
         ok, pinned_results = solve_soc_pinned(
             n, cfg, args.soc_pin_from, args.soc_pin_freq,
             band_frac=args.soc_pin_band,
@@ -2120,7 +2364,7 @@ def main() -> None:
         print("Lösning misslyckades — kontrollera nätverket")
         sys.exit(1)
 
-    if args.soc_pin_from:
+    if args.soc_pin_from or args.rolling_horizon:
         # CSV:erna byggs av de fönstervisa lösningarna (sanningskälla); network.nc
         # exporteras också — PyPSA ackumulerar fönstren i n.*_t via update().
         (RESULTS_DIR / label).mkdir(parents=True, exist_ok=True)

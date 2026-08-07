@@ -221,6 +221,63 @@ baseline_batteries:
 # älvsystemen skulle svämma över; (b) att köra maxeffekt vecka efter vecka, ett
 # vanligt utfall i ELLI-liknande modeller.
 # Alla andelar avser RESERVOARDELENS p_nom (efter ev. RoR-split), inte hela flottan.
+# FAKTISK fyllnadsgrad vid periodens start (2023-01-01), för --rolling-horizon.
+#
+# ⚠️ SKILJ FRÅN zones.*.hydro_soc_initial. Den är CYKLISKA körningars ankare för
+# start = slut ("normalnivå att återvända till") och ändras INTE här — en ändring där
+# skulle göra run260-baselinen oreproducerbar. Detta är något annat: ett äkta
+# BEGYNNELSEVILLKOR. I rullande horisont finns inget cykliskt villkor alls, nivån bärs
+# över från fönster till fönster i tre år, och startvärdet propagerar därför genom hela
+# körningen i stället för att tvättas bort.
+#
+# KÄLLA: docs/NordicHydroEC.xlsx (Energy Charts, veckovis magasinenergi TWh per land),
+# veckan 2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16 — dividerat med modellens
+# zonvolymer (SE 32,49 / NO 87,40 / FI 5,50 TWh).
+# ⚠️ ANTAGANDE: samma fyllnadsgrad i båda delzonerna inom ett land (EC ger bara
+# landsnivå). SE-N och SE-S kan i verkligheten skilja sig åt.
+hydro_soc_start:
+  SE-N: 0.567
+  SE-S: 0.567
+  NO-N: 0.630
+  NO-S: 0.630
+  FI:   0.575
+
+# Terminalvärdeskurva för --rolling-horizon: V(SOC) styckvis linjär och KONKAV.
+#
+#     λ_k(zon, t)  =  lambda_scale[zon] · DE-LU_framåt(t)  ·  profile[k]
+#                     └──── NIVÅ per zon ────┘  └ TIDSFORM ┘  └─ FORM vs fyllnad ─┘
+#
+# Tre separerade delar. Profilen är multiplikatorer per lika stort SOC-segment,
+# TOMT→FULLT; måste vara icke-växande, och alla zoner måste ha samma ANTAL segment.
+#
+# ⚠️ SPÄNNVIDDEN ÄR AVGÖRANDE, inte bara lutningen. Första försöket hade 10× spann
+# (2.0→0.2) och gav marginalvärden nära tomt magasin på bara ~2× medelpriset. Det räcker
+# inte för att försvara botten: modellen tömde SE-N till 9 % och NO-N till 0 % i februari
+# 2024 och blev INFEASIBLE (run271 samt tmp_lambdascale). Ett verkligt vattenvärde nära
+# tomt magasin är hundratals EUR/MWh — man är på väg att inte kunna leverera. 80× spann
+# (8.0→0.1) löser det: SE-N bias −0,2 och NO-N −0,8 mot faktiskt 2024, magasin-offset
+# 12,2 → 7,8 TWh och korrelation 0,978 → 0,991 mot Energy Charts.
+#
+# ⚠️ TIDSFORMEN ÄR NÖDVÄNDIG. Ett KONSTANT λ per zon fungerar inte oavsett nivå — vattnets
+# alternativkostnad är hög före vårfloden och låg efter. Därför skalas DE-LU-banan i
+# stället för att ersättas (jfr --terminal-lambda, som sätter fasta tal och sprack).
+#
+# ⚠️ lambda_scale ÄR KALIBRERAD MOT OBSERVERADE PRISER: α = zonens medelpris / DE-LU
+# medelpris 2023-25 (87,7). Det gör PRIS-validering delvis cirkulär. MAGASINVALIDERINGEN
+# mot docs/NordicHydroEC.xlsx är däremot oberoende — nivåbanan är inte det som matats in.
+# ⚠️ α överförs INTE till 2040-expansion (inga observerade priser att härleda den ur).
+# Den icke-cirkulära vägen dit är α = 1 − förväntad trängselränta/DE-LU, ur modellens
+# egen mu_ntc; det är ett fixpunktsproblem och kräver iteration. Ej byggt.
+terminal_value:
+  default_profile: [8.0, 3.0, 1.5, 1.0, 0.1]
+  profiles: {}          # per-zon FORM om någon zon behöver avvika; normalt tom
+  lambda_scale:         # NIVÅ per zon, andel av kontinentpriset
+    SE-N: 0.31          # 27,1 / 87,7
+    SE-S: 0.54          # 47,5 / 87,7
+    NO-N: 0.29          # 25,8 / 87,7
+    NO-S: 0.66          # 58,1 / 87,7
+    FI:   0.54          # 47,5 / 87,7
+
 hydro_operation:
   active: false
   min_hourly_frac: 0.10    # min timproduktion / installerad reservoareffekt
