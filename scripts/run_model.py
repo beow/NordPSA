@@ -50,6 +50,17 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "zones.yaml"
 # Motsvarande config-default: snapshots.resolution_hours = 2.
 DEFAULT_ADD_NUCLEAR = ["SE-S:10:201", "SE-N:10:202", "FI:10:203"]
 
+# --vre-curtailment-cost: default BARA i dispatchläge (--dispatch eller --no-expansion,
+# dvs frysta kapaciteter). I expansion måste den vara 0 — annars blir den en
+# produktionssubvention och spärren i apply_vre_curtailment_cost slår till på varje
+# baseline-körning. Nivån är kalibrerad mot vad som faktiskt går förlorat per MWh vid
+# avkortning i 2040: ursprungsgarantier (GO). Elcertifikaten är noll (systemet stängt
+# för nya anläggningar efter 2021, avslutas senast 2035, utreds för tidigare avslut) och
+# CfD:er betalar inte i negativa timmar (CEEAG suspenderar stöd vid negativa priser, och
+# tyska EEG §51 går till 1-timmesregel 2027). Kvar: GO, prognos 2-5 EUR/MWh.
+# 5 = ÖVRE delen av det intervallet, valt av användaren; central skattning vore 2.
+DEFAULT_VRE_CURTAILMENT_COST = 5.0
+
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
 BASELINE_DEFAULTS_TAG = "baseline-v1 (run250-konfen)"
@@ -795,7 +806,9 @@ def apply_dispatch_replay(parser, args):
     base.vre_curtailment_cost = args.vre_curtailment_cost   # hör till OMDISPATCHEN, inte källan:
                                               # källans argv har den aldrig (expansion förbjuder
                                               # den), så utan denna rad blir flaggan tyst
-                                              # verkningslös — jfr --voll/--low-hydro-fällan
+                                              # verkningslös — jfr --voll/--low-hydro-fällan.
+                                              # None = orörd; sentineln löses ut efter denna
+                                              # funktion, då base.dispatch är satt.
     base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
     base.no_voll    = args.no_voll            # ...och dess av-knapp måste följa med, annars
                                               # läses den ur KÄLLANS argv och --dispatch X
@@ -1047,14 +1060,16 @@ def main() -> None:
                         help="Hydro-spillkostnad (EUR/MWh). DEFAULT 50 (kanonisk baseline) — "
                              "bryter LP-degeneracy i expansionskörningar. Sätt 0.1 för det "
                              "gamla beteendet (tillåter fritt spill vid full reservoar).")
-    parser.add_argument("--vre-curtailment-cost", type=float, default=0.0, metavar="EUR",
+    parser.add_argument("--vre-curtailment-cost", type=float, default=None, metavar="EUR",
                         help="Kostnad (EUR/MWh) för AVKORTAD vind/sol — ekvivalent med att VRE "
-                             "bjuder vom − EUR, dvs subventionerade negativa bud (CfD/elcert). "
-                             "Enda vägen till NEGATIVA zonpriser: utan detta är avkortning gratis "
-                             "och priset kan aldrig gå under billigaste budet (VOM 0,1). "
-                             "KRÄVER frysta kapaciteter (--dispatch/--no-expansion + freeze) — "
-                             "med extendable VRE blir det en produktionssubvention som bygger till "
-                             "p_nom_max. DEFAULT 0 (av).")
+                             "bjuder vom − EUR. Enda vägen till NEGATIVA zonpriser: utan detta är "
+                             "avkortning gratis och priset kan aldrig gå under billigaste budet "
+                             "(VOM 0,1). KRÄVER frysta kapaciteter — med extendable VRE blir det "
+                             "en produktionssubvention som bygger till p_nom_max. "
+                             f"DEFAULT {DEFAULT_VRE_CURTAILMENT_COST:g} i DISPATCHLÄGE "
+                             "(--dispatch eller --no-expansion), annars 0. Kalibrerad mot "
+                             "ursprungsgarantier (GO, prognos 2-5) — elcert är noll i 2040 och "
+                             "CfD betalar inte i negativa timmar. Sätt 0 för att stänga av.")
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
                         help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:5000:4'. BÄR "
                              "annualiserad svk_2040-kapex (inkl. IDC) även fast i dispatch (konstant "
@@ -1316,6 +1331,14 @@ def main() -> None:
         args.add_nuclear = []
     elif args.add_nuclear is None:
         args.add_nuclear = list(DEFAULT_ADD_NUCLEAR)
+
+    # --vre-curtailment-cost: None = "orörd" → default bara när kapaciteterna är frysta.
+    # Måste ligga EFTER apply_dispatch_replay (som sätter base.dispatch/no_expansion) och
+    # kan inte vara en argparse-default, eftersom en icke-noll default i expansionsläge
+    # skulle få spärren att fälla varje baseline-körning.
+    if args.vre_curtailment_cost is None:
+        frozen = bool(args.dispatch) or bool(args.no_expansion)
+        args.vre_curtailment_cost = DEFAULT_VRE_CURTAILMENT_COST if frozen else 0.0
 
     if args.no_voll:                      # tillbaka till slack enbart i icke-marknadszoner
         args.voll = None
