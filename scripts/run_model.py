@@ -708,10 +708,27 @@ def solve_soc_pinned(n, cfg: dict, src_label: str, freq: str,
 # Rullande horisont: sekventiella fönster + terminalvärde på slut-SOC
 # ---------------------------------------------------------------------------
 
-def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int):
-    """Delar snapshots i sekventiella, ICKE-överlappande fönster."""
-    for s in range(0, len(snapshots), window_steps):
-        yield snapshots[s: s + window_steps]
+def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int,
+                    lookahead_steps: int = 0):
+    """Delar snapshots i sekventiella fönster och ger (BEHÅLL, LÖS) per fönster.
+
+    lookahead_steps=0 → klassiskt icke-överlappande: LÖS == BEHÅLL, varje fönster
+    ser noll framåt och hela säsongssignalen måste bäras av terminalvärdet λ.
+
+    lookahead_steps>0 → ÄKTA RECEDING HORIZON (väg E i docs/vattenvarde_plan.md):
+    fönstret LÖSES med extra look-ahead men bara den första delen BEHÅLLS, och
+    SOC bärs över från slutet av BEHÅLL-delen. Poängen är att look-ahead gör det
+    mesta av jobbet i stället för terminalkurvan, vilket i sin tur krymper
+    cirkularitetsproblemet (λ kalibreras mot observerade priser).
+
+    Sista fönstret får ingen look-ahead att hämta — det finns inget efter
+    periodens slut — så där sammanfaller LÖS och BEHÅLL igen.
+    """
+    n = len(snapshots)
+    for s in range(0, n, window_steps):
+        keep = snapshots[s: s + window_steps]
+        solve = snapshots[s: min(s + window_steps + lookahead_steps, n)]
+        yield keep, solve
 
 
 def terminal_lambdas(args, cfg: dict, market_prices: dict, units: list,
@@ -775,9 +792,10 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
     Syftet är att bryta den perfekta framsynen över hela perioden, som gör det
     endogena vattenvärdet nästan konstant (1–6 unika värden per zon över tre år).
 
-    ⚠️ Fönstren är icke-överlappande, så varje fönster ser NOLL framåt och hela
-    säsongssignalen måste bäras av λ. Äkta receding horizon löser ett längre
-    fönster och behåller bara första delen; det är inte implementerat här.
+    Fönstren är som default icke-överlappande, så varje fönster ser NOLL framåt och
+    hela säsongssignalen måste bäras av λ. `--rolling-lookahead-weeks N` ger äkta
+    receding horizon: fönstret löses med N veckors extra look-ahead men bara första
+    delen behålls, och SOC bärs över från behåll-delens slut.
     """
     scfg    = cfg["solver"]
     options = {k: v for k, v in scfg.items() if k != "name"}
@@ -819,11 +837,17 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         byzone  = tvcfg.get("profiles") or {}
         profile = {u: list(byzone.get(u.split()[0], dflt)) for u in units}
 
-    steps_per_week = max(1, (7 * 24) // res)
-    window_steps   = args.rolling_weeks * steps_per_week
-    windows        = list(rolling_windows(n.snapshots, window_steps))
+    steps_per_week  = max(1, (7 * 24) // res)
+    window_steps    = args.rolling_weeks * steps_per_week
+    lookahead_steps = args.rolling_lookahead_weeks * steps_per_week
+    windows         = list(rolling_windows(n.snapshots, window_steps, lookahead_steps))
     print(f"  → rullande horisont: {args.rolling_weeks} veckor/fönster "
           f"({window_steps} tidssteg), {len(windows)} fönster, {len(units)} hydrolager")
+    if lookahead_steps:
+        print(f"  → RECEDING HORIZON: +{args.rolling_lookahead_weeks} veckors look-ahead "
+              f"({lookahead_steps} steg) löses men KASTAS; SOC bärs över från behåll-delen. "
+              f"Terminalvärdet hamnar {args.rolling_lookahead_weeks} veckor bort och styr "
+              f"därmed mindre.")
     if isinstance(profile, dict):
         K = len(next(iter(profile.values())))
         print(f"  → terminalvärde KONKAVT per zon, {K} segment à {100.0/K:.0f} % av volymen:")
@@ -841,7 +865,7 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         print(f"  HiGHS-logg: {log_path} (skrivs över per fönster — sista kvarstår)")
 
     parts, keys = [], []
-    for i, sns in enumerate(windows, 1):
+    for i, (keep, sns) in enumerate(windows, 1):
         for u in units:
             n.storage_units.at[u, "state_of_charge_initial"] = soc_carry[u]
 
@@ -861,19 +885,22 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         )
         start_txt = " ".join(f"{u.split()[0]} {soc_carry[u]/cap[u]:.0%}" for u in units)
         if status == "ok":
-            soc_carry = {u: float(n.storage_units_t.state_of_charge.at[sns[-1], u])
+            # SOC bärs över från slutet av BEHÅLL-delen, inte från look-ahead-svansen:
+            # svansen är bara en framtidsbild och kastas.
+            soc_carry = {u: float(n.storage_units_t.state_of_charge.at[keep[-1], u])
                          for u in units}
             slut_txt = " ".join(f"→{soc_carry[u]/cap[u]:.0%}" for u in units)
         else:
             slut_txt = ""
-        print(f"  fönster {i:3d}/{len(windows)} {sns[0]:%Y-%m-%d}–{sns[-1]:%Y-%m-%d} "
-              f"({len(sns)} steg): {status}/{condition}  λ={list(lam.values())[0]:.1f}  "
+        tail = f"+{len(sns)-len(keep)}" if len(sns) > len(keep) else ""
+        print(f"  fönster {i:3d}/{len(windows)} {keep[0]:%Y-%m-%d}–{keep[-1]:%Y-%m-%d} "
+              f"({len(keep)}{tail} steg): {status}/{condition}  λ={list(lam.values())[0]:.1f}  "
               f"{start_txt} {slut_txt}")
         if status != "ok":
             print(f"  ✖ fönster {i} misslyckades ({status}/{condition}) — avbryter.")
             return False, None
 
-        part = {k: v.loc[sns] for k, v in extract_results(n).items()
+        part = {k: v.loc[keep] for k, v in extract_results(n).items()
                 if v is not None and getattr(v, "shape", (0, 0))[1] > 0}
         for k in part:
             if k not in keys:
@@ -1259,6 +1286,14 @@ def main() -> None:
                              "(felet i run91–93).")
     parser.add_argument("--rolling-weeks", type=int, default=4, metavar="N",
                         help="Fönsterlängd i veckor för --rolling-horizon (default 4).")
+    parser.add_argument("--rolling-lookahead-weeks", type=int, default=0, metavar="N",
+                        help="ÄKTA RECEDING HORIZON (väg E): lös varje fönster med N "
+                             "veckors extra look-ahead men behåll bara den första delen. "
+                             "Default 0 = icke-överlappande fönster (nuvarande beteende), "
+                             "där varje fönster ser noll framåt och terminalvärdet ensamt "
+                             "måste bära säsongssignalen. Med look-ahead gör framsynen det "
+                             "mesta av jobbet och känsligheten för terminalkalibreringen "
+                             "bör falla — det är själva testet.")
     parser.add_argument("--terminal-lambda-profile", default=None, metavar="M1,M2,...",
                         help="Styckvis linjär KONKAV terminalvärdeskurva: multiplikatorer på "
                              "bas-λ per lika stort SOC-segment, TOMT→FULLT. Måste vara "
@@ -1558,6 +1593,11 @@ def main() -> None:
     if args.vre_curtailment_cost is None:
         frozen = bool(args.dispatch) or bool(args.no_expansion)
         args.vre_curtailment_cost = DEFAULT_VRE_CURTAILMENT_COST if frozen else 0.0
+
+    if args.rolling_lookahead_weeks and not args.rolling_horizon:
+        parser.error("--rolling-lookahead-weeks kräver --rolling-horizon.")
+    if args.rolling_lookahead_weeks < 0:
+        parser.error("--rolling-lookahead-weeks måste vara ≥ 0.")
 
     if args.rolling_horizon:
         # Varje fönster är en EGEN LP → investeringsbesluten skulle fattas oberoende
@@ -1913,6 +1953,7 @@ def main() -> None:
     if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
     if args.vre_curtailment_cost:       flags.append(f"vrecurt-{args.vre_curtailment_cost:g}")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
+    if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_lambda:            flags.append(f"termlambda-{args.terminal_lambda.replace(':','_')}")
     if args.terminal_lambda_scale:      flags.append(f"termscale-{args.terminal_lambda_scale.replace(':','_')}")
     if args.rolling_horizon:
