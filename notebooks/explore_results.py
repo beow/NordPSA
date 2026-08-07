@@ -44,8 +44,8 @@ sys.path.insert(0, str(ROOT))
 import pypsa  # noqa: E402
 
 # ---------------------------------------------------------------------------
-LABEL = "run240_baseline_dispatch_1h_3y"    # <-- byt körning här
-LABEL2 = "run240_baseline_2h"                 # <-- jämförelsekörning för cell 9 (None = hoppa över)
+LABEL = "run254_noproxy_2h"    # <-- byt körning här
+LABEL2 = None #"run240_baseline_2h"                 # <-- jämförelsekörning för cell 9 (None = hoppa över)
 # ---------------------------------------------------------------------------
 
 RES = ROOT / "results" / LABEL

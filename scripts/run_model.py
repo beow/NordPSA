@@ -792,6 +792,10 @@ def apply_dispatch_replay(parser, args):
     base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
     base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
+    base.vre_curtailment_cost = args.vre_curtailment_cost   # hör till OMDISPATCHEN, inte källan:
+                                              # källans argv har den aldrig (expansion förbjuder
+                                              # den), så utan denna rad blir flaggan tyst
+                                              # verkningslös — jfr --voll/--low-hydro-fällan
     base.voll       = args.voll               # VOLL-slack appliceras på dispatch-replayen
     base.no_voll    = args.no_voll            # ...och dess av-knapp måste följa med, annars
                                               # läses den ur KÄLLANS argv och --dispatch X
@@ -859,6 +863,67 @@ def freeze_capacities_from(n, label):
         if miss:
             msg += f"  ⚠️ {len(miss)} saknas i {label} ({miss[:3]})"
         print(msg)
+
+
+VRE_CARRIERS = ("wind_onshore", "wind_offshore", "solar")
+
+
+def apply_vre_curtailment_cost(n, cost: float) -> None:
+    """--vre-curtailment-cost C: låt VRE bjuda vom − C i stället för vom.
+
+    En kostnad C per MWh AVKORTAD energi ger objektivtermen
+
+        mc·p + C·(A − p)  =  C·A + (mc − C)·p
+
+    där A = p_max_pu·p_nom är den tillgängliga energin. Med FAST kapacitet är C·A
+    en konstant som faller ur optimeringen — en avkortningskostnad är därför exakt
+    ekvivalent med ett bud på mc − C, och implementeras enklast så. Det är den
+    mekanism som ger negativa priser på riktiga marknader: subventionen (CfD,
+    elcertifikat) sätter golvet på −C, eftersom producenten hellre betalar upp till
+    C för att bli av med kraften än tappar stödet.
+
+    Utan detta kan modellens zonpriser aldrig gå under billigaste budet (VRE:s VOM
+    0,1 €/MWh): avkortning är gratis, så avdisposition kostar aldrig något och en
+    extra MWh last kan aldrig sänka systemkostnaden.
+
+    ⚠️ Kräver FRYSTA kapaciteter. Med extendable VRE är A ∝ p_nom_opt, C·A är då
+    INTE konstant utan en produktionssubvention som växer med byggd kapacitet —
+    optimeraren bygger till p_nom_max för att skörda den. Subventionen är en
+    transferering, inte en resurskostnad, och hör hemma i prisbildningen men inte i
+    investeringskalkylen. Därav tvåpass: expansion med sanna kostnader → --dispatch
+    med negativa bud.
+    """
+    if not cost:
+        return
+    g = n.generators
+    targets = [x for x in g.index if g.at[x, "carrier"] in VRE_CARRIERS]
+    if not targets:
+        print(f"  → --vre-curtailment-cost {cost:g}: inga VRE-generatorer — ingen ändring")
+        return
+
+    ext = [x for x in targets if bool(g.at[x, "p_nom_extendable"])]
+    if ext:
+        raise SystemExit(
+            f"\n--vre-curtailment-cost {cost:g} kräver frysta kapaciteter, men "
+            f"{len(ext)} VRE-generatorer är fortfarande extendable\n"
+            f"  (t.ex. {', '.join(ext[:3])}{' …' if len(ext) > 3 else ''}).\n\n"
+            "Med extendable VRE blir avkortningskostnaden en produktionssubvention som\n"
+            "växer med byggd kapacitet — modellen bygger till p_nom_max för att skörda\n"
+            "den och investeringssvaret blir meningslöst. Kör i stället tvåpass:\n"
+            "  1) expansion med sanna kostnader  → results/<label>/network.nc\n"
+            "  2) python scripts/run_model.py --dispatch <label> "
+            f"--vre-curtailment-cost {cost:g} --output <nytt>\n"
+        )
+
+    print(f"  → --vre-curtailment-cost {cost:g} EUR/MWh: VRE bjuder vom − {cost:g}")
+    tv = n.generators_t.marginal_cost
+    for x in targets:
+        g.at[x, "marginal_cost"] = float(g.at[x, "marginal_cost"]) - cost
+        if x in tv.columns:                      # tidsberoende mc vinner över den statiska
+            tv[x] = tv[x] - cost
+    lo = g.loc[targets, "marginal_cost"]
+    print(f"     {len(targets)} generatorer, bud {lo.min():.2f} … {lo.max():.2f} EUR/MWh "
+          f"(prisgolv i överskottstimmar ≈ {lo.min():.2f})")
 
 
 def apply_low_hydro(n, factor, year=2024):
@@ -982,6 +1047,14 @@ def main() -> None:
                         help="Hydro-spillkostnad (EUR/MWh). DEFAULT 50 (kanonisk baseline) — "
                              "bryter LP-degeneracy i expansionskörningar. Sätt 0.1 för det "
                              "gamla beteendet (tillåter fritt spill vid full reservoar).")
+    parser.add_argument("--vre-curtailment-cost", type=float, default=0.0, metavar="EUR",
+                        help="Kostnad (EUR/MWh) för AVKORTAD vind/sol — ekvivalent med att VRE "
+                             "bjuder vom − EUR, dvs subventionerade negativa bud (CfD/elcert). "
+                             "Enda vägen till NEGATIVA zonpriser: utan detta är avkortning gratis "
+                             "och priset kan aldrig gå under billigaste budet (VOM 0,1). "
+                             "KRÄVER frysta kapaciteter (--dispatch/--no-expansion + freeze) — "
+                             "med extendable VRE blir det en produktionssubvention som bygger till "
+                             "p_nom_max. DEFAULT 0 (av).")
     parser.add_argument("--add-battery", action="append", default=[], metavar="ZON:MW:HOURS",
                         help="Lägg till batteri (StorageUnit) i en zon, t.ex. 'SE-S:5000:4'. BÄR "
                              "annualiserad svk_2040-kapex (inkl. IDC) även fast i dispatch (konstant "
@@ -1582,6 +1655,7 @@ def main() -> None:
     flags = []
     if args.dispatch:                   flags.append(f"dispatch-{args.dispatch}")
     if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
+    if args.vre_curtailment_cost:       flags.append(f"vrecurt-{args.vre_curtailment_cost:g}")
     if args.extra_load:                 flags.append(f"extra-load-{args.extra_load:.0f}mw")
     for tok in args.extra_load_zone:    flags.append("xload-" + tok.replace(":", "-") + "mw")
     if args.cost_scenario:              flags.append(f"cost-{args.cost_scenario}")
@@ -1986,6 +2060,9 @@ def main() -> None:
 
     if args.dispatch:                          # frys alla kapaciteter till källkörningens p_nom_opt
         freeze_capacities_from(n, args.dispatch)
+
+    # EFTER frysningen: kontrollen av extendable måste se den frysta världen.
+    apply_vre_curtailment_cost(n, args.vre_curtailment_cost)
 
     if args.dry_run:
         nuc = n.generators[n.generators.carrier == "nuclear"]
