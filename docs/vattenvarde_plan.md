@@ -127,18 +127,38 @@ och alla tre delarna är nödvändiga.
 | **B** rullande + kalibrerad kurva (grenen) | ja | nej | nej | klar |
 | **C** rullande + endogen α ur μ_ntc | ja | ja | nej | medel, fixpunkt |
 | **D** SDDP | ja | ja | oklart | stor |
-| **E** överlappande fönster | ja | delvis | nej | liten, OTESTAD |
+| ~~**E** överlappande fönster~~ | ja | **nej** | nej | TESTAD, otillräcklig |
 | ~~**F** tvåpass: cyklisk expansion → frys → rullande dispatch~~ | ~~för priser~~ | ~~ärver A~~ | **UTSLAGEN** | — |
 
 ⛔ **F är utslagen sedan run273–276** (se §6). Den vilar på att expansionen skulle vara
 robust mot vattenvärdet — det är den inte. F skulle cementera den expansion som det
 felaktiga cykliska vattenvärdet gav och bara laga priserna ovanpå.
 
-**E är otestad och billigast.** Dagens fönster är icke-överlappande, så varje fönster ser
-**noll** framåt och terminalvärdet måste ensamt bära hela säsongssignalen. Äkta receding
-horizon löser ett längre fönster och behåller bara första delen; då gör look-ahead det
-mesta av jobbet och terminalvärdet blir en detalj. Om känsligheten för terminalkalibreringen
-faller kraftigt krymper cirkularitetsproblemet i samma takt. **Detta bör testas först.**
+⛔ **E är utslagen sedan run277–282** (2026-08-07). Implementerad som
+`--rolling-lookahead-weeks N` på grenen (commit `1a504b4`): fönstret löses med N veckors
+look-ahead men bara första delen behålls, SOC bärs över från behåll-delens slut. Hypotesen
+var att look-ahead skulle göra terminalkurvan till en detalj och därmed krympa
+cirkulariteten. Mätt med samma λ-perturbation i båda lägena:
+
+| mått | icke-överlappande | look-ahead 8v | KVOT |
+|---|---|---|---|
+| SOC RMS (TWh) | 5,39 | 5,49 | 1,02 |
+| SOC max\|Δ\| (TWh) | 8,13 | 8,90 | 1,10 |
+| pris MAD (EUR/MWh) | 7,41 | 6,23 | 0,84 |
+| pris Δmedel | 2,56 | 3,00 | 1,17 |
+| WV Δmedel | 4,16 | 3,85 | 0,92 |
+| hydro Δprod (TWh/år) | 2,73 | 2,97 | 1,09 |
+
+**Median-KVOT 1,05 — känsligheten för λ är oförändrad.** Look-ahead köper *robusthet*
+(λ×0,5 gör den icke-överlappande varianten INFEASIBLE i run278, fönster 17, NO-N tömd till
+−0 %, medan run280 klarar sig) men inte *oberoende*. Terminalkalibreringen är kvar som
+bindande faktor, och den kalibreras mot observerade priser.
+
+E löser inte heller grundproblemet bättre i egen rätt: unika WV-värden 40 → 38, WV-std
+FALLER 37,5 → 27,4, och norr–söder-gapet går 6,46 → 4,44 mot verkliga 20,4 (åt fel håll,
+vilket bekräftar att det gapet är NTC-drivet).
+
+Jämförelse: `temp/recede_sensitivity.py`.
 
 **C** är den principiellt rena varianten av det vi redan byggt: α = 1 − förväntad
 trängselränta / DE-LU, hämtad ur modellens eget μ_ntc. Det är ett fixpunktsproblem (α → pris
@@ -146,7 +166,18 @@ trängselränta / DE-LU, hämtad ur modellens eget μ_ntc. Det är ett fixpunkts
 
 **D (SDDP)** är läroboksvaret och skulle härleda allt vi handtrimmat — konkav styckvis
 linjär V(SOC), tidsvarierande, ur tillrinningsscenarier. Ligger på hyllan sedan 2026-06-13.
-Värt att bygga först om E och C inte räcker.
+
+⚠️ **PyPSA:s stokastiska läge är INTE en väg till D.** PyPSA v1.0+ har `set_scenarios`
+(tvåstegs: investering delad, dispatch fri per scenario, + CVaR). Testat mot vårt nät
+2026-08-07, fungerar — men framsynen bryts inte *inom* ett scenario, så vattenvärdet förblir
+platt i alla scenarier. Det ger robusthet i utbyggnaden, inte tidsvarierande vattenvärde.
+Kostar dessutom 8,4× för tre scenarier. Kod på grenen `stochastic-scenarios-smoketest`
+(`scripts/test_stochastic_scenarios.py`). ⚠️ Duala priser är där sannolikhetsviktade och
+måste divideras med scenariovikten.
+
+**Efter att E och F fallit står valet mellan C och D.** C är billigare och principiellt ren
+men bär inte expansionen; D är stort och dess expansionskoppling är fortfarande oklar. Innan
+någon av dem påbörjas bör NTC-frågan nedan avgöras — den dominerar prisfelet oavsett.
 
 ---
 
@@ -212,7 +243,8 @@ vattenvärde. Kvar av vägvalen är E (otestad, billigast), C och D.
 Runs: run254 (utan proxy, 2h) · run255/256 (dagens värld, med/utan proxy) ·
 run268 (linjärt λ) · run269 (per-zons konkav) · run270 (faktisk start-SOC) ·
 run271 (konstant λ, infeasible) · run272 (bred kurva + λ-skala) ·
-run273–276 (WV-robusthet, §6; jämförelse med `temp/wv_robust_cmp.py`).
+run273–276 (WV-robusthet, §6; jämförelse med `temp/wv_robust_cmp.py`) ·
+run277–282 (väg E, receding horizon; jämförelse med `temp/recede_sensitivity.py`).
 
 Data: `docs/NordicHydroEC.xlsx` (Energy Charts, veckovis magasinenergi TWh per land;
 gitignorerad som alla .xlsx). Kapacitetskontroll: SE når 94,5 %, NO 95,3 %, FI 82,0 % av
