@@ -1177,6 +1177,12 @@ def main() -> None:
                              "sedan run57 STAPLAD ovanpå det äkta endogena vattenvärdet "
                              "och står för HELA tidsvariationen i hydrons bud. Denna "
                              "flagga isolerar dess effekt. Default: proxyn PÅ (oförändrat).")
+    parser.add_argument("--hydro-flat-wv", type=float, default=None, metavar="EUR",
+                        help="Sätt reservoarvattenkraftens marginal_cost till ett KONSTANT "
+                             "vattenvärde (EUR/MWh) och koppla bort både proxyn och "
+                             "VOM-golvet. Enbart för robusthetstest: kör samma expansion "
+                             "vid kraftigt olika vattenvärdesnivåer och jämför p_nom_opt. "
+                             "Ett konstant WV är INTE en modellförbättring.")
     parser.add_argument("--hydro-min-hourly", type=float, default=None, metavar="FRAC",
                         help="Override på min timproduktion (andel av reservoar-p_nom). "
                              "Implicerar --hydro-restrictions. 0 = av.")
@@ -1704,6 +1710,7 @@ def main() -> None:
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll is not None:           flags.append(f"voll{int(args.voll)}")
     if args.no_hydro_price_proxy:       flags.append("no-hydro-price-proxy")
+    if args.hydro_flat_wv is not None:  flags.append(f"flatwv-{args.hydro_flat_wv:g}")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
     if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
@@ -1904,6 +1911,7 @@ def main() -> None:
                       onshore_adds=onshore_adds or None,
                       offshore_adds=offshore_adds or None,
                       hydro_price_proxy=not args.no_hydro_price_proxy,
+                      hydro_flat_wv=args.hydro_flat_wv,
                       add_cost_scenario=args.add_cost_scenario)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt
