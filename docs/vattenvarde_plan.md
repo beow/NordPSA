@@ -128,7 +128,11 @@ och alla tre delarna är nödvändiga.
 | **C** rullande + endogen α ur μ_ntc | ja | ja | nej | medel, fixpunkt |
 | **D** SDDP | ja | ja | oklart | stor |
 | **E** överlappande fönster | ja | delvis | nej | liten, OTESTAD |
-| **F** tvåpass: cyklisk expansion → frys → rullande dispatch | för priser | ärver A | delvis | liten |
+| ~~**F** tvåpass: cyklisk expansion → frys → rullande dispatch~~ | ~~för priser~~ | ~~ärver A~~ | **UTSLAGEN** | — |
+
+⛔ **F är utslagen sedan run273–276** (se §6). Den vilar på att expansionen skulle vara
+robust mot vattenvärdet — det är den inte. F skulle cementera den expansion som det
+felaktiga cykliska vattenvärdet gav och bara laga priserna ovanpå.
 
 **E är otestad och billigast.** Dagens fönster är icke-överlappande, så varje fönster ser
 **noll** framåt och terminalvärdet måste ensamt bära hela säsongssignalen. Äkta receding
@@ -146,21 +150,57 @@ Värt att bygga först om E och C inte räcker.
 
 ---
 
-## 6. Den fråga som bör ställas före allt annat
+## 6. Den fråga som bör ställas före allt annat — BESVARAD 2026-08-07
 
 **Beror expansionsbesluten faktiskt på att vattenvärdet är rätt?**
 
-Argument för att de inte gör det: under cyklisk SOC är hydroenergin tillrinningsbunden
-oavsett vattenvärde — årsproduktionen är given. Kapacitetsvalen styrs av residuallastens
-form och bristtimmarna, inte av hur vattnet prissätts internt. run254 (utan proxy) flyttade
-sol +5,35 GW och gas −0,44 GW mot baselinen, alltså märkbart men inte omvälvande.
+**Ja — på vattenvärdets TIDSVARIATION, inte på dess NIVÅ.**
 
-Om expansionen är robust mot vattenvärdet, då är hela detta problem ett **prisbildnings-
-problem, inte ett investeringsproblem** — och då är väg F (cyklisk expansion + rullande
-dispatch för priserna) tillräcklig, vilket sparar SDDP-bygget helt.
+Testat med run273–276: samma expansion (2024 @ 3h, full baselinekonf), bara hydrons
+`marginal_cost` varierad. Ny flagga `--hydro-flat-wv EUR` (konstant WV, kopplar bort både
+proxyn och VOM-golvet).
 
-Det går att testa direkt: kör samma expansion med kraftigt olika vattenvärdeslägen och
-jämför `p_nom_opt`. Det är en billig körning och den kan omprioritera hela spåret.
+| run | regim | byggt totalt | sol |
+|---|---|---|---|
+| run273 | proxy (historiskt zonpris, tidsvarierande) | 134,78 GW | 53,30 |
+| run274 | platt VOM 0,6 | 150,92 | 69,09 |
+| run275 | platt 30 | 150,92 | 69,09 |
+| run276 | platt 60 | 150,92 | 69,09 |
+
+### Delresultat 1: en platt vattenvärdesnivå är ekonomiskt INERT
+
+run274/275/276 är identiska — `p_nom_opt` skiljer 1e-9 MW, prisstandardavvikelserna är
+lika på decimalen. Med cyklisk SOC är årsproduktionen låst till tillrinningen, så ett
+konstant `mc` integrerar till en **konstant** i objektivet (samma algebra som VRE-
+avkortningskostnaden i CLAUDE.md: `mc·p` med fix `Σp`). Verifierat: objektivdiffen
+12 773 → 18 572 → 24 488 M€ är precis `Δmc × 196,68 TWh` (5 798 mot beräknade 5 782;
+11 715 mot 11 683).
+
+Detta utesluter en hel klass av tänkbara "fixar" — att bara sätta en bättre *nivå* på
+vattenvärdet kan aldrig ändra någonting.
+
+### Delresultat 2: tidsvariationen flyttar kapacitet, inte medelpriser
+
+run273 (proxy) mot run274 (platt): byggd kapacitet **+16,14 GW = +12 %**, nästan allt sol
+(NO-S 0,34 → 8,55 GW, en faktor 25; SE-S 15,25 → 21,61; NO-N 0,02 → 1,57), gas −0,41 (FI).
+Medelpriserna rör sig samtidigt **1,83 €/MWh** i snitt (spann 0,15–3,12 per zon).
+
+Prisspridningen visar varför båda regimerna är fel: utan proxyn kollapsar norra zonernas
+standardavvikelse, NO-N 22,0 → 6,2 och NO-S 29,8 → 7,2.
+
+⚠️ **Skala inte upp 12 % rakt av.** Samma jämförelse på 3 år @ 2h (run260 vs run254) ger
+**+3,5 %** (158,2 → 163,8 GW, sol +5,35). 2024 är ett vårår (+12 % tillrinning) och cyklisk
+SOC på ETT år tvingar prod = tillrinning, vilket förstärker känsligheten. Sant värde ligger
+mellan 3,5 och 12 %; 3-årstalet är det trovärdigare. Riktningen är densamma i båda.
+
+⚠️ Jämförelsen avser medelpriser och standardavvikelser, inte prisernas TIDSFORM. Att
+medelvärdet ligger stilla utesluter inte att formen rör sig.
+
+### Slutsats
+
+Hypotesen att detta *enbart* är ett prisbildningsproblem faller. Kapaciteten rör sig mer än
+medelpriserna gör, så **väg F räcker inte** — den skulle cementera en expansion byggd på fel
+vattenvärde. Kvar av vägvalen är E (otestad, billigast), C och D.
 
 ⚠️ Innan mer arbete läggs på V(SOC) bör också NTC-frågan avgöras — prisgapet norr–söder är
 4,8 mot verkliga 20,4, och den differensen dominerar prisfelet oavsett vattenvärde.
@@ -171,7 +211,8 @@ jämför `p_nom_opt`. Det är en billig körning och den kan omprioritera hela s
 
 Runs: run254 (utan proxy, 2h) · run255/256 (dagens värld, med/utan proxy) ·
 run268 (linjärt λ) · run269 (per-zons konkav) · run270 (faktisk start-SOC) ·
-run271 (konstant λ, infeasible) · run272 (bred kurva + λ-skala).
+run271 (konstant λ, infeasible) · run272 (bred kurva + λ-skala) ·
+run273–276 (WV-robusthet, §6; jämförelse med `temp/wv_robust_cmp.py`).
 
 Data: `docs/NordicHydroEC.xlsx` (Energy Charts, veckovis magasinenergi TWh per land;
 gitignorerad som alla .xlsx). Kapacitetskontroll: SE når 94,5 %, NO 95,3 %, FI 82,0 % av
