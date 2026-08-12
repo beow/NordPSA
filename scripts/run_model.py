@@ -867,6 +867,22 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         byzone  = tvcfg.get("profiles") or {}
         profile = {u: list(byzone.get(u.split()[0], dflt)) for u in units}
 
+    # --terminal-curve: analytisk λ_k(vecka, zon) ersätter BÅDE λ och profilen och
+    # räknas om PER FÖNSTER, eftersom varje fönster slutar i en annan vecka. Utan den
+    # är profilen årskonstant och hela säsongssignalen måste bäras av λ ensamt.
+    curve = None
+    if args.terminal_curve is not None:
+        from nordpsa.wv import terminal_curve as tc
+        cparams, canchor = tc.load_params(args.terminal_curve or None)
+        segments = len(profile[units[0]]) if isinstance(profile, dict) else len(profile)
+        curve = (tc, cparams, canchor, segments)
+        print(f"  → TERMINALKURVA λ_k(vecka, zon), {segments} segment. λ_bas: "
+              + ", ".join(f"{z} {v:.1f}" for z, v in sorted(canchor.items())))
+        for z in sorted(cparams):
+            q = cparams[z]
+            print(f"       {z:6s} a_amp={q.a_amp:.2f} a_peak=v{q.a_peak:.0f} "
+                  f"b_mean={q.b_mean:.2f} b_amp={q.b_amp:.2f} b_peak=v{q.b_peak:.0f}")
+
     steps_per_week  = max(1, (7 * 24) // res)
     window_steps    = args.rolling_weeks * steps_per_week
     lookahead_steps = args.rolling_lookahead_weeks * steps_per_week
@@ -899,8 +915,16 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         for u in units:
             n.storage_units.at[u, "state_of_charge_initial"] = soc_carry[u]
 
-        lam = terminal_lambdas(args, cfg, market_prices, units, sns[-1], window_steps)
-        callbacks = [hydro_terminal_value(lam, cap, profile)] + list(extra_callbacks or [])
+        if curve is not None:
+            tc, cparams, canchor, segments = curve
+            wk   = tc.week_of(sns[-1])
+            lam  = tc.lambdas_for_week(wk, units, canchor, cparams)
+            prof = tc.profiles_for_week(wk, units, cparams, segments)
+        else:
+            wk   = None
+            lam  = terminal_lambdas(args, cfg, market_prices, units, sns[-1], window_steps)
+            prof = profile
+        callbacks = [hydro_terminal_value(lam, cap, prof)] + list(extra_callbacks or [])
 
         def extra_func(nn, snapshots, _cbs=callbacks):
             for cb in _cbs:
@@ -924,7 +948,7 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
             slut_txt = ""
         tail = f"+{len(sns)-len(keep)}" if len(sns) > len(keep) else ""
         print(f"  fönster {i:3d}/{len(windows)} {keep[0]:%Y-%m-%d}–{keep[-1]:%Y-%m-%d} "
-              f"({len(keep)}{tail} steg): {status}/{condition}  λ={list(lam.values())[0]:.1f}  "
+              f"({len(keep)}{tail} steg): {status}/{condition}  "f"{('v%d ' % wk) if wk else ''}λ={list(lam.values())[0]:.1f}  "
               f"{start_txt} {slut_txt}")
         if status != "ok":
             print(f"  ✖ fönster {i} misslyckades ({status}/{condition}) — avbryter.")
@@ -1340,6 +1364,19 @@ def main() -> None:
                              "2× nära tomt, 0,2× i toppbandet). '1.0' ger det gamla LINJÄRA "
                              "beteendet, som ger bang-bang: magasin i taket och priskollaps "
                              "till VOM (run268). ⚠️ Formen är ett ANTAGANDE, ej kalibrerad.")
+    parser.add_argument("--terminal-curve", nargs="?", const="", default=None, metavar="FIL",
+                        help="Analytisk terminalvärdeskurva λ_k(vecka, zon) = λ_bas · A(w) · "
+                             "P_k(B(w)) ur FIL (default config/terminal_curve.yaml). Ersätter "
+                             "BÅDE --terminal-lambda* och --terminal-lambda-profile och räknas "
+                             "om per fönster, så profilen blir SÄSONGSBEROENDE i stället för "
+                             "årskonstant. Efterföljare till --terminal-seasonal: A(w) är "
+                             "samma idé som S(m) men parametrisk, B(w) ger dessutom "
+                             "fyllnadsberoendet en säsong, och λ_bas hämtas ur expansionens "
+                             "EFFEKTIVA hydrobud (proxy + μ/η) i stället för zonens "
+                             "observerade pris — S(m):s kvarvarande halva cirkularitet. "
+                             "Kalibreras med scripts/calibrate_terminal_curve.py mot eSetts "
+                             "fysiska hydrosäsong och EC:s magasinband, båda MÄTDATA. "
+                             "⚠️ Kräver --rolling-horizon och --no-hydro-price-proxy.")
     parser.add_argument("--terminal-lambda-scale", default=None, metavar="ZON:α,...",
                         help="λ_zon(t) = α_zon × framåtblickande DE-LU. Behåller kontinent"
                              "prisets TIDSFORM men skalar NIVÅN per zon — en inlåst zon kan "
@@ -1635,6 +1672,21 @@ def main() -> None:
         parser.error("--rolling-lookahead-weeks kräver --rolling-horizon.")
     if args.rolling_lookahead_weeks < 0:
         parser.error("--rolling-lookahead-weeks måste vara ≥ 0.")
+
+    if args.terminal_curve is not None:
+        # Utan rullande horisont finns inget fönsterslut att sätta kurvan i: en enda
+        # cyklisk LP har bara ETT slut, och där är SOC dessutom bunden av cykliciteten.
+        if not args.rolling_horizon:
+            parser.error("--terminal-curve kräver --rolling-horizon: kurvan verkar i "
+                         "FÖNSTERSLUT, och en enda cyklisk LP har inget fritt sådant.")
+        if not args.no_hydro_price_proxy:
+            parser.error("--terminal-curve kräver --no-hydro-price-proxy: med proxyn på är "
+                         "hydrons marginal_cost det historiska zonpriset, marginalen krymper "
+                         "till nettovattenvärdet, och λ på bruttoprisnivå övervärderar lagring.")
+        if args.terminal_seasonal:
+            parser.error("--terminal-curve och --terminal-seasonal sätter BÅDA λ:s "
+                         "säsongsform (A(w) respektive S(m)) och skulle multipliceras på "
+                         "varandra. Välj en — kurvan är efterföljaren.")
 
     if args.rolling_horizon:
         # Varje fönster är en EGEN LP → investeringsbesluten skulle fattas oberoende
@@ -1992,9 +2044,10 @@ def main() -> None:
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
+    if args.terminal_curve is not None: flags.append("termkurva")
     if args.terminal_lambda:            flags.append(f"termlambda-{args.terminal_lambda.replace(':','_')}")
     if args.terminal_lambda_scale:      flags.append(f"termscale-{args.terminal_lambda_scale.replace(':','_')}")
-    if args.rolling_horizon:
+    if args.rolling_horizon and args.terminal_curve is None:
         _p = (args.terminal_lambda_profile.split(",") if args.terminal_lambda_profile
               else [f"{p:g}" for p in DEFAULT_TERMINAL_PROFILE])
         flags.append("termprofil-" + "_".join(x.strip() for x in _p))

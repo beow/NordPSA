@@ -1,0 +1,222 @@
+"""Icke-cirkulära kalibreringsmål för terminalvärdeskurvan.
+
+Två observabler, båda MÄTDATA — ingen av dem är modellutdata som matas tillbaka.
+Det är hela skälet till att de duger: [[project_hydro_seasonal_bid]] kalibrerade S(w)
+mot modellens eget pris och mätte därmed sitt eget eko.
+
+  1. eSetts FYSISKA hydrosäsong per land, vinter/sommar-kvoten
+     (jan+feb+dec)/(jun+jul+aug) på RESERVOARkraften. SE 1,38 · NO 1,30 · FI 1,13.
+     ⚠️ Strömkraften ska skiljas ut: den är must-run och följer tillrinningen, så
+     den späder ut måttet med en form inget modellval påverkar.
+
+  2. Energy Charts VECKOVISA magasinnivåer per land, 2014-2026
+     (docs/NordicHydroEC.xlsx). Ger ett klimatologiskt BAND, inte en årsbana.
+
+## Varför bandet och inte 2023-25 års bana
+
+Kurvan ska vara GENERISK. Passas den mot 2023-25 blir den en replay av just de åren
+och vi har byggt `--soc-guide` igen (run310: lyfte nivån, inte dispatchen). Bandet
+över tolv år är hydrologisk klimatologi och bär ingen enskild väderårs-information.
+
+⚠️ KONSEKVENS SOM MÅSTE REDOVISAS: en genuint generisk kurva VET INTE att våren 2024
+blev våt. Det gjorde inte operatörerna heller — det är den osäkerhet vi försöker
+återinföra. Därför är RMSE mot faktisk dispatch FEL måttstock för det här spåret.
+Måtten här är fördelningsmått: hamnar banan i bandet, och stämmer säsongsformen.
+
+⚠️ Bandet är beskrivande, inte normativt. Det säger vad magasinen historiskt GJORDE
+i dagens system, inte vad de borde göra i 2040 års. En kurva som pressar modellen
+till exakt historiskt beteende är påtvingande på samma sätt som soc-guide var.
+Använd bandet som räcke (hamnar vi utanför?), inte som mål (träffa medianen).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict
+
+import pandas as pd
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+
+#: Vinter/sommar-kvot på reservoarkraften, eSett 2023-25. Mätt, inte antaget.
+ESETT_VS: Dict[str, float] = {"SE": 1.38, "NO": 1.30, "FI": 1.13}
+
+LAND: Dict[str, list] = {"SE": ["SE-N", "SE-S"], "NO": ["NO-N", "NO-S"], "FI": ["FI"]}
+WINTER, SUMMER = [1, 2, 12], [6, 7, 8]
+
+#: Kolumnläge i EC-arket (blad "1"): datum, Finland, …, Norway, …, Sweden, …, Sum
+_EC_COLS = {"FI": 1, "NO": 4, "SE": 7}
+
+
+# ── Magasinvolymer ur configen ──────────────────────────────────────────────────
+
+def reservoir_twh(cfg: dict | None = None) -> Dict[str, float]:
+    """Modellens magasinvolym per LAND, TWh. p_nom × max_hours ur zones.yaml.
+
+    Normaliseringen måste gå mot modellens egen volym, annars jämförs
+    fyllnadsgrader mot olika nämnare. EC:s historiska maxnivåer ligger på 94 % av
+    dessa volymer, vilket är den verifiering som gjorts.
+    """
+    cfg = cfg or yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
+    out = {}
+    for land, zones in LAND.items():
+        twh = 0.0
+        for z in zones:
+            zc = cfg["zones"].get(z, {})
+            twh += zc.get("hydro_p_nom_mw", 0) * zc.get("hydro_max_hours", 0) / 1e6
+        out[land] = twh
+    return out
+
+
+# ── Observabel 2: EC-bandet ─────────────────────────────────────────────────────
+
+#: ⚠️ Ligger UTANFÖR git — `.gitignore` rad 48 ignorerar `*.xlsx`. En färsk klon
+#: (och varje git-worktree) saknar den och måste symlänka eller kopiera dit filen.
+EC_WORKBOOK = "docs/NordicHydroEC.xlsx"
+
+
+def ec_levels() -> pd.DataFrame:
+    """Veckovisa magasinnivåer i TWh per land, som de står i arket."""
+    p = ROOT / EC_WORKBOOK
+    if not p.exists():
+        raise SystemExit(
+            f"✖ {EC_WORKBOOK} saknas i {ROOT}.\n"
+            "  Filen är gitignorerad (*.xlsx) och följer alltså inte med grenar eller\n"
+            "  worktrees. Symlänka den från huvudrepot, som data/ redan gör:\n"
+            f"      ln -s /home/beos/repos/NordPSA/{EC_WORKBOOK} {ROOT}/{EC_WORKBOOK}")
+    raw = pd.read_excel(p, sheet_name="1")
+    dates = pd.to_datetime(raw.iloc[:, 0], errors="coerce")
+    out = pd.DataFrame({c: pd.to_numeric(raw.iloc[:, i], errors="coerce")
+                        for c, i in _EC_COLS.items()})
+    out.index = dates
+    return out[out.index.notna()].dropna(how="all")
+
+
+def ec_band(quantiles=(0.10, 0.50, 0.90), cfg: dict | None = None) -> pd.DataFrame:
+    """Fyllnadsgrad per ISO-vecka och land, kvantiler över alla år i arket.
+
+    Index = vecka 1..52, kolumner = MultiIndex (land, kvantil).
+    """
+    lv = ec_levels()
+    vol = reservoir_twh(cfg)
+    frac = pd.DataFrame({c: lv[c] / vol[c] for c in lv.columns if vol.get(c)})
+    frac["week"] = frac.index.isocalendar().week.clip(upper=52).astype(int)
+    g = frac.groupby("week")
+    cols, data = [], {}
+    for c in [c for c in frac.columns if c != "week"]:
+        for q in quantiles:
+            cols.append((c, q))
+            data[(c, q)] = g[c].quantile(q)
+    out = pd.DataFrame(data)
+    out.columns = pd.MultiIndex.from_tuples(cols, names=["land", "kvantil"])
+    return out.reindex(range(1, 53))
+
+
+# ── Modellsidan: läses ur CSV, inte network.nc ──────────────────────────────────
+# network.nc för en 1h/3-årskörning drar 1-2 GB in i minnet. CSV:erna räcker för
+# båda måtten och kostar några MB, vilket gör kalibreringsloopen körbar parallellt
+# med annat.
+
+def _read(label: str, name: str) -> pd.DataFrame:
+    df = pd.read_csv(ROOT / "results" / label / name, index_col=0, parse_dates=True)
+    return df
+
+
+def run_weekly_soc(label: str, cfg: dict | None = None) -> pd.DataFrame:
+    """Modellens fyllnadsgrad per land, veckomedel. Index = ISO-vecka 1..52."""
+    cfg = cfg or yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
+    soc = _read(label, "hydro_soc.csv")
+    vol = reservoir_twh(cfg)
+    out = {}
+    for land, zones in LAND.items():
+        cols = [f"{z} hydro" for z in zones if f"{z} hydro" in soc.columns]
+        if not cols or not vol.get(land):
+            continue
+        # SOC i CSV:n är MWh; landets fyllnadsgrad = summan / landets volym
+        frac = soc[cols].sum(axis=1) / (vol[land] * 1e6)
+        out[land] = frac.groupby(frac.index.isocalendar().week.clip(upper=52)).mean()
+    return pd.DataFrame(out).reindex(range(1, 53))
+
+
+def run_vs(label: str) -> Dict[str, float]:
+    """Vinter/sommar-kvot på RESERVOARkraften per land, ur dispatch_hydro.csv.
+
+    Strömkraften ligger inte i den filen (den är en Generator, inte StorageUnit),
+    så uppdelningen är gjord redan av datastrukturen — samma mått som
+    temp/hydro_by_country.py rapporterar under 'res'.
+    """
+    d = _read(label, "dispatch_hydro.csv")
+    out = {}
+    for land, zones in LAND.items():
+        cols = [f"{z} hydro" for z in zones if f"{z} hydro" in d.columns]
+        if not cols:
+            continue
+        s = d[cols].sum(axis=1)
+        m = s.groupby(s.index.month).sum()
+        w, su = m.reindex(WINTER).sum(), m.reindex(SUMMER).sum()
+        out[land] = float(w / su) if su else float("nan")
+    return out
+
+
+# ── Poäng ───────────────────────────────────────────────────────────────────────
+
+def score(label: str, w_vs: float = 1.0, w_band: float = 2.0,
+          band=(0.10, 0.90), cfg: dict | None = None) -> dict:
+    """Sammanvägt fel för en körning. LÄGRE är bättre.
+
+    Två termer per land:
+      |Δv/s|      avvikelse i säsongskvot mot eSett (dimensionslös)
+      utanför     medelavstånd i fyllnadsgrad till närmaste bandkant, 0 inuti bandet
+
+    Vikterna är satta så att 0,10 i kvotfel väger lika tungt som 0,05 i
+    fyllnadsgrad. ⚠️ ANTAGANDE — inget i data pekar ut en växelkurs mellan måtten.
+    """
+    cfg = cfg or yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
+    vs = run_vs(label)
+    soc = run_weekly_soc(label, cfg)
+    bnd = ec_band(quantiles=band, cfg=cfg)
+
+    per, total = {}, 0.0
+    for land in LAND:
+        d_vs = abs(vs.get(land, float("nan")) - ESETT_VS[land])
+        if land in soc.columns and (land, band[0]) in bnd.columns:
+            lo, hi = bnd[(land, band[0])], bnd[(land, band[1])]
+            s = soc[land]
+            outside = (lo - s).clip(lower=0) + (s - hi).clip(lower=0)
+            d_band = float(outside.mean())
+            inside = float((outside <= 1e-9).mean())
+        else:
+            d_band, inside = float("nan"), float("nan")
+        per[land] = {"vs": vs.get(land), "vs_mal": ESETT_VS[land], "d_vs": d_vs,
+                     "utanfor": d_band, "andel_i_band": inside}
+        if d_vs == d_vs and d_band == d_band:
+            total += w_vs * d_vs + w_band * d_band
+    return {"label": label, "poang": total, "per_land": per}
+
+
+def report(label: str, **kw) -> dict:
+    """score() + en läsbar tabell."""
+    r = score(label, **kw)
+    print(f"\n{label}  →  POÄNG {r['poang']:.4f}  (lägre är bättre)\n")
+    print(f"{'land':5s} {'v/s':>7s} {'mål':>7s} {'|Δ|':>7s} "
+          f"{'utanför band':>13s} {'i band':>8s}")
+    for land, m in r["per_land"].items():
+        vs = m["vs"] if m["vs"] is not None else float("nan")
+        print(f"{land:5s} {vs:7.2f} {m['vs_mal']:7.2f} {m['d_vs']:7.2f} "
+              f"{m['utanfor']:13.3f} {m['andel_i_band']:7.0%}")
+    return r
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Poängsätt en körning mot de två observablerna")
+    ap.add_argument("runs", nargs="*", default=["run260_baseline_2h"])
+    ap.add_argument("--band", nargs=2, type=float, default=[0.10, 0.90], metavar=("LO", "HI"))
+    args = ap.parse_args()
+
+    b = ec_band(quantiles=(0.10, 0.50, 0.90))
+    print("EC-bandet (fyllnadsgrad, 2014-2026), var 8:e vecka:")
+    print(b.iloc[::8].round(2).to_string())
+    for r in args.runs:
+        report(r, band=tuple(args.band))
