@@ -278,6 +278,47 @@ terminal_value:
     NO-S: 0.66          # 58,1 / 87,7
     FI:   0.54          # 47,5 / 87,7
 
+  # --- Alternativ TIDSFORM: handsatt säsongstabell (--terminal-seasonal) -----
+  # Default hämtar λ:s tidsform ur DE-LU:s framåtpris, alltså ur en PRISSERIE.
+  # Det är cirkulärt mot det modellen ska förutsäga. Den här tabellen ersätter
+  # tidsformen med ett explicit ANTAGANDE — sämre grundat, men inte avläst ur
+  # måldata. NIVÅN (base_level nedan) är fortfarande härledd ur observerade
+  # zonpriser; S(m) löser alltså bara halva cirkulariteten.
+  #
+  # Källa: förslag i Gemini-diskussion 2026-08-08. Formen är den gängse
+  # nordiska: högt värde i vinterns höglast och låga magasin, botten vid
+  # vårfloden när spillrisken är som störst.
+  seasonal_factors:     # index 1-12 = januari-december
+    1:  1.25            # höglast, fruset i älvarna
+    2:  1.30            # kallaste månaden
+    3:  1.20            # senvinter, låga magasin
+    4:  0.95            # snösmältning inleds
+    5:  0.65            # vårflod — hög spillrisk, lågt värde
+    6:  0.75            # vårflodens avslutning
+    7:  0.85            # sommar, låg efterfrågan
+    8:  0.95            # påfyllning inleds
+    9:  1.10            # spara inför vintern
+    10: 1.15            # höstfyllnad
+    11: 1.20            # inför kylan
+    12: 1.25            # vinterlast
+
+  # ⚠️ Tabellens medelvärde är 1,05, inte 1,00. Används den rakt av höjs alltså
+  # λ:s ÅRSNIVÅ med 5 % samtidigt som formen ändras, och en A/B-jämförelse mot
+  # DE-LU-formen skulle blanda ihop de två effekterna. normalize: true delar
+  # därför med medelvärdet så att bara FORMEN byts.
+  normalize_seasonal: true
+
+  # NIVÅ per zon i EUR/MWh, används med --terminal-seasonal i stället för
+  # lambda_scale × DE-LU. Värdena är täljarna i lambda_scale-kommentarerna
+  # ovan, dvs. zonens observerade medelpris 2023-25 — vald så att årsnivån blir
+  # densamma som i default-läget och jämförelsen isolerar tidsformen.
+  base_level_eur_mwh:
+    SE-N: 27.1
+    SE-S: 47.5
+    NO-N: 25.8
+    NO-S: 58.1
+    FI:   47.5
+
 hydro_operation:
   active: false
   min_hourly_frac: 0.10    # min timproduktion / installerad reservoareffekt

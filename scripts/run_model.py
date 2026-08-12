@@ -748,6 +748,36 @@ def terminal_lambdas(args, cfg: dict, market_prices: dict, units: list,
     # per zon. Ett KONSTANT λ per zon fungerar inte — run271 tömde SE-N till 9 % och
     # NO-N till 0 % i februari 2024 och blev infeasible, eftersom vattnets
     # alternativkostnad är hög före vårfloden och låg efter, inte lika året runt.
+    # --terminal-seasonal: byt λ:s TIDSFORM från DE-LU:s framåtpris till en handsatt
+    # säsongstabell. Motivet är cirkularitet — default hämtar formen ur en prisserie,
+    # alltså ur det modellen ska förutsäga. Tabellen är ett antagande i stället, vilket
+    # är sämre grundat men inte avläst ur måldata. ⚠️ NIVÅN (base_level_eur_mwh) är
+    # fortfarande zonens observerade medelpris, så bara halva cirkulariteten försvinner.
+    tvcfg = cfg.get("terminal_value", {}) or {}
+    if getattr(args, "terminal_seasonal", False):
+        sf = tvcfg.get("seasonal_factors") or {}
+        if not sf:
+            raise SystemExit("--terminal-seasonal: terminal_value.seasonal_factors "
+                             "saknas i config/zones.yaml")
+        base = tvcfg.get("base_level_eur_mwh") or {}
+        if not base:
+            raise SystemExit("--terminal-seasonal: terminal_value.base_level_eur_mwh "
+                             "saknas i config/zones.yaml")
+        s = float(sf[int(t_last.month)])
+        if tvcfg.get("normalize_seasonal", True):
+            # Håll årsnivån oförändrad så att A/B-testet isolerar FORMEN.
+            s /= (sum(float(v) for v in sf.values()) / len(sf))
+        # Skalflaggan får fortfarande verka, så känslighetstestet fungerar likadant.
+        pert = None
+        if args.terminal_lambda_scale:
+            nominal = tvcfg.get("lambda_scale") or {}
+            given = {z.strip(): float(v) for z, v in
+                     (pair.split(":") for pair in args.terminal_lambda_scale.split(","))}
+            pert = {z: given[z] / nominal[z] for z in given if nominal.get(z)}
+        return {u: float(base.get(u.split()[0], 0.0)) * s
+                   * (pert.get(u.split()[0], 1.0) if pert else 1.0)
+                for u in units}
+
     # Flaggan åsidosätter config-värdena (terminal_value.lambda_scale).
     alpha = None
     if args.terminal_lambda_scale:
@@ -1286,6 +1316,13 @@ def main() -> None:
                              "(felet i run91–93).")
     parser.add_argument("--rolling-weeks", type=int, default=4, metavar="N",
                         help="Fönsterlängd i veckor för --rolling-horizon (default 4).")
+    parser.add_argument("--terminal-seasonal", action="store_true",
+                        help="Byt λ:s TIDSFORM från DE-LU:s framåtpris till den handsatta "
+                             "säsongstabellen terminal_value.seasonal_factors. Motivet är "
+                             "cirkularitet: default läser formen ur en prisserie, alltså ur "
+                             "det modellen ska förutsäga. ⚠️ NIVÅN (base_level_eur_mwh) är "
+                             "fortfarande zonens observerade medelpris — bara halva "
+                             "cirkulariteten försvinner.")
     parser.add_argument("--rolling-lookahead-weeks", type=int, default=0, metavar="N",
                         help="ÄKTA RECEDING HORIZON (väg E): lös varje fönster med N "
                              "veckors extra look-ahead men behåll bara den första delen. "
@@ -1299,7 +1336,7 @@ def main() -> None:
                              "bas-λ per lika stort SOC-segment, TOMT→FULLT. Måste vara "
                              "icke-växande. DEFAULT "
                              f"{','.join(f'{p:g}' for p in DEFAULT_TERMINAL_PROFILE)} "
-                             "(marginalvärde = bas-λ vid 60-80 % fyllnad, ~config-ankaret; "
+                             "(marginalvärde = bas-λ vid 60-80 %% fyllnad, ~config-ankaret; "
                              "2× nära tomt, 0,2× i toppbandet). '1.0' ger det gamla LINJÄRA "
                              "beteendet, som ger bang-bang: magasin i taket och priskollaps "
                              "till VOM (run268). ⚠️ Formen är ett ANTAGANDE, ej kalibrerad.")
@@ -1308,7 +1345,7 @@ def main() -> None:
                              "prisets TIDSFORM men skalar NIVÅN per zon — en inlåst zon kan "
                              "inte värdera sitt vatten till kontinentens pris. Föredras framför "
                              "--terminal-lambda: ett KONSTANT λ tömmer magasinen före vårfloden "
-                             "(run271 blev infeasible, SE-N 9 % / NO-N 0 % i februari 2024), "
+                             "(run271 blev infeasible, SE-N 9 %% / NO-N 0 %% i februari 2024), "
                              "eftersom vattnets alternativkostnad är säsongsberoende.")
     parser.add_argument("--terminal-lambda", default=None, metavar="VÄRDE|ZON:V,...",
                         help="Fast terminal-λ (EUR/MWh) i stället för framåtblickande DE-LU. "
@@ -1954,6 +1991,7 @@ def main() -> None:
     if args.vre_curtailment_cost:       flags.append(f"vrecurt-{args.vre_curtailment_cost:g}")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
+    if args.terminal_seasonal:          flags.append("term-seasonal")
     if args.terminal_lambda:            flags.append(f"termlambda-{args.terminal_lambda.replace(':','_')}")
     if args.terminal_lambda_scale:      flags.append(f"termscale-{args.terminal_lambda_scale.replace(':','_')}")
     if args.rolling_horizon:
