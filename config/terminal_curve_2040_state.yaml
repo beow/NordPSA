@@ -1,0 +1,49 @@
+note: 'NOLLHYPOTESTEST 2026-08-13: kurvan UTAN kalenderberoende. a_amp=b_amp=0 =>
+  lambda beror BARA pa fyllnadsgraden. lambda_bas = 73,02 EUR/MWh i ALLA zoner = det
+  vattenvarde run320_pf_ref_dispatch_2h matte (fullframsynt 2040-dispatch av run260:s
+  flotta utan proxy: ett enda varde, alla zoner, alla timmar). p_norm=mid => lambda_bas
+  ar vattenvardet vid halvfullt magasin. Fragan testet avgor: racker tillstandsberoendet
+  ensamt for att ge hydrons sasong, eller behovs kalender? Maltavla = run320: v/s
+  SE 1,43 NO 2,08 FI 1,06.'
+anchor_eur_per_mwh:
+  FI: 73.02
+  NO-N: 73.02
+  NO-S: 73.02
+  SE-N: 73.02
+  SE-S: 73.02
+zones:
+  FI:
+    a_amp: 0.0
+    a_peak: 0.0
+    b_mean: 1.5
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  NO-N:
+    a_amp: 0.0
+    a_peak: 0.0
+    b_mean: 1.5
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  NO-S:
+    a_amp: 0.0
+    a_peak: 0.0
+    b_mean: 1.5
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  SE-N:
+    a_amp: 0.0
+    a_peak: 0.0
+    b_mean: 1.5
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  SE-S:
+    a_amp: 0.0
+    a_peak: 0.0
+    b_mean: 1.5
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid

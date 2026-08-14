@@ -8,14 +8,24 @@ den ska bära nordisk hydrologi i allmänhet, inte 2023-25 i synnerhet.
 
 Tre knoppar som är avsiktligt SEPARERADE, så att kalibreringen kan röra en i taget:
 
-  λ_bas[z]   NIVÅ, EUR/MWh. Årets genomsnittliga marginalvärde på lagrat vatten.
+  λ_bas[z]   NIVÅ, EUR/MWh. Marginalvärdet på lagrat vatten vid halvfullt magasin.
   A(w, z)    SÄSONG på nivån. Normaliserad till årsmedel EXAKT 1 (cosinus).
-  P_k(B)     LUTNING mot fullt magasin, per SOC-segment. Normaliserad till medel
-             EXAKT 1 över segmenten. B styr bara tiltet, aldrig nivån.
+  P_k(B)     LUTNING mot fullt magasin, per SOC-segment. Normaliserad så att λ vid
+             halvfullt magasin är 1 (`p_norm="mid"`). B styr bara tiltet, aldrig nivån.
 
 Utan normaliseringarna är knopparna sammanblandade: att göra kurvan brantare skulle
 samtidigt sänka det genomsnittliga vattenvärdet, och kalibreringen skulle jaga sin
 egen svans.
+
+⚠️ RÄTTELSE 2026-08-13: den ursprungliga normaliseringen (`p_norm="mean"`, medel 1 över
+SEGMENTEN) separerade INTE nivå och lutning, tvärtemot vad stycket ovan påstod. Medlet
+över segmenten är bara vattenvärdet vid driftpunkten om magasinet står LIKFORMIGT över
+hela SOC-spannet, vilket det inte gör. Följden: b_mean 4,0 gav mittsegmentet 0,566 och
+b_mean 1,5 gav 0,915, så de zonvisa b-värdena smugit in en oavsiktlig nivåskillnad —
+norr fick 70-72 % och FI 125 % av det uppmätta systemvattenvärdet (run320: 73,02).
+Det förklarar kvantitativt både norrs för tidiga tömning och FI:s hamstring i run318.
+`p_norm="mid"` rättar det; "mean" finns kvar bara för att run317-319 ska gå att
+reproducera.
 
 ## Varför formen ser ut som den gör
 
@@ -66,6 +76,8 @@ class CurveParams:
     b_mean: float = 2.5    # genomsnittlig brantid mot fullt magasin. Krav: ≥ 0
     b_amp:  float = 0.6    # säsongsvariation i brantid, andel av b_mean. Krav: |·| ≤ 1
     b_peak: float = 22.0   # vecka då kurvan är brantast (vårflodens spillrisk)
+    p_norm: str = "mean"   # vad λ_bas betyder — se segment_profile(). "mid" krävs för
+                           # att ankra mot ett mätt vattenvärde
 
     def __post_init__(self) -> None:
         if not -1.0 < self.a_amp < 1.0:
@@ -76,6 +88,8 @@ class CurveParams:
         if abs(self.b_amp) > 1.0:
             raise ValueError(f"|b_amp| måste vara ≤ 1, fick {self.b_amp} "
                              "— annars blir kurvan VÄXANDE i fyllnadsgrad någon vecka")
+        if self.p_norm not in ("mean", "mid"):
+            raise ValueError(f"p_norm måste vara 'mean' eller 'mid', fick {self.p_norm!r}")
 
 
 #: Startpunkt, inte facit. b_mean kodar run268:s mätning (se modulens docstring).
@@ -114,17 +128,32 @@ def b_value(week: int, p: CurveParams) -> float:
                                 * math.cos(2.0 * math.pi * (week - p.b_peak) / WEEKS)))
 
 
-def segment_profile(b: float, segments: int = DEFAULT_SEGMENTS) -> List[float]:
-    """Icke-växande multiplikatorer tomt→fullt, normaliserade till medel exakt 1.
+def segment_profile(b: float, segments: int = DEFAULT_SEGMENTS,
+                    norm: str = "mean") -> List[float]:
+    """Icke-växande multiplikatorer tomt→fullt. b = 0 ger platt profil (det gamla
+    LINJÄRA terminalvärdet). Normaliseringen bestämmer VAD λ_bas betyder:
 
-    b = 0 ger en helt platt profil (alla 1.0) — det gamla LINJÄRA terminalvärdet.
+      "mean"  medelvärdet över segmenten är 1. ⚠️ Då är λ_bas INTE vattenvärdet vid
+              någon fyllnadsgrad man kan peka ut, och eftersom magasinet inte står
+              likformigt över SOC-spannet blandas nivå och lutning ihop: vid b=4,0
+              är mittsegmentet 0,566 och vid b=1,5 är det 0,915, så samma λ_bas ger
+              47 % olika verkligt vattenvärde i normal drift. Kvar som default bara
+              för att run317-319 ska gå att reproducera.
+      "mid"   λ vid HALVFULLT magasin är exakt 1. Då betyder λ_bas det den utger sig
+              för att betyda och kan ankras direkt mot ett mätt vattenvärde
+              (run320: 73,02 EUR/MWh). Oberoende av antalet segment.
     """
     if segments < 1:
         raise ValueError(f"segments måste vara ≥ 1, fick {segments}")
     xs = [(k + 0.5) / segments for k in range(segments)]
     vals = [math.exp(-b * x) for x in xs]
-    mean = sum(vals) / len(vals)
-    return [v / mean for v in vals]
+    if norm == "mean":
+        ref = sum(vals) / len(vals)
+    elif norm == "mid":
+        ref = math.exp(-b * 0.5)
+    else:
+        raise ValueError(f"norm måste vara 'mean' eller 'mid', fick {norm!r}")
+    return [v / ref for v in vals]
 
 
 def curve(week: int, zone: str,
@@ -132,7 +161,7 @@ def curve(week: int, zone: str,
           segments: int = DEFAULT_SEGMENTS) -> tuple[float, List[float]]:
     """(nivåfaktor, segmentprofil) för zonen och veckan."""
     p = (params or DEFAULTS).get(zone, CurveParams())
-    return a_factor(week, p), segment_profile(b_value(week, p), segments)
+    return a_factor(week, p), segment_profile(b_value(week, p), segments, p.p_norm)
 
 
 # ── Adaptrar mot hydro_terminal_value(), som är keyad på LAGRETS namn ────────────
@@ -162,9 +191,11 @@ def profiles_for_week(week: int, units: Iterable[str],
     """P_k(B(w, z)) per lager — lutningsdelen. Matchar `profile`-dicten i
     hydro_terminal_value(), som redan stödjer per-zons-profiler."""
     params = params or DEFAULTS
-    return {u: segment_profile(b_value(week, params.get(_zone_of(u), CurveParams())),
-                               segments)
-            for u in units}
+    out = {}
+    for u in units:
+        p = params.get(_zone_of(u), CurveParams())
+        out[u] = segment_profile(b_value(week, p), segments, p.p_norm)
+    return out
 
 
 # ── Ankaret: mät, gissa inte ────────────────────────────────────────────────────
@@ -226,7 +257,7 @@ def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
         "note": note or "Terminalvärdeskurva λ_k(vecka, zon); se nordpsa/wv/terminal_curve.py",
         "anchor_eur_per_mwh": {z: float(v) for z, v in sorted(anchor.items())},
         "zones": {z: {"a_amp": c.a_amp, "a_peak": c.a_peak, "b_mean": c.b_mean,
-                      "b_amp": c.b_amp, "b_peak": c.b_peak}
+                      "b_amp": c.b_amp, "b_peak": c.b_peak, "p_norm": c.p_norm}
                   for z, c in sorted(params.items())},
     }
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -266,7 +297,8 @@ def describe(params: Dict[str, CurveParams] | None = None,
         lock = " [inlåst]" if z in LOCKED_ZONES else ""
         print(f"{z}{lock}  λ_bas={anchor.get(z, 0.0):.1f}  "
               f"a_amp={p.a_amp:.2f} a_peak=v{p.a_peak:.0f}  "
-              f"b_mean={p.b_mean:.2f} b_amp={p.b_amp:.2f} b_peak=v{p.b_peak:.0f}")
+              f"b_mean={p.b_mean:.2f} b_amp={p.b_amp:.2f} b_peak=v{p.b_peak:.0f} "
+              f"norm={p.p_norm}")
         head = "".join(f"{f'{int(100*k/segments)}-{int(100*(k+1)/segments)}%':>10s}"
                        for k in range(segments))
         print(f"   {'vecka':>6s} {'A':>5s} {'B':>5s} |{head}   (EUR/MWh, tomt→fullt)")

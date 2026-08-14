@@ -321,7 +321,11 @@ terminal_value:
 
 hydro_operation:
   active: false
-  min_hourly_frac: 0.10    # min timproduktion / installerad reservoareffekt
+  # 0,05 sedan 2026-08-14 (run340). Vid 0,10 körde modellen 3,3 GW i SE-N vid
+  # nollpris mot verklighetens ~2,0 (adelsfors.se, juni 2026) — reservoardelen låg
+  # på exakt 0,10 x p_nom i VARJE timme under 60 EUR/MWh. Resten av avvikelsen är
+  # strömkraften (2,34 GW i juni), som inte styrs av den här parametern.
+  min_hourly_frac: 0.05    # min timproduktion / installerad reservoareffekt
   min_daily_frac:  0.20    # min dygnsproduktion / maximal dygnsproduktion
   max_weekly_frac: 0       # 0 = inget globalt tak; sätts per zon nedan (provenienser skiljer sig)
   # Källa: Ek Fälth m.fl. (2025), supplementary material (docs/hydro_restrictions.pdf),

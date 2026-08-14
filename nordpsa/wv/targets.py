@@ -158,6 +158,33 @@ def run_vs(label: str) -> Dict[str, float]:
     return out
 
 
+def reservoir_drift(label: str) -> dict:
+    """Magasinets NETTODRIFT över körningens hela period, TWh per zon + summa.
+
+    ⭐ Driften är en GRATIS mätare på om λ_bas ligger rätt för världen man kör i.
+    En rullande dispatch har inget cykliskt villkor, så magasinet får driva fritt:
+
+        drift > 0   vattnet är för DYRT   → modellen hamstrar
+        drift < 0   vattnet är för BILLIGT → modellen gör av med lagret
+        drift ≈ 0   nivån passar världen
+
+    Mätt: run317 (2040-nivå i dagens värld, ~3× för högt) +20,0 · run288 S(m) +14,1 ·
+    run318 (rätt nivå för dagens värld) −0,3 · run319 (2040) −14,2.
+
+    ⚠️ Noll drift är ett NÖDVÄNDIGT villkor, inte ett tillräckligt: en kurva med rätt
+    nivå men fel form kan mycket väl balansera lagret och ändå fördela vattnet fel
+    över året. Mät alltid v/s och bandet också (score()).
+    """
+    soc = _read(label, "hydro_soc.csv")
+    out = {}
+    for c in soc.columns:
+        if " hydro" not in c:
+            continue
+        out[c.split()[0]] = float(soc[c].iloc[-1] - soc[c].iloc[0]) / 1e6
+    out["SUMMA"] = sum(v for k, v in out.items() if k != "SUMMA")
+    return out
+
+
 # ── Poäng ───────────────────────────────────────────────────────────────────────
 
 def score(label: str, w_vs: float = 1.0, w_band: float = 2.0,
@@ -220,3 +247,55 @@ if __name__ == "__main__":
     print(b.iloc[::8].round(2).to_string())
     for r in args.runs:
         report(r, band=tuple(args.band))
+
+
+# ── Facit-mått: avstånd till fullframsyntens egen lösning ────────────────────────
+# score() ovan mäter mot eSetts DAGENS v/s och EC-bandet — rätt måttstock för dagens
+# värld, fel för 2040. I 2040 är måltavlan i stället den FULLFRAMSYNTA dispatchen av
+# samma frysta flotta utan prisproxy: den vet allt om framtiden och allokerar vattnet
+# optimalt, och dess vattenvärde är då exakt konstant (run320: 73,02 EUR/MWh i alla
+# zoner och timmar — den deterministiska teorins svar). Den rullande horisonten med
+# terminalkurva ska återskapa den lösningen under BEGRÄNSAD framsyn; avståndet dit är
+# därför det relevanta felet.
+#
+# ⚠️ Facit är ett TAK, inte ett facit i moralisk mening: perfekt framsyn kör magasinen
+# ned till 2-4 %, vilket verkliga operatörer inte gör. Använd som riktmärke att röra
+# sig mot, inte som norm att träffa exakt.
+
+FACIT_RUN = "run320_pf_ref_dispatch_2h"
+
+
+def harmonic(label: str):
+    """(amplitud, toppvecka) för veckoproduktionens första harmoniska.
+
+    Fasen är den diagnos som styr `a_peak`: som reservationspris ska λ ha sin BOTTEN
+    där produktionen ska toppa, alltså a_peak = toppvecka + 26.
+    """
+    import numpy as np
+
+    d = _read(label, "dispatch_hydro.csv")
+    s = d[[c for c in d.columns if c.endswith(" hydro")]].sum(axis=1)
+    y = s.groupby(s.index.isocalendar().week.clip(upper=52)).mean().reindex(range(1, 53))
+    y = (y / y.mean()).values
+    wk = np.arange(1, 53)
+    c = float(np.sum(y * np.cos(2 * np.pi * wk / 52)))
+    si = float(np.sum(y * np.sin(2 * np.pi * wk / 52)))
+    return 2 * float(np.hypot(c, si)) / 52, (np.degrees(np.arctan2(si, c)) / 360 * 52) % 52
+
+
+def facit_score(label: str, w_vs: float = 1.0, w_soc: float = 2.0,
+                facit: str = FACIT_RUN) -> dict:
+    """Σ_land |Δv/s| mot facit + w_soc × medelavstånd i veckovis fyllnadsgrad.
+
+    Andra termen fångar det v/s ensamt missar: att banan ligger på rätt NIVÅ över
+    året, inte bara har rätt vinter/sommar-kvot. Vikterna är samma antagande som i
+    score() — 0,10 i kvotfel väger som 0,05 i fyllnadsgrad.
+    """
+    v, vf = run_vs(label), run_vs(facit)
+    s, sf = run_weekly_soc(label), run_weekly_soc(facit)
+    d_vs = {l: abs(v[l] - vf[l]) for l in LAND if l in v and l in vf}
+    d_soc = {l: float((s[l] - sf[l]).abs().mean())
+             for l in LAND if l in s.columns and l in sf.columns}
+    total = sum(w_vs * d_vs.get(l, 0.0) + w_soc * d_soc.get(l, 0.0) for l in LAND)
+    return {"label": label, "total": total, "d_vs": d_vs, "d_soc": d_soc,
+            "vs": v, "vs_facit": vf}

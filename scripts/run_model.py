@@ -874,7 +874,13 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
     if args.terminal_curve is not None:
         from nordpsa.wv import terminal_curve as tc
         cparams, canchor = tc.load_params(args.terminal_curve or None)
-        segments = len(profile[units[0]]) if isinstance(profile, dict) else len(profile)
+        # Kurvan genererar sina EGNA segmentvärden, så av `profile` används bara
+        # LÄNGDEN. Den kopplingen var en artefakt: antalet segment styrdes av en
+        # profil vars värden ändå kastades. --terminal-segments gör det explicit.
+        # En uttrycklig --terminal-lambda-profile vinner ändå, så gamla kommandon
+        # (run340 kördes med en 20-värdesprofil) reproduceras exakt.
+        segments = (len(profile) if args.terminal_lambda_profile
+                    else args.terminal_segments)
         curve = (tc, cparams, canchor, segments)
         print(f"  → TERMINALKURVA λ_k(vecka, zon), {segments} segment. λ_bas: "
               + ", ".join(f"{z} {v:.1f}" for z, v in sorted(canchor.items())))
@@ -894,7 +900,9 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
               f"({lookahead_steps} steg) löses men KASTAS; SOC bärs över från behåll-delen. "
               f"Terminalvärdet hamnar {args.rolling_lookahead_weeks} veckor bort och styr "
               f"därmed mindre.")
-    if isinstance(profile, dict):
+    if curve is not None:
+        pass          # kurvan ersätter profilen helt; dess egen rad är redan utskriven
+    elif isinstance(profile, dict):
         K = len(next(iter(profile.values())))
         print(f"  → terminalvärde KONKAVT per zon, {K} segment à {100.0/K:.0f} % av volymen:")
         for u in units:
@@ -1086,6 +1094,29 @@ def apply_dispatch_replay(parser, args):
     base.soc_pin_freq = args.soc_pin_freq
     base.soc_pin_band = args.soc_pin_band
     base.solver_option = args.solver_option   # numerik-flaggor hör till NYA körningen
+    # Hydro-driftgolven hör till OMDISPATCHEN: de är ett scenarioval om hur hårt
+    # vattenkraften måste gå, precis som --low-hydro. Utan dessa rader läses de ur
+    # KÄLLANS argv och en ny --hydro-min-hourly blir tyst verkningslös.
+    if args.hydro_min_hourly is not None:
+        base.hydro_min_hourly = args.hydro_min_hourly
+    if args.hydro_min_daily is not None:
+        base.hydro_min_daily = args.hydro_min_daily
+    # Rullande horisont och terminalvärdet hör HELT till omdispatchen. Källans argv kan
+    # aldrig innehålla dem — rullande är dispatch-only, så en expansionskörning förbjuder
+    # dem. Utan dessa rader blir de tyst verkningslösa och körningen faller tillbaka på
+    # en vanlig cyklisk LP MED prisproxyn, alltså tvärtemot vad kommandot bad om.
+    # ⚠️ Det är en tystare fälla än --voll/--low-hydro: eftersom även --terminal-curve
+    # nollas hinner dess egna räcken aldrig utlösa. run319 gick i den 2026-08-13.
+    base.rolling_horizon         = args.rolling_horizon
+    base.rolling_weeks           = args.rolling_weeks
+    base.rolling_lookahead_weeks = args.rolling_lookahead_weeks
+    base.terminal_curve          = args.terminal_curve
+    base.terminal_segments       = args.terminal_segments
+    base.terminal_seasonal       = args.terminal_seasonal
+    base.terminal_lambda         = args.terminal_lambda
+    base.terminal_lambda_scale   = args.terminal_lambda_scale
+    base.terminal_lambda_profile = args.terminal_lambda_profile
+    base.no_hydro_price_proxy    = args.no_hydro_price_proxy
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -1355,6 +1386,14 @@ def main() -> None:
                              "måste bära säsongssignalen. Med look-ahead gör framsynen det "
                              "mesta av jobbet och känsligheten för terminalkalibreringen "
                              "bör falla — det är själva testet.")
+    parser.add_argument("--terminal-segments", type=int, default=20, metavar="N",
+                        help="Antal lika stora SOC-segment i terminalvärdeskurvan "
+                             "(--terminal-curve). DEFAULT 20. Kurvan sätter segmentens "
+                             "VÄRDEN själv; det här styr bara upplösningen i "
+                             "fyllnadsgrad. ⚠️ Finare indelning ger en jämnare budtrappa "
+                             "men löser INTE att en zon bara har ETT vattenvärde åt "
+                             "gången — magasinet rör sig ~20 procentenheter per månad "
+                             "och korsar därför få segment oavsett indelning (run339).")
     parser.add_argument("--terminal-lambda-profile", default=None, metavar="M1,M2,...",
                         help="Styckvis linjär KONKAV terminalvärdeskurva: multiplikatorer på "
                              "bas-λ per lika stort SOC-segment, TOMT→FULLT. Måste vara "
