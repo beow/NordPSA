@@ -242,7 +242,11 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # ── Persistens: kalibreringsloopens och inkopplingens gemensamma gränssnitt ─────
 
 #: Kalibreringens utdata och den rullande dispatchens indata.
-DEFAULT_PARAM_FILE = "config/terminal_curve.yaml"
+#: ⚠️ Pekar på den KALIBRERADE kurvan (run334/337, låst 2026-08-14), inte på
+#: config/terminal_curve.yaml som är den okalibrerade STARTPUNKTEN från 001f87c
+#: (a_peak 5, ankare 76-84, p_norm "mean"). Ett bart --terminal-curve hämtade förut
+#: startpunkten och gav tyst en helt annan kurva än den som är verifierad.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_calibrated.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
