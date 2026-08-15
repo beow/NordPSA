@@ -32,6 +32,20 @@ python scripts/run_model.py --year 2024 --output run02_2024only     # baseline, 
 python scripts/run_model.py --resolution 3 --output run03_coarse    # coarser, everything else baseline
 ```
 
+### The three run modes
+
+Everything else in this file is easier to read once these are distinct. Only the first optimizes capacities; the other two are both *dispatch*, and differ only in **where the fixed capacities come from**.
+
+| Mode | Capacities | Needs a source run | Water-value proxy | `--spill-cost` | `--vre-curtailment-cost` |
+|---|---|---|---|---|---|
+| **Expansion** (default, `--expansion` to say so) | optimized (`p_nom_opt`) | — | **on** | 50 | 0 |
+| `--no-expansion` | frozen at **config** values = today's fleet | no | off | 0.1 | 5 |
+| `--dispatch LABEL` | frozen at **LABEL's optimized** fleet | yes | off | 0.1 | 5 |
+
+`--no-expansion` is not a synonym for `--dispatch` and cannot be removed: 82 historical runs use it, **none** of them together with `--dispatch`. It is the whole "today's world" line — run203/run208 (dispatch references), run255/run256 (todayworld), run283 + run289–292 (NTC sweeps), run268–288 (rolling-horizon development, incl. run288), run317/run318 (the terminal curve's first validation against today's observables). Without it there is no way to run against the actual present-day fleet without first producing a sham "expansion" that expands nothing. It is also load-bearing for reproducibility: `apply_dispatch_replay` re-parses the source run's argv string, so deleting the flag would break `--dispatch` on all 82.
+
+**The water-value proxy has no flag at all (since 2026-08-15)** — it follows the mode: on in expansion, off whenever capacities are frozen. See the dedicated section below for why, and for what was removed with it.
+
 **The bare `--dispatch` runs the canonical dispatch template** (the configuration of `run340_minh005_seg20_2h`) — capacities frozen from the source expansion run, rolling horizon 1+3 weeks, the calibrated terminal water-value curve, and no price proxy:
 
 ```bash
@@ -45,13 +59,13 @@ python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kan
 |---|---|
 | `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
 | `--terminal-curve` = `config/terminal_curve_2040_calibrated.yaml` | `--no-terminal-curve` |
-| `--no-hydro-price-proxy` (the curve *is* the water value) | `--hydro-price-proxy` |
+| no water-value proxy (the curve *is* the water value) | — (mode-bound, no flag) |
 | resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
 | `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
 
-`--expansion` exists as an explicit synonym for "no `--dispatch`"; it changes nothing but lets scripts say which mode they mean, and errors if combined with `--dispatch`.
+`--expansion` exists as an explicit synonym for "neither `--dispatch` nor `--no-expansion`"; it changes nothing but lets scripts say which mode they mean, and errors if combined with `--dispatch`.
 
-⚠️ **Reproducing dispatch runs made before this change** (run316 and older) needs `--no-rolling-horizon --no-terminal-curve --hydro-price-proxy --resolution 2 --hydro-min-hourly 0.10` — verified to reproduce run316's flag string exactly. This follows the same precedent as `--vre-curtailment-cost`: new defaults apply to newly typed commands, and older runs are reproduced by naming the old values.
+⚠️ **Reproducing dispatch runs made before this change** (run316 and older) needs `--no-rolling-horizon --no-terminal-curve --resolution 2 --hydro-min-hourly 0.10`. This follows the same precedent as `--vre-curtailment-cost`: new defaults apply to newly typed commands, and older runs are reproduced by naming the old values. ⛔ One exception is now unreachable: those runs also had the **price proxy on**, and since the proxy became mode-bound there is no flag to turn it back on in a frozen-capacity run. Pre-run316 dispatch is therefore reproducible in structure but not bit-for-bit.
 
 **Run discipline:** commit *after* a successful simulation, not before. This ensures only good runs are traced to code state. Always propose the commit message and wait for user approval before committing. Name the output directory in the commit message so results are traceable:
 ```bash
@@ -179,7 +193,7 @@ Two traps this closed: `--spill-cost` was **not** copied from the new command in
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
 
-**⚠️ Hydro bids at the HISTORICAL zone price (water-value proxy, `--no-hydro-price-proxy` to disable):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
+**⚠️ Hydro bids at the HISTORICAL zone price in EXPANSION (water-value proxy, mode-bound since 2026-08-15):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
 
 ```
 historical price[t]  +  mu_energy_balance[t] / efficiency_dispatch
@@ -187,7 +201,12 @@ historical price[t]  +  mu_energy_balance[t] / efficiency_dispatch
 
 Introduced in `947ec81` (run23, 2026-05-18) explicitly as a *"water value proxy"*, replacing a flat VOM, at a time when the model did not yet extract a water value. Thirteen days later `c08906f` (run57) added `assign_all_duals=True` and the genuine endogenous water value — the SOC-balance dual — but the proxy was never removed. They have been stacked ever since; the line has not been touched since run23.
 
-This matters because the endogenous water value is nearly constant (1–6 unique values per zone over three years; SE-S has exactly one), so **all** the time variation in hydro's bid comes from the 2023–25 price series, none from the model. In a 2040 expansion that is circular: hydro's dispatch, and hence the price shape the model produces, is anchored to the price shape it is meant to predict. Use `--no-hydro-price-proxy` (flat VOM) to isolate the effect; the default is unchanged, so existing runs stay reproducible.
+This matters because the endogenous water value is nearly constant (1–6 unique values per zone over three years; SE-S has exactly one), so **all** the time variation in hydro's bid comes from the 2023–25 price series, none from the model. In a 2040 expansion that is circular: hydro's dispatch, and hence the price shape the model produces, is anchored to the price shape it is meant to predict. That circularity is now **structural in expansion and impossible in dispatch** — the proxy follows the mode and has no flag.
+
+- **Why expansion keeps it:** hydro's bid needs a time shape, and without one the LP is degenerate — the 3-year 1h expansion without the proxy was OOM-killed. ⚠️ The consequence must be said out loud: expansion is *always* circular now, and its price shape is licensed for **scenario comparisons only**, never to be read as a result.
+- **Why dispatch never has it:** the terminal curve *is* the water value. With the proxy on, λ sits at gross price level (~80) while the margin is the net water value, so storage is overvalued and reservoirs hoard — the run91–93 failure.
+- **⛔ `--hydro-flat-wv` was deleted with it, as measurably redundant.** Without the proxy `mc = VOM 0.6` and the SOC-balance dual supplies the rest by itself: run320 yields **exactly one water value, 73.02 EUR/MWh, in all five zones and all 13152 hours**. A flat water value therefore arises *endogenously* the moment the proxy is off, and setting its level by hand was measured inert (run273–276: `p_nom_opt` did not move between VOM / 30 / 60, because the dual self-corrects). The flag set a number the model then undid.
+- ⚠️ **Cost of the rule:** `run254_noproxy_2h` (an expansion without the proxy) can no longer be reproduced. Its role — measuring the flat full-foresight water value — is now served by **run320, which is a dispatch** and reproduces fine as `--dispatch run260_baseline_2h --no-rolling-horizon --no-terminal-curve`.
 
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 

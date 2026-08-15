@@ -1147,12 +1147,10 @@ def apply_dispatch_replay(parser, args):
     base.terminal_segments       = args.terminal_segments
     base.no_rolling_horizon      = args.no_rolling_horizon
     base.no_terminal_curve       = args.no_terminal_curve
-    base.hydro_price_proxy       = args.hydro_price_proxy
     base.terminal_seasonal       = args.terminal_seasonal
     base.terminal_lambda         = args.terminal_lambda
     base.terminal_lambda_scale   = args.terminal_lambda_scale
     base.terminal_lambda_profile = args.terminal_lambda_profile
-    base.no_hydro_price_proxy    = args.no_hydro_price_proxy
     if args.year is not None:
         base.year = args.year
     base.dispatch = label
@@ -1336,7 +1334,14 @@ def main() -> None:
                              "eSett-basen och över --extra-load. Kan anges flera gånger. Avsett "
                              "för marginalkostnads-/LRMC-experiment (ΔObjektiv/ΔKonsumtion).")
     parser.add_argument("--no-expansion", action="store_true",
-                        help="Lås alla teknologier som non-extendable — ren dispatch-körning")
+                        help="FRYST LÄGE VID CONFIGS KAPACITETER: lås alla teknologier som "
+                             "non-extendable på det som står i zones.yaml, alltså dagens "
+                             "flotta. Skiljer sig från --dispatch LABEL, som fryser vid "
+                             "LABEL:s OPTIMERADE flotta och kräver en källkörning — det här "
+                             "är vägen till 'dagens värld' utan föregående expansion "
+                             "(run203, run255/256, NTC-svepen, run268-288, run317/318). "
+                             "Båda är dispatch: kapaciteterna är fasta, flexibiliteten "
+                             "(hydro, batteri, handel) optimeras fritt, prisproxyn är av.")
     parser.add_argument("--cost-scenario", default="svk_2040", metavar="NAMN",
                         help="Skriv över cfg['costs'] med ett kostnadsscenario ur "
                              "cost_scenarios i zones.yaml (t.ex. svk_2040, svk_2050). "
@@ -1406,9 +1411,9 @@ def main() -> None:
                              "−λ×SOC[T]. Bryter den perfekta framsynen som gör det endogena "
                              "vattenvärdet nästan konstant. DISPATCH-ONLY: varje fönster är en "
                              "egen LP, så kapaciteter måste vara frysta (--no-expansion/--dispatch). "
-                             "⚠️ Kör med --no-hydro-price-proxy — annars är λ på bruttoprisnivå "
-                             "medan marginalen är nettovattenvärdet, och reservoarerna hamstrar "
-                             "(felet i run91–93).")
+                             "Proxyn är automatiskt AV där (frysta kapaciteter), vilket är "
+                             "nödvändigt: med den på ligger λ på bruttoprisnivå medan marginalen "
+                             "är nettovattenvärdet och reservoarerna hamstrar (felet i run91–93).")
     parser.add_argument("--rolling-weeks", type=int, default=1, metavar="N",
                         help="Fönsterlängd i veckor för --rolling-horizon (default 4).")
     parser.add_argument("--terminal-seasonal", action="store_true",
@@ -1427,16 +1432,15 @@ def main() -> None:
                              "mesta av jobbet och känsligheten för terminalkalibreringen "
                              "bör falla — det är själva testet.")
     parser.add_argument("--expansion", action="store_true",
-                        help="Kanonisk EXPANSION. Är redan default när --dispatch "
-                             "utelämnas; flaggan finns för att skript ska kunna säga "
-                             "det uttryckligen. Kan inte kombineras med --dispatch.")
+                        help="Kanonisk EXPANSION: kapaciteterna optimeras (enda läget som "
+                             "gör det). Är redan default när både --dispatch och "
+                             "--no-expansion utelämnas; flaggan finns för att skript ska "
+                             "kunna säga det uttryckligen. Kan inte kombineras med "
+                             "--dispatch.")
     parser.add_argument("--no-rolling-horizon", action="store_true",
                         help="Stäng av den rullande horisonten som --dispatch slår på.")
     parser.add_argument("--no-terminal-curve", action="store_true",
                         help="Stäng av terminalkurvan som --dispatch slår på.")
-    parser.add_argument("--hydro-price-proxy", action="store_true",
-                        help="Sätt TILLBAKA prisproxyn, som --dispatch stänger av. "
-                             "⚠️ Går inte att kombinera med terminalkurvan.")
     parser.add_argument("--terminal-segments", type=int, default=20, metavar="N",
                         help="Antal lika stora SOC-segment i terminalvärdeskurvan "
                              "(--terminal-curve). DEFAULT 20. Kurvan sätter segmentens "
@@ -1466,7 +1470,8 @@ def main() -> None:
                              "observerade pris — S(m):s kvarvarande halva cirkularitet. "
                              "Kalibreras med scripts/calibrate_terminal_curve.py mot eSetts "
                              "fysiska hydrosäsong och EC:s magasinband, båda MÄTDATA. "
-                             "⚠️ Kräver --rolling-horizon och --no-hydro-price-proxy.")
+                             "⚠️ Kräver --rolling-horizon (och därmed frysta kapaciteter, "
+                             "som alltid körs utan prisproxy).")
     parser.add_argument("--terminal-lambda-scale", default=None, metavar="ZON:α,...",
                         help="λ_zon(t) = α_zon × framåtblickande DE-LU. Behåller kontinent"
                              "prisets TIDSFORM men skalar NIVÅN per zon — en inlåst zon kan "
@@ -1588,19 +1593,6 @@ def main() -> None:
     parser.add_argument("--no-hydro-restrictions", action="store_false",
                         dest="hydro_restrictions",
                         help="Stäng av hydro-driftrestriktionerna (fri reservoardrift).")
-    parser.add_argument("--no-hydro-price-proxy", action="store_true",
-                        help="Ge reservoarvattenkraften platt VOM som marginal_cost i "
-                             "stället för zonens FAKTISKA historiska day-ahead-pris. "
-                             "Proxyn (network.py, 'water value proxy' från run23) ligger "
-                             "sedan run57 STAPLAD ovanpå det äkta endogena vattenvärdet "
-                             "och står för HELA tidsvariationen i hydrons bud. Denna "
-                             "flagga isolerar dess effekt. Default: proxyn PÅ (oförändrat).")
-    parser.add_argument("--hydro-flat-wv", type=float, default=None, metavar="EUR",
-                        help="Sätt reservoarvattenkraftens marginal_cost till ett KONSTANT "
-                             "vattenvärde (EUR/MWh) och koppla bort både proxyn och "
-                             "VOM-golvet. Enbart för robusthetstest: kör samma expansion "
-                             "vid kraftigt olika vattenvärdesnivåer och jämför p_nom_opt. "
-                             "Ett konstant WV är INTE en modellförbättring.")
     parser.add_argument("--hydro-min-hourly", type=float, default=None, metavar="FRAC",
                         help="Override på min timproduktion (andel av reservoar-p_nom). "
                              "Implicerar --hydro-restrictions. 0 = av.")
@@ -1775,10 +1767,27 @@ def main() -> None:
         args.spill_cost = (DEFAULT_SPILL_COST_DISPATCH if frozen
                            else DEFAULT_SPILL_COST_EXPANSION)
 
-    # --dispatch = KANONISK DISPATCH (run340:s mall). Att skriva ut --rolling-horizon,
-    # --terminal-curve och --no-hydro-price-proxy på varje omdispatch var både ordrikt och
-    # felbenäget: glömdes någon av dem föll körningen TYST tillbaka på en cyklisk LP med
-    # prisproxyn — tvärtemot avsikten, vilket run319 gick i. Varje del har en av-knapp.
+    # Vattenvärdes-proxyn är HELT lägesbunden och har därför ingen flagga alls
+    # (2026-08-15). EXPANSION: proxyn PÅ — hydrons bud behöver en tidsform, och utan
+    # den blir LP:t degenererat (3-års 1h utan proxy OOM-dödades). ⚠️ Det gör
+    # expansionen cirkulär: budet ankras i 2023-25 års priser, den form modellen ska
+    # förutsäga. Det är licensierat för SCENARIOJÄMFÖRELSER, inte för att läsa prisform
+    # som resultat. DISPATCH: proxyn AV — terminalkurvan är vattenvärdet, och med proxyn
+    # på ligger λ (bruttopris ~80) och marginalen (nettovattenvärde) på olika skalor.
+    #
+    # ⛔ Borttaget samtidigt: --hydro-flat-wv. Utan proxy blir mc = VOM 0,6 och dualen
+    # på lagringsbalansen fyller ut resten av sig själv — run320 ger EXAKT ett
+    # vattenvärde, 73,02, i alla zoner och timmar. Ett platt vattenvärde uppstår alltså
+    # endogent så fort proxyn är av, och att sätta NIVÅN för hand mättes som inert
+    # (run273-276: p_nom_opt rörde sig inte mellan VOM/30/60 eftersom dualen
+    # självkorrigerar). Flaggan satte ett tal som modellen sedan tog bort igen.
+    hydro_price_proxy = not (bool(args.dispatch) or bool(args.no_expansion))
+
+    # --dispatch = KANONISK DISPATCH (run340:s mall). Att skriva ut --rolling-horizon och
+    # --terminal-curve på varje omdispatch var både ordrikt och felbenäget: glömdes någon av
+    # dem föll körningen TYST tillbaka på en cyklisk LP — tvärtemot avsikten, vilket run319
+    # gick i. Varje del har en av-knapp. (Proxyn hörde till samma lista men är sedan
+    # 2026-08-15 helt lägesbunden och har ingen flagga alls.)
     # Måste ligga EFTER apply_dispatch_replay (som sätter base.dispatch) och FÖRE räckena
     # nedan, så att de validerar den färdigupplösta kombinationen.
     if args.dispatch:
@@ -1787,8 +1796,6 @@ def main() -> None:
         if (not args.no_terminal_curve and args.terminal_curve is None
                 and not args.terminal_seasonal and args.terminal_lambda is None):
             args.terminal_curve = ""      # "" → DEFAULT_PARAM_FILE = kalibrerade kurvan
-        if not args.hydro_price_proxy:
-            args.no_hydro_price_proxy = True
 
     # None = orörd. Kan inte vara en argparse-default: ett nollskilt värde läses även
     # när rullande horisont är AV, och räcket nedan skulle då fälla varje expansion.
@@ -1806,10 +1813,6 @@ def main() -> None:
         if not args.rolling_horizon:
             parser.error("--terminal-curve kräver --rolling-horizon: kurvan verkar i "
                          "FÖNSTERSLUT, och en enda cyklisk LP har inget fritt sådant.")
-        if not args.no_hydro_price_proxy:
-            parser.error("--terminal-curve kräver --no-hydro-price-proxy: med proxyn på är "
-                         "hydrons marginal_cost det historiska zonpriset, marginalen krymper "
-                         "till nettovattenvärdet, och λ på bruttoprisnivå övervärderar lagring.")
         if args.terminal_seasonal:
             parser.error("--terminal-curve och --terminal-seasonal sätter BÅDA λ:s "
                          "säsongsform (A(w) respektive S(m)) och skulle multipliceras på "
@@ -1823,11 +1826,6 @@ def main() -> None:
                          "LP, så extendable kapaciteter skulle optimeras oberoende per fönster. "
                          "Kör med --no-expansion, eller tvåpass: expansion först, sedan "
                          "--dispatch <label> --rolling-horizon.")
-        if not args.no_hydro_price_proxy:
-            print("⚠️  --rolling-horizon MED vattenvärdes-proxyn påslagen: hydros marginal_cost "
-                  "är det historiska zonpriset, så släppmarginalen är nettovattenvärdet (~18–47) "
-                  "medan terminal-λ ligger på bruttoprisnivå (~73). Reservoarerna väntas hamstra "
-                  "mot 100 % — det var felet i run91–93. Lägg till --no-hydro-price-proxy.")
 
     if args.no_voll:                      # tillbaka till slack enbart i icke-marknadszoner
         args.voll = None
@@ -2205,8 +2203,6 @@ def main() -> None:
     if args.chp_fixed_gw is not None:   flags.append(f"chpfixed-{args.chp_fixed_gw:g}gw")
     if args.market_scale is not None:   flags.append("market-scale-" + args.market_scale.replace(":", "").replace(",", "_"))
     if args.voll is not None:           flags.append(f"voll{int(args.voll)}")
-    if args.no_hydro_price_proxy:       flags.append("no-hydro-price-proxy")
-    if args.hydro_flat_wv is not None:  flags.append(f"flatwv-{args.hydro_flat_wv:g}")
     for spec in args.add_battery:       flags.append(f"battery-{spec.replace(':','_')}")
     if args.battery_extendable:         flags.append("battery-ext")
     if args.battery:                    flags.append("battery-" + "_".join(args.battery).replace(":", "_"))
@@ -2406,8 +2402,7 @@ def main() -> None:
                       solar_adds=solar_adds or None,
                       onshore_adds=onshore_adds or None,
                       offshore_adds=offshore_adds or None,
-                      hydro_price_proxy=not args.no_hydro_price_proxy,
-                      hydro_flat_wv=args.hydro_flat_wv,
+                      hydro_price_proxy=hydro_price_proxy,
                       add_cost_scenario=args.add_cost_scenario)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt

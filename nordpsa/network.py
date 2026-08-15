@@ -102,7 +102,6 @@ def build_network(
     actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
     hydro_price_proxy:       bool = True,
-    hydro_flat_wv:           float | None = None,
     soc_initial_override:    dict | None = None,
     voll:                    float | None = None,
     batteries:               list | None = None,
@@ -163,7 +162,7 @@ def build_network(
                 load[zone] = load[zone] - dh * (el_twh * 1e6 * n_years / dh_e)
 
     # zone_prices används ENBART som reservoarvattenkraftens marginal_cost (_add_hydro).
-    # hydro_price_proxy=False → platt VOM i stället; se kommentaren vid mc-tilldelningen.
+    # hydro_price_proxy=False (frysta kapaciteter) → platt VOM; se mc-tilldelningen.
     zone_prices = ({z: market_prices[z] for z in cfg["zones"] if z in market_prices}
                    if hydro_price_proxy else None)
 
@@ -175,7 +174,7 @@ def build_network(
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
-               zone_prices=zone_prices, flat_wv=hydro_flat_wv)
+               zone_prices=zone_prices)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years,
                  snapshots, synthetic_nuclear)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
@@ -325,7 +324,6 @@ def _add_hydro(
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
-    flat_wv:              float | None = None,
 ) -> None:
     mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -424,15 +422,9 @@ def _add_hydro(
         # och all TIDSVARIATION kommer från prisserien (dualen har 1-6 unika värden per
         # zon över tre år). I en 2040-expansion är det cirkulärt: dispatchen ankras till
         # den prisform modellen ska förutsäga.
-        # hydro_price_proxy=False (--no-hydro-price-proxy) ger platt VOM i stället.
-        # flat_wv (--hydro-flat-wv) sätter ett KONSTANT vattenvärde och kopplar bort
-        # både proxyn och VOM-golvet. Enda syftet är robusthetstest: kör samma
-        # expansion vid kraftigt olika vattenvärdesNIVÅER och se om p_nom_opt rör sig.
-        # Det är inte en modellförbättring — ett konstant WV är lika ofysikaliskt som
-        # det platta endogena, bara på en vald nivå.
-        if flat_wv is not None:
-            mc = float(flat_wv)
-        elif zone_prices and zone in zone_prices:
+        # hydro_price_proxy=False (dispatch-läget) ger platt VOM i stället; dualen på
+        # lagringsbalansen fyller då ut resten och ett platt vattenvärde uppstår endogent.
+        if zone_prices and zone in zone_prices:
             mc = zone_prices[zone].reindex(snapshots).ffill().clip(lower=mc_default)
         else:
             mc = mc_default
@@ -1688,7 +1680,8 @@ def hydro_terminal_value(lambda_per_unit: Dict[str, float],
     ⚠️ λ MÅSTE VARA PÅ SAMMA SKALA SOM MARGINALEN. Optimeraren håller vatten när
     λ > (λ_bus[t] − marginal_cost[t]). Med vattenvärdes-proxyn påslagen är
     marginal_cost det historiska zonpriset, marginalen krymper till nettovattenvärdet,
-    och λ på bruttoprisnivå övervärderar lagring. Kör med hydro_price_proxy=False.
+    och λ på bruttoprisnivå övervärderar lagring. Kan inte inträffa sedan proxyn är
+    lägesbunden: rullande horisont kräver frysta kapaciteter, som alltid saknar proxy.
 
     lambda_per_unit: {storage_unit: bas-λ EUR/MWh}
     cap_per_unit:    {storage_unit: volym MWh}. Krävs för K>1.
