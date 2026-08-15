@@ -63,6 +63,29 @@ DEFAULT_ADD_NUCLEAR = ["SE-S:10:201", "SE-N:10:202", "FI:10:203"]
 # 5 = ÖVRE delen av det intervallet, valt av användaren; central skattning vore 2.
 DEFAULT_VRE_CURTAILMENT_COST = 5.0
 
+# --dispatch utan --resolution. Var 1h när omdispatchen var ett finupplöst komplement
+# till en grov expansion; nu är dispatchmallen (run340) 2h och kurvan kalibrerad där.
+DEFAULT_DISPATCH_RESOLUTION = 2
+
+# --spill-cost: LÄGESBEROENDE, spegelbilden av --vre-curtailment-cost.
+#
+# EXPANSION 50: ett modelleringsräcke, ingen fysisk kostnad. Med gratis spill kan
+# optimeraren bygga överskott av vind/sol och dumpa den undanträngda vattenkraften
+# nästan gratis — systemets verkliga förmåga att absorbera VRE döljs och den
+# överinvesterar. Mätt 2026-05-31: run43 (spill 1) gav 63 TWh fantomspill och NO-S vind
+# 20,8 GW; run44 (spill 50) gav 0 spill och 13,1 GW, alltså −37 %.
+#
+# DISPATCH 0,1: med frysta kapaciteter finns inget investeringsbeslut att snedvrida, och
+# då DUBBELRÄKNAR 50 vattnets värde. Kostnaden för att spilla ÄR det förlorade vattnets
+# värde, och det bär LP:t redan som skuggpriset på SOC (λ ≈ 73-80). Vid taket har
+# marginellt vatten noll lagringsvärde, så valet står mellan att producera till priset p
+# eller betala c; modellen producerar så länge p > −c. Med c = 50 kör den alltså hydro
+# ned till −50 EUR/MWh hellre än att spilla, vilket ingen verklig operatör gör — den
+# förbileder. ⚠️ Verkningslöst i praktiken i dagens körningar (spill = 0 och priset ligger
+# på 52-74 i alla timmar över 90 % fyllnad), så ändringen är principiell, inte numerisk.
+DEFAULT_SPILL_COST_EXPANSION = 50.0
+DEFAULT_SPILL_COST_DISPATCH  = 0.1
+
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
 BASELINE_DEFAULTS_TAG = "baseline-v1 (run250-konfen)"
@@ -75,7 +98,11 @@ BASELINE_DEFAULTS_TAG = "baseline-v1 (run250-konfen)"
 PRE_BASELINE_DEFAULTS = {
     "hydro_restrictions":      (False, ("--hydro-restrictions", "--no-hydro-restrictions")),
     "add_heat":                (False, ("--add-heat", "--no-add-heat")),
-    "spill_cost":              (None,  ("--spill-cost",)),
+    # spill_cost hörde hit när defaulten var 50 i båda lägena. Sedan den blev
+    # LÄGESBEROENDE tas den alltid från det nya kommandot (se apply_dispatch_replay), och
+    # en oangiven flagga löses till DEFAULT_SPILL_COST_DISPATCH = 0,1 — exakt det värde
+    # den gamla återställningen gav via network.py:s fallback. Posten kunde alltså aldrig
+    # längre fälla ut och är borttagen.
     "cost_scenario":           (None,  ("--cost-scenario",)),
     "demand_scenario":         (None,  ("--demand-scenario",)),
     "onwind_capfac_increase":  (0.0,   ("--onwind-capfac-increase",)),
@@ -1075,7 +1102,7 @@ def apply_dispatch_replay(parser, args):
             print(f"--dispatch: {label} saknar 'defaults:'-rad (gjord före "
                   f"baseline-omläggningen) — återställer {', '.join(sorted(restored))} "
                   f"till dåtidens default")
-    base.resolution = args.resolution or 1    # default 1h för omdispatch
+    base.resolution = args.resolution or DEFAULT_DISPATCH_RESOLUTION
     base.output     = args.output
     base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
@@ -1101,6 +1128,12 @@ def apply_dispatch_replay(parser, args):
         base.hydro_min_hourly = args.hydro_min_hourly
     if args.hydro_min_daily is not None:
         base.hydro_min_daily = args.hydro_min_daily
+    # --spill-cost betyder OLIKA SAKER i de två lägena (räcke mot fantomabsorption i
+    # expansion, fysisk kostnad i dispatch), så källans värde får inte läcka in och ett
+    # nytt värde måste bita. Utan raden läses den ur KÄLLANS argv och `--dispatch X
+    # --spill-cost 0.1` blir tyst verkningslöst — samma fällklass som run319. None här
+    # betyder "orörd" och löses ut lägesberoende efter denna funktion.
+    base.spill_cost = args.spill_cost
     # Rullande horisont och terminalvärdet hör HELT till omdispatchen. Källans argv kan
     # aldrig innehålla dem — rullande är dispatch-only, så en expansionskörning förbjuder
     # dem. Utan dessa rader blir de tyst verkningslösa och körningen faller tillbaka på
@@ -1112,6 +1145,9 @@ def apply_dispatch_replay(parser, args):
     base.rolling_lookahead_weeks = args.rolling_lookahead_weeks
     base.terminal_curve          = args.terminal_curve
     base.terminal_segments       = args.terminal_segments
+    base.no_rolling_horizon      = args.no_rolling_horizon
+    base.no_terminal_curve       = args.no_terminal_curve
+    base.hydro_price_proxy       = args.hydro_price_proxy
     base.terminal_seasonal       = args.terminal_seasonal
     base.terminal_lambda         = args.terminal_lambda
     base.terminal_lambda_scale   = args.terminal_lambda_scale
@@ -1356,10 +1392,14 @@ def main() -> None:
                              "2^VALUE — mot 'excessively large row bounds' när lager i MWh ger "
                              "RHS ~6e7 och IPM:s dual divergerar). Typ tolkas automatiskt "
                              "(int/float/bool/sträng). Kan anges flera gånger.")
-    parser.add_argument("--spill-cost", type=float, default=50.0, metavar="EUR",
-                        help="Hydro-spillkostnad (EUR/MWh). DEFAULT 50 (kanonisk baseline) — "
-                             "bryter LP-degeneracy i expansionskörningar. Sätt 0.1 för det "
-                             "gamla beteendet (tillåter fritt spill vid full reservoar).")
+    parser.add_argument("--spill-cost", type=float, default=None, metavar="EUR",
+                        help="Hydro-spillkostnad (EUR/MWh). LÄGESBEROENDE default: 50 i "
+                             "EXPANSION (räcke — gratis spill låter modellen dumpa undanträngd "
+                             "vattenkraft och överinvestera i VRE: run43 63 TWh fantomspill och "
+                             "NO-S vind 20,8 GW, mot run44:s 0 och 13,1) och 0.1 med FRYSTA "
+                             "kapaciteter (--dispatch/--no-expansion), där 50 skulle dubbelräkna "
+                             "vattnets värde — det bärs redan av SOC-skuggpriset. Explicit värde "
+                             "vinner i båda lägena.")
     parser.add_argument("--rolling-horizon", action="store_true",
                         help="Lös perioden i sekventiella fönster (--rolling-weeks) med "
                              "icke-cyklisk SOC, carry-over av slut-SOC och terminalvärde "
@@ -1369,7 +1409,7 @@ def main() -> None:
                              "⚠️ Kör med --no-hydro-price-proxy — annars är λ på bruttoprisnivå "
                              "medan marginalen är nettovattenvärdet, och reservoarerna hamstrar "
                              "(felet i run91–93).")
-    parser.add_argument("--rolling-weeks", type=int, default=4, metavar="N",
+    parser.add_argument("--rolling-weeks", type=int, default=1, metavar="N",
                         help="Fönsterlängd i veckor för --rolling-horizon (default 4).")
     parser.add_argument("--terminal-seasonal", action="store_true",
                         help="Byt λ:s TIDSFORM från DE-LU:s framåtpris till den handsatta "
@@ -1378,7 +1418,7 @@ def main() -> None:
                              "det modellen ska förutsäga. ⚠️ NIVÅN (base_level_eur_mwh) är "
                              "fortfarande zonens observerade medelpris — bara halva "
                              "cirkulariteten försvinner.")
-    parser.add_argument("--rolling-lookahead-weeks", type=int, default=0, metavar="N",
+    parser.add_argument("--rolling-lookahead-weeks", type=int, default=None, metavar="N",
                         help="ÄKTA RECEDING HORIZON (väg E): lös varje fönster med N "
                              "veckors extra look-ahead men behåll bara den första delen. "
                              "Default 0 = icke-överlappande fönster (nuvarande beteende), "
@@ -1386,6 +1426,17 @@ def main() -> None:
                              "måste bära säsongssignalen. Med look-ahead gör framsynen det "
                              "mesta av jobbet och känsligheten för terminalkalibreringen "
                              "bör falla — det är själva testet.")
+    parser.add_argument("--expansion", action="store_true",
+                        help="Kanonisk EXPANSION. Är redan default när --dispatch "
+                             "utelämnas; flaggan finns för att skript ska kunna säga "
+                             "det uttryckligen. Kan inte kombineras med --dispatch.")
+    parser.add_argument("--no-rolling-horizon", action="store_true",
+                        help="Stäng av den rullande horisonten som --dispatch slår på.")
+    parser.add_argument("--no-terminal-curve", action="store_true",
+                        help="Stäng av terminalkurvan som --dispatch slår på.")
+    parser.add_argument("--hydro-price-proxy", action="store_true",
+                        help="Sätt TILLBAKA prisproxyn, som --dispatch stänger av. "
+                             "⚠️ Går inte att kombinera med terminalkurvan.")
     parser.add_argument("--terminal-segments", type=int, default=20, metavar="N",
                         help="Antal lika stora SOC-segment i terminalvärdeskurvan "
                              "(--terminal-curve). DEFAULT 20. Kurvan sätter segmentens "
@@ -1682,6 +1733,9 @@ def main() -> None:
                              "(t.ex. '0.7') eller per zon (t.ex. 'FI:0.5,NO-S:0.8,SE-S:0.6,DK:0.7'). "
                              "Appliceras efter --effective-ntc om båda anges.")
     args = parser.parse_args()
+    if args.expansion and args.dispatch:
+        parser.error("--expansion och --dispatch är varandras motsatser: den ena "
+                     "optimerar kapaciteter, den andra fryser dem.")
 
     if args.dispatch:                          # återspela källkörningens system-argv
         args = apply_dispatch_replay(parser, args)
@@ -1706,6 +1760,34 @@ def main() -> None:
     if args.vre_curtailment_cost is None:
         frozen = bool(args.dispatch) or bool(args.no_expansion)
         args.vre_curtailment_cost = DEFAULT_VRE_CURTAILMENT_COST if frozen else 0.0
+
+    # --spill-cost: None = orörd → lägesberoende default (samma sentinel-mönster och samma
+    # skäl att den inte kan vara en argparse-default: värdet beror på om kapaciteterna är
+    # frysta, vilket avgörs först efter apply_dispatch_replay).
+    if args.spill_cost is None:
+        frozen = bool(args.dispatch) or bool(args.no_expansion)
+        args.spill_cost = (DEFAULT_SPILL_COST_DISPATCH if frozen
+                           else DEFAULT_SPILL_COST_EXPANSION)
+
+    # --dispatch = KANONISK DISPATCH (run340:s mall). Att skriva ut --rolling-horizon,
+    # --terminal-curve och --no-hydro-price-proxy på varje omdispatch var både ordrikt och
+    # felbenäget: glömdes någon av dem föll körningen TYST tillbaka på en cyklisk LP med
+    # prisproxyn — tvärtemot avsikten, vilket run319 gick i. Varje del har en av-knapp.
+    # Måste ligga EFTER apply_dispatch_replay (som sätter base.dispatch) och FÖRE räckena
+    # nedan, så att de validerar den färdigupplösta kombinationen.
+    if args.dispatch:
+        if not args.no_rolling_horizon:
+            args.rolling_horizon = True
+        if (not args.no_terminal_curve and args.terminal_curve is None
+                and not args.terminal_seasonal and args.terminal_lambda is None):
+            args.terminal_curve = ""      # "" → DEFAULT_PARAM_FILE = kalibrerade kurvan
+        if not args.hydro_price_proxy:
+            args.no_hydro_price_proxy = True
+
+    # None = orörd. Kan inte vara en argparse-default: ett nollskilt värde läses även
+    # när rullande horisont är AV, och räcket nedan skulle då fälla varje expansion.
+    if args.rolling_lookahead_weeks is None:
+        args.rolling_lookahead_weeks = 3 if args.rolling_horizon else 0
 
     if args.rolling_lookahead_weeks and not args.rolling_horizon:
         parser.error("--rolling-lookahead-weeks kräver --rolling-horizon.")
@@ -2080,6 +2162,9 @@ def main() -> None:
     if args.dispatch:                   flags.append(f"dispatch-{args.dispatch}")
     if args.low_hydro is not None:      flags.append(f"lowhydro-{args.low_hydro:g}")
     if args.vre_curtailment_cost:       flags.append(f"vrecurt-{args.vre_curtailment_cost:g}")
+    # Alltid med: defaulten är lägesberoende, så utan raden går en körnings spillkostnad
+    # bara att läsa ur console.log eller gissa ur källans ålder.
+    flags.append(f"spill-{args.spill_cost:g}")
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")

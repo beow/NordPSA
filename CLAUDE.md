@@ -32,6 +32,27 @@ python scripts/run_model.py --year 2024 --output run02_2024only     # baseline, 
 python scripts/run_model.py --resolution 3 --output run03_coarse    # coarser, everything else baseline
 ```
 
+**The bare `--dispatch` runs the canonical dispatch template** (the configuration of `run340_minh005_seg20_2h`) — capacities frozen from the source expansion run, rolling horizon 1+3 weeks, the calibrated terminal water-value curve, and no price proxy:
+
+```bash
+python scripts/run_model.py --output run01_expansion                      # kanonisk EXPANSION
+python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kanonisk DISPATCH
+```
+
+`--dispatch` implies five things that previously had to be spelled out on every command. Forgetting any of them made the run fall back *silently* to a cyclic LP with the price proxy — the opposite of what was intended, which is exactly the trap run319 fell into. Each has an off-switch:
+
+| implied by `--dispatch` | off-switch |
+|---|---|
+| `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
+| `--terminal-curve` = `config/terminal_curve_2040_calibrated.yaml` | `--no-terminal-curve` |
+| `--no-hydro-price-proxy` (the curve *is* the water value) | `--hydro-price-proxy` |
+| resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
+| `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
+
+`--expansion` exists as an explicit synonym for "no `--dispatch`"; it changes nothing but lets scripts say which mode they mean, and errors if combined with `--dispatch`.
+
+⚠️ **Reproducing dispatch runs made before this change** (run316 and older) needs `--no-rolling-horizon --no-terminal-curve --hydro-price-proxy --resolution 2 --hydro-min-hourly 0.10` — verified to reproduce run316's flag string exactly. This follows the same precedent as `--vre-curtailment-cost`: new defaults apply to newly typed commands, and older runs are reproduced by naming the old values.
+
 **Run discipline:** commit *after* a successful simulation, not before. This ensures only good runs are traced to code state. Always propose the commit message and wait for user approval before committing. Name the output directory in the commit message so results are traceable:
 ```bash
 python scripts/run_model.py --output run02_fleet_factors
@@ -110,7 +131,7 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 | Setting | Default | Off-switch |
 |---|---|---|
 | resolution | 2h (`snapshots.resolution_hours` in `zones.yaml`) | `--resolution N` |
-| `--spill-cost` | 50 EUR/MWh | `--spill-cost 0.1` |
+| `--spill-cost` | 50 EUR/MWh (expansion; 0.1 med frysta kapaciteter — se nedan) | `--spill-cost N` |
 | `--cost-scenario` | `svk_2040` | `--cost-scenario none` |
 | `--demand-scenario` | `svk_2040_mm` | `--demand-scenario none` |
 | `--add-heat` | ON | `--no-add-heat` |
@@ -137,6 +158,17 @@ Two traps this created, both handled in `scripts/run_model.py`:
 - **`--dispatch` replays a source run's argv**, which was written against whatever defaults existed then. Replaying a pre-change run unmodified would silently inject the new defaults (e.g. give run240 hydro restrictions it never had). `write_run_meta` therefore stamps a `defaults:` line (`BASELINE_DEFAULTS_TAG`); `apply_dispatch_replay` restores `PRE_BASELINE_DEFAULTS` only for source runs *lacking* that line. Runs made after the change keep today's defaults.
 
 `--resolution` deliberately stays `default=None` in argparse: `apply_dispatch_replay` relies on `args.resolution or 1` to keep redispatch at 1h, so the 2h baseline lives in config instead.
+
+**`--spill-cost` is mode-dependent: 50 in expansion, 0.1 with frozen capacities (since 2026-08-15).** It is the mirror image of `--vre-curtailment-cost` — a modelling guardrail in one mode and a physical cost in the other — and an explicit value wins in both.
+
+- **Expansion 50 = guardrail, not a real cost.** With free spill the optimizer can build excess wind/solar and dump the displaced hydro almost for nothing, so the system's true ability to absorb VRE is hidden and it overinvests. Measured 2026-05-31: run43 (spill 1) gave 63 TWh phantom spill and NO-S wind 20.8 GW; run44 (spill 50) gave 0 spill and 13.1 GW — **−37 %**.
+- **Dispatch 0.1, because 50 double-counts the value of water.** With frozen capacities there is no investment decision to distort, and the cost of spilling *is* the value of the water lost — already carried by the LP as the shadow price on SOC (λ ≈ 73–80). At the ceiling marginal water has zero storage value, so the choice is produce at price *p* or pay *c*; the model produces as long as `p > −c`. At c = 50 it runs hydro down to **−50 EUR/MWh** rather than spill, which no real operator does — they bypass.
+- ⚠️ **Empirically inert, so the change is principled rather than numerical — measured, not assumed.** Spill is 0.0000 TWh in every run in the terminal-curve track (run316–run345), max SOC reaches 94 % (run340) / 99.9 % (run320 NO-S), and in *all* hours above 90 % fill the price sits at 52–74 EUR/MWh with **zero** hours below 5. The fingerprint of the double-count — nearly full reservoir *and* collapsed price *and* hydro running hard — appears nowhere.
+- **A/B `run346_spillcost01_2h` vs `run344_default_dispatch_2h`** (identical except 50 → 0.1): `hydro_spill.csv` **bit-identical** (0 both ways), zone prices move ≤ 0.018 EUR/MWh in the mean, negative-hour counts identical to the hour, hydro 531.91 → 531.96 TWh, v/s SE 1.547 → 1.548 · NO 2.021 → 2.017 · FI 0.989 → 0.992, facit score 0.4185 → 0.4189, drift −1.25 → −1.30 TWh. The residual differences are **degenerate-LP tie-breaking, not behaviour**: since spill is 0 in both, the coefficient contributes nothing to either objective and only changes which optimal vertex the solver reports. Window objectives sum to −1.041535e12 vs −1.041483e12 (0.005 %); note the rolling horizon is a *sequence* of coupled LPs (SOC carries over), so the totals have no optimality relation to each other and a different tie-break in one window shifts the next window's starting point.
+- ⛔ **Falsified by the same A/B:** the hypothesis that a high spill cost pushes production *earlier* (the known ~5-week phase error, v49 against facit's v0.6). The first harmonic of weekly production is **v49.2, amplitude 0.458, in both runs** — unmoved to the first decimal. The phase error is not spill-driven.
+- ⚠️ Note the model **under-spills relative to reality**: Ek Fälth et al. put real annual production loss from bypass spill at 0.12–0.22 %, the model at 0.000 %.
+
+Two traps this closed: `--spill-cost` was **not** copied from the new command in `apply_dispatch_replay`, so `--dispatch X --spill-cost 0.1` was *silently ignored* (the run319 class of trap); and the flag did not appear in the `flaggor:` line of `run_meta.txt`, so a run's spill cost could only be read from `console.log`. Both fixed. The `PRE_BASELINE_DEFAULTS` entry for `spill_cost` was removed as unreachable — the new dispatch default 0.1 is exactly what its restore path produced via `network.py`'s `.get(..., 0.1)` fallback.
 
 **IPM with crossover:** Solver must use `run_crossover: "on"` for capacity expansion runs. Without crossover, p_nom_opt stays near p_nom_min even when investment is profitable (interior-point primal solution, not a vertex).
 
@@ -167,12 +199,14 @@ This matters because the endogenous water value is nearly constant (1–6 unique
 
 | Constraint | Form | Default |
 |---|---|---|
-| `min_hourly_frac` | `p_dispatch[t] ≥ f × p_nom` | 0.10 |
+| `min_hourly_frac` | `p_dispatch[t] ≥ f × p_nom` | 0.05 |
 | `min_daily_frac` | `Σ_day p·w ≥ f × p_nom × H_day` | 0.20 |
 | `max_weekly_frac` | `Σ_week p·w ≤ f × p_nom × H_week` | 0.77 |
 | `bypass_spill` | `Σ_week spill·w ≥ κ × (Σ_week p·w − threshold)` | off |
 
 Purpose: stop the LP from (a) shutting hydro off entirely through long low-price periods (small river reservoirs would overflow) and (b) running at full power week after week — a common ELLI-type artefact. Window sums use the actual `snapshot_weightings`, so they are correct at 1h/2h/3h and partial windows at the series edges are not over-tightened. Constraint names are prefixed `custom-`.
+
+**⚠️ `min_hourly_frac` and `min_daily_frac` are LOCKED (2026-08-14) — do not change without a new measurement.** They were calibrated against hydro's *bid curve* in observed data (production vs price, adelsfors.se June 2026, SE1+SE2), which is a different observable from the seasonal ratio. `min_hourly_frac` 0.10 → **0.05**: at 0.10 the model ran 3.3 GW in SE-N at zero price against ~2.0 observed; at 0.05 it runs 2.78 and the mean error below 10 EUR/MWh falls 1.40 → 0.89 GW. The remainder is *run-of-river* (2.34 GW in June), which this parameter does not control. It costs 0.09 in facit score (0.338 → 0.425) — the hourly floor and the seasonal measure pull in opposite directions, and the observed behaviour won. `min_daily_frac` stays at **0.20**: run341 (0.10) and run342 (0.15) tested and **rejected** — the daily floor does not bind at low prices at all (production below 40 EUR/MWh is identical at 2.78 GW for 0.10/0.15/0.20), it binds in the 40–70 mid-range where reality produces *even more* than the model, so relaxing it worsened the fit (MAE over 20–60 EUR/MWh: 1.96 → 2.21 → 2.28) and drove reservoir drift positive (−1.0 → +2.6 → +3.7 TWh, i.e. hoarding). Neither value comes from Ek Fälth et al. — they are modelling guardrails; only `max_weekly_frac_by_zone` and `bypass_spill` have a source.
 
 With cyclic SOC, annual production equals inflow, so the constraints are mutually consistent only if `min_daily_frac ≤ inflow/(p_nom×H) ≤ max_weekly_frac`. `hydro_operation_bounds()` reports that ratio per zone and `run_model.py` prints it plus warnings before solving. For 2024 the ratio is 0.46–0.55 in all zones, comfortably inside [0.20, 0.77].
 
