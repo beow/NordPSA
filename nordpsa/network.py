@@ -102,6 +102,7 @@ def build_network(
     actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
     hydro_price_proxy:       bool = True,
+    hydro_flat_wv:           float | None = None,
     soc_initial_override:    dict | None = None,
     voll:                    float | None = None,
     batteries:               list | None = None,
@@ -174,7 +175,7 @@ def build_network(
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
-               zone_prices=zone_prices)
+               zone_prices=zone_prices, flat_wv=hydro_flat_wv)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years,
                  snapshots, synthetic_nuclear)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
@@ -324,6 +325,7 @@ def _add_hydro(
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
+    flat_wv:              float | None = None,
 ) -> None:
     mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -423,7 +425,14 @@ def _add_hydro(
         # zon över tre år). I en 2040-expansion är det cirkulärt: dispatchen ankras till
         # den prisform modellen ska förutsäga.
         # hydro_price_proxy=False (--no-hydro-price-proxy) ger platt VOM i stället.
-        if zone_prices and zone in zone_prices:
+        # flat_wv (--hydro-flat-wv) sätter ett KONSTANT vattenvärde och kopplar bort
+        # både proxyn och VOM-golvet. Enda syftet är robusthetstest: kör samma
+        # expansion vid kraftigt olika vattenvärdesNIVÅER och se om p_nom_opt rör sig.
+        # Det är inte en modellförbättring — ett konstant WV är lika ofysikaliskt som
+        # det platta endogena, bara på en vald nivå.
+        if flat_wv is not None:
+            mc = float(flat_wv)
+        elif zone_prices and zone in zone_prices:
             mc = zone_prices[zone].reindex(snapshots).ffill().clip(lower=mc_default)
         else:
             mc = mc_default
