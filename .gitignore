@@ -51,3 +51,15 @@ docs/*.pdf
 # Claude Code, lokala artefakter
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Arbetsmaterial som medvetet lämnas utanför versionshanteringen (2026-08-16).
+# Filerna ligger kvar på disk — det här döljer dem bara ur `git status`.
+# applicerade patchar; koden är committad, filen är historik
+patches/
+# SDDP-spårets CSV:er (spåret parkerat, se minnet)
+sddp/
+# kalibreringssvepets mellansteg; den kalibrerade vinnaren är committad
+config/archive_terminal_curve_sweeps/
+# skärmklipp och valideringsbilder
+docs/*.png
+
