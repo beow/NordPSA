@@ -100,15 +100,25 @@ def build_cmd(prefix, idx, name, desc, extra, label, res, common):
 
 
 def build_dispatch_cmd(exp_out, prefix, idx, name, res_disp, pin_freq, label):
-    """1h (res_disp) pinnad omdispatch av expansionskörningen: kapaciteter frysta till
-    dess p_nom_opt och hydro-SOC pinnad mot dess lagerbana i fönster om pin_freq."""
+    """Omdispatch av expansionskörningen med den KANONISKA dispatchmallen: kapaciteter
+    frysta till dess p_nom_opt, rullande horisont 1+3 veckor, kalibrerad terminalkurva,
+    ingen prisproxy. Allt det implicerar `--dispatch` sedan 2026-08-14.
+
+    ⛔ SOC-PINNINGEN BORTTAGEN 2026-08-16. Den var både verkningslös och skadlig:
+      - VERKNINGSLÖS: run_model.py har `if args.rolling_horizon: ... elif args.soc_pin_from:`
+        och --dispatch slår på rullande horisont, så pinnen vann aldrig — men run_meta
+        skrev ut den ändå, alltså ett protokoll över något som inte hände.
+      - SKADLIG historiskt: i batch 24 föll 5 av 8 pinnade dispatcher på infeasibility
+        (MS-pinnen i fönster 14; hård QS-pin gav IPM primal infeasible i fönster 5).
+        Den rullande dispatchen har i stället klarat 157/157 fönster i fem körningar i rad.
+    `pin_freq` behålls i signaturen för bakåtkompatibilitet men används inte.
+    """
     out = f"run{prefix}{idx}_{name}_dispatch_{res_disp}h"
-    desc = (f"[batch {prefix}] {res_disp}h omdispatch av {exp_out} (frysta p_nom_opt) "
-            f"med hydro-SOC pinnad mot dess lagerbana, fonster {pin_freq}"
+    desc = (f"[batch {prefix}] {res_disp}h omdispatch av {exp_out} (frysta p_nom_opt), "
+            f"kanonisk mall: rullande 1+3 v, kalibrerad terminalkurva, ingen prisproxy"
             + (f"; {label}" if label else ""))
     cmd = [sys.executable, "scripts/run_model.py",
            "--dispatch", exp_out, "--resolution", str(res_disp),
-           "--soc-pin-from", exp_out, "--soc-pin-freq", pin_freq,
            "--output", out, "--desc", desc]
     return out, cmd
 
@@ -205,7 +215,7 @@ def main():
 
     print(f"Batch {args.prefix}: {len(jobs)} pipelines @ {args.resolution}h, "
           f"samtidighet {args.concurrency}"
-          + (f" + {args.dispatch_resolution}h pinnad dispatch ({args.dispatch_pin_freq})"
+          + (f" + {args.dispatch_resolution}h rullande dispatch (kanonisk mall)"
              if args.dispatch_resolution else "")
           + (f", etikett: {args.label}" if args.label else ""))
     for out, cmd, follow in jobs:

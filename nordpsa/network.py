@@ -194,6 +194,7 @@ def build_network(
     _add_costed_vre(n, offshore_adds, cfg, vre_profiles, r, n_years,
                     "wind_offshore", "wind_offshore", "offshore add", add_oc_scale, add_cost_scenario)
     _add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
+    _add_industrial_dsr(n, cfg)
     _add_heat(n, cfg, heat_demand, r, n_years)
     _add_chp(n, cfg, heat_demand, r, n_years)
     _add_chp_fixed(n, cfg, thermal_profile)
@@ -788,10 +789,21 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
         h2bus = f"{zone} H2"
         n.add("Bus", h2bus, carrier="H2")
 
-        # Elektrolys: bus0=el, bus1=H2; p_nom i MW_el
+        # Elektrolys: bus0=el, bus1=H2; p_nom i MW_el.
+        # ⚠️ Sedan 2026-08-16 dimensioneras den ur cfg['electrolyser_overcapacity'] och
+        # LÅSES (icke-extendable) → sex kapacitetsvariabler färre i LP:t. LMA:s 50 %
+        # överkapacitet gäller BARA typ 2: typ 1 är oflexibel per definition och typ 3:s
+        # last kan bara trappas NED, så extra kapacitet där kan aldrig användas.
         elc     = zc.get("electrolyser", {})
         el_ext  = bool(elc.get("extendable", False))
         el_pnom = float(elc.get("p_nom_mw", 0.0))
+        _oc = cfg.get("electrolyser_overcapacity")
+        if _oc:
+            _sp = (cfg.get("hydrogen_split") or {}).get(zone, {"type2": 1.0})
+            _d  = float(zc.get("demand_mw", 0.0))
+            el_pnom = (float(_oc.get("type2", 1.5)) * _d * float(_sp.get("type2", 1.0))
+                       / el_c["efficiency"])
+            el_ext  = False
         el_pmax = float(elc.get("p_nom_max_mw", 50000.0))
         n.add("Link", f"{zone} electrolyser",
               bus0=zone, bus1=h2bus, carrier="electrolyser",
@@ -816,12 +828,39 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
               e_cyclic=True,
               capital_cost=ann_kwh(st_overn, st_c) if st_ext else 0.0)
 
-        # Baslast (konstant MW) + slack (omött H2)
+        # ── LMA2026:s tre kategorier (cfg['hydrogen_split']) ──────────────────
+        # typ 1 oflexibel · typ 2 lagerflexibel · typ 3 elektrobränslen med pristrappa.
+        # Utan split-block faller allt på typ 2 = det gamla beteendet.
         demand = float(zc.get("demand_mw", 0.0))
-        n.add("Load", f"{zone} H2 load", bus=h2bus, p_set=demand)
+        sp     = (cfg.get("hydrogen_split") or {}).get(zone, {"type1": 0.0, "type2": 1.0,
+                                                              "type3": 0.0})
+        tot_sh = sum(float(sp.get(k, 0.0)) for k in ("type1", "type2", "type3"))
+        if abs(tot_sh - 1.0) > 1e-6:
+            raise SystemExit(f"hydrogen_split[{zone}] summerar till {tot_sh:.4f}, ska vara 1,0 "
+                             "— annars går H2-balansen inte att sluta")
+        d1 = demand * float(sp.get("type1", 0.0))
+        d2 = demand * float(sp.get("type2", 0.0))
+        d3 = demand * float(sp.get("type3", 0.0))
+
+        # TYP 1 — oflexibel: konstant EL-last direkt på elbussen. Ingen H2-buss behövs;
+        # elektrolysören skulle ändå tvingas följa lasten exakt varje timme (inget lager,
+        # inget alternativ), så en länk vore 26 000 låsta variabler utan frihetsgrad.
+        if d1 > 0:
+            n.add("Load", f"{zone} H2 inflex", bus=zone, p_set=d1 / el_c["efficiency"])
+
+        # TYP 2 — lagerflexibel: last på H2-bussen, lagret ovan betjänar den.
+        n.add("Load", f"{zone} H2 load", bus=h2bus, p_set=d2)
         n.add("Generator", f"{zone} H2 slack",
               bus=h2bus, carrier="H2 slack",
               p_nom=1e6, marginal_cost=mc_slack)
+
+        # TYP 3 — elektrobränslen: EGEN buss utan lager. Måste vara separerad, annars kan
+        # lagret laddas med "vätgas som inte producerades" och LP:t hittar arbitraget
+        # shed → lagra → slipp H2-slacken; dessutom sätter trappan ett pristak som
+        # dödar lagrets normala arbitrage. Ingen 3000-slack här: trancherna täcker per
+        # definition 100 % av lasten, så en felsummering ska bli INFEASIBLE, inte döljas.
+        if d3 > 0:
+            _add_h2_electrofuel(n, cfg, zone, d3, el_c["efficiency"])
 
         # Valfri turbin: bus0=H2, bus1=el; config p_nom i MW_el_ut → p_nom(H2)=el/η
         tbc      = zc.get("turbine")
@@ -839,9 +878,94 @@ def _add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
                   capital_cost=(ann_kw(tb_c) * eta) if tb_ext else 0.0)
             turb_txt = f"turbin {p_el:.0f} MW_el (η={eta})"
 
-        print(f"  → H2 {zone}: last {demand:.0f} MW, "
-              f"elektrolys {el_pnom:.0f} MW_el{' ext' if el_ext else ''} (η={el_c['efficiency']}), "
-              f"lager {e_nom:.0f} MWh{' ext' if st_ext else ''} ({st_overn:g} €/kWh), {turb_txt}")
+        print(f"  → H2 {zone}: last {demand:.0f} MW_H2 "
+              f"(typ1 {d1:.0f} oflex / typ2 {d2:.0f} lager / typ3 {d3:.0f} elektrobränsle), "
+              f"elektrolys typ2 {el_pnom:.0f} MW_el{' ext' if el_ext else ''} "
+              f"(η={el_c['efficiency']}), lager {e_nom:.0f} MWh{' ext' if st_ext else ''} "
+              f"({st_overn:g} €/kWh), {turb_txt}")
+
+
+def _add_industrial_dsr(n: pypsa.Network, cfg: dict) -> None:
+    """Industriell efterfrågeflexibilitet som pristrappa på elbussen (LMA2026).
+
+    Shed-generatorer med marginal_cost = stegets prisnivå: LP:t "köper" dem i stället för
+    att producera när zonpriset passerar steget, vilket är precis en bortkopplad last.
+    Egen carrier "DSR" så att de INTE räknas som produktion i resultatstatistiken.
+
+    ⚠️ Steg 4 (3000 €/MWh) byggs medvetet INTE: den befintliga slack-generatorn ligger
+    redan på MC_SLACK 3000 på varje buss och biter på all last. En fjärde tranch där vore
+    både dubbelräkning och degenererad med slacken (LP:t indifferent → solverbrus).
+    """
+    dc = cfg.get("industrial_dsr") or {}
+    if not dc.get("enabled", False):
+        return
+    steps  = list(dc.get("price_steps_eur_per_mwh", [100, 250, 500]))
+    shares = list(dc.get("step_shares", [0.25, 0.25, 0.25]))
+    if len(steps) != len(shares):
+        raise SystemExit("industrial_dsr: price_steps och step_shares olika längd")
+    if "DSR" not in n.carriers.index:
+        n.add("Carrier", "DSR")
+    tot = 0.0
+    for zone, vol in (dc.get("volume_mw") or {}).items():
+        if zone not in n.buses.index:
+            print(f"  Varning: DSR-zon {zone} saknas — hoppar över")
+            continue
+        for k, (thr, sh) in enumerate(zip(steps, shares), start=1):
+            n.add("Generator", f"{zone} DSR{k}",
+                  bus=zone, carrier="DSR",
+                  p_nom=float(sh) * float(vol),
+                  marginal_cost=float(thr))
+        tot += sum(shares) * float(vol)
+    print(f"  → industriell DSR: {tot:.0f} MW i {len(steps)} steg "
+          f"({', '.join(f'{s:.0%}@{t:g}' for s, t in zip(shares, steps))} €/MWh); "
+          f"steg vid VOLL byggs ej (slacken finns redan)")
+
+
+def _add_h2_electrofuel(n: pypsa.Network, cfg: dict, zone: str, demand_h2: float,
+                        eta_el: float) -> None:
+    """Elektrobränslen (LMA2026 typ 3): egen H2-buss med pristrappa i stället för lager.
+
+    Trappan är en FÖRBRUKNINGSREDUKTION: när elpriset passerar tröskeln stängs en andel
+    av produktionen av. I LP:t går det inte att göra p_nom prisberoende, så avstängningen
+    uttrycks som ett ALTERNATIV till att köra — shed-generatorer på H2-bussen:
+
+        elektrolysörens kostnad för 1 MWh_H2 = p_el / η
+        shed-tranch k väljs när  p_el / η > tröskel_k / η  ⇔  p_el > tröskel_k
+
+    Generatorerna ÄR slacken. Utan dem kan H2-balansen inte slutas när elektrolysören
+    stängs av och LP:t blir infeasible. Ingen 3000-slack läggs till: andelarna summerar
+    till 1,0, så balansen kan alltid slutas — och en felsummering ska då falla ut som
+    infeasible i stället för att tyst absorberas till 3000 €/MWh.
+    """
+    he = cfg.get("hydrogen_elastic") or {}
+    if not he.get("enabled", False):
+        return
+    steps  = list(he.get("price_steps_eur_per_mwh_el", [50, 100, 440]))
+    shares = list(he.get("shed_shares", [0.30, 0.30, 0.40]))
+    if len(steps) != len(shares):
+        raise SystemExit("hydrogen_elastic: price_steps och shed_shares olika längd")
+    if abs(sum(shares) - 1.0) > 1e-6:
+        raise SystemExit(f"hydrogen_elastic.shed_shares summerar till {sum(shares):.4f}, "
+                         "ska vara 1,0 — annars kan H2-balansen inte slutas vid höga priser")
+
+    bus = f"{zone} H2ef"
+    for car in ("H2", "electrolyser", "H2 shed"):
+        if car not in n.carriers.index:
+            n.add("Carrier", car)
+    n.add("Bus", bus, carrier="H2")
+    n.add("Load", f"{zone} H2ef load", bus=bus, p_set=demand_h2)
+
+    oc = float((cfg.get("electrolyser_overcapacity") or {}).get("type3", 1.0))
+    n.add("Link", f"{zone} electrolyser ef",
+          bus0=zone, bus1=bus, carrier="electrolyser",
+          efficiency=eta_el, p_nom=oc * demand_h2 / eta_el,
+          p_nom_extendable=False, capital_cost=0.0)
+
+    for k, (thr, sh) in enumerate(zip(steps, shares), start=1):
+        n.add("Generator", f"{zone} H2ef shed{k}",
+              bus=bus, carrier="H2 shed",
+              p_nom=sh * demand_h2,
+              marginal_cost=float(thr) / eta_el)
 
 
 def _heat_demand_profiles(cfg, heat_load, snapshots, dt_h, n_years) -> dict:
@@ -887,6 +1011,12 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict,
     cop      = float(hcfg.get("cop", 3.0))
     bio_vom  = float(hcfg.get("bio_vom_eur_per_mwh", 30.0))
     el_tax   = float(hcfg.get("el_tax_eur_per_mwh", 0.0))   # energiskatt per MWh el (på Link-p0)
+    # ⚠️ PER ZON sedan 2026-08-16 (zc["el_tax_eur_per_mwh"] vinner över den globala).
+    # Skatten avgör HELT om elpanna och stor-VP kan konkurrera: elpannan slås av över
+    # (bio_vom − elb_vom) − skatt, alltså −7,5 €/MWh vid skatt 35 (= aldrig igång
+    # opportunistiskt) mot +27,5 utan skatt (= mitt i LMA:s 15-50-intervall). VP:n
+    # slås av över (bio_vom − hp_vom)·COP − skatt. Se hydrogen_split-blockets granne
+    # i zones.yaml för de zonvisa värdena och deras motivering.
     elb_vom  = float(hcfg.get("elboiler_vom_eur_per_mwh", 0.5))
     hp_vom   = float(hcfg.get("hp_vom_eur_per_mwh", 0.5))
     mr_share = float(hcfg.get("mustrun_share", 0.0))        # avfall/restvärme (~0 MC, must-run)
@@ -913,6 +1043,7 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict,
             continue
         zc       = zcfg.get(zone, {})
         zone_cop = float(zc.get("cop", cop))                 # per-zon COP (DK 4 ≠ SE 3)
+        zone_tax = float(zc.get("el_tax_eur_per_mwh", el_tax))  # per-zon elskatt
         zone_mr  = float(zc.get("mustrun_share", mr_share))  # per-zon must-run-andel (DK 0.25 ≠ SE 0.41)
         hb   = f"{zone} heat"
         peak = float(dh.max())
@@ -938,7 +1069,7 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict,
         n.add("Link", f"{zone} heat elboiler", bus0=zone, bus1=hb, carrier="heat elboiler",
               efficiency=0.99, p_nom=eb_pnom, p_nom_extendable=eb_ext, p_nom_min=eb_pnom,
               p_nom_max=float(eb.get("p_nom_max_mw", np.inf)) if eb_ext else np.inf,
-              marginal_cost=elb_vom + el_tax, capital_cost=eb_cap)
+              marginal_cost=elb_vom + zone_tax, capital_cost=eb_cap)
         # Stor-VP: AC → heat, COP (p_nom i MW_el).  MC = vom + elskatt (per MWh el).
         # Extendable (costs.heat_pump) → capex per MW_el = ann(€/W_th)×COP; golv = dagens MW.
         hp       = ccfg.get("heat_pump", {})
@@ -949,7 +1080,7 @@ def _add_heat(n: pypsa.Network, cfg: dict, heat_demand: dict,
         n.add("Link", f"{zone} heat hp", bus0=zone, bus1=hb, carrier="heat hp",
               efficiency=zone_cop, p_nom=hp_pnom, p_nom_extendable=hp_ext, p_nom_min=hp_pnom,
               p_nom_max=float(hp.get("p_nom_max_mw", np.inf)) if hp_ext else np.inf,
-              marginal_cost=hp_vom + el_tax, capital_cost=hp_cap)
+              marginal_cost=hp_vom + zone_tax, capital_cost=hp_cap)
         # Must-run avfall/restvärme/rökgaskond (~0 MC): levererar zone_mr × behovet varje
         # timme (alltid först i meritordningen) → avlastar el-/bio-behovet och AC-lasten.
         if zone_mr > 0:

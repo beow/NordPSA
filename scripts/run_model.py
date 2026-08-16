@@ -1134,6 +1134,16 @@ def apply_dispatch_replay(parser, args):
     # --spill-cost 0.1` blir tyst verkningslöst — samma fällklass som run319. None här
     # betyder "orörd" och löses ut lägesberoende efter denna funktion.
     base.spill_cost = args.spill_cost
+    # NTC-överstyrningar är ett SCENARIOVAL för omdispatchen (som --low-hydro): man vill
+    # kunna omdispatchera samma flotta mot en annan nätutbyggnad. Utan dessa rader lästes
+    # de ur KÄLLANS argv och `--dispatch X --ntc-override SE-N:SE-S:7600` blev TYST
+    # verkningslöst — flaggan fungerade i expansion men inte i dispatch. FJÄRDE instansen
+    # av run319-fällan (efter --voll/--low-hydro, terminal-familjen, --hydro-min-* och
+    # --spill-cost). None = orörd → källans värde behålls.
+    if args.ntc_override is not None:
+        base.ntc_override = args.ntc_override
+    if args.market_ntc_override is not None:
+        base.market_ntc_override = args.market_ntc_override
     # Rullande horisont och terminalvärdet hör HELT till omdispatchen. Källans argv kan
     # aldrig innehålla dem — rullande är dispatch-only, så en expansionskörning förbjuder
     # dem. Utan dessa rader blir de tyst verkningslösa och körningen faller tillbaka på
@@ -1180,7 +1190,7 @@ def freeze_capacities_from(n, label):
             continue
         common = [x for x in ndf.index if x in sdf.index]
         skipped = []
-        if cname == "generatorer" and "p_nom_extendable" in sdf.columns:
+        if cname in ("generatorer", "länkar") and "p_nom_extendable" in sdf.columns:
             # p_nom_opt bär BARA information för extendable komponenter. För databestämda
             # must-run-generatorer (thermal, hydro_ror) är p_nom = profilens max i KÄLLANS
             # snapshot-fönster, medan p_min_pu = p_max_pu = profil/max normaliseras mot den
@@ -1188,6 +1198,15 @@ def freeze_capacities_from(n, label):
             # (källans max / nya fönstrets max) — och för must-run ÄR p_nom × pu dispatchen.
             # Konkret: 1h-dispatch per år av en 3-årig källa gav NO-N termik ×2,6 (2023) och
             # ×2,8 (2025), NO-S ×2,5/×3,1, eftersom årsmaxen ligger långt under 3-årsmaxet.
+            #
+            # ⭐ Samma resonemang gäller LÄNKAR, och där bet det 2026-08-15: en icke-
+            # expanderbar länks p_nom_opt ÄR bara configvärdet, så frysningen skrev tyst
+            # tillbaka det och annullerade `--ntc-override` på en dispatch. run348 blev
+            # därför BIT-IDENTISK med run346 — experimentet såg ut att ha körts men hade
+            # aldrig ägt rum. Med regeln här överlever en medveten NTC-ändring, medan en
+            # källa som faktiskt expanderade länken (--expand-link) fortfarande fryses.
+            # ⚠️ Lager omfattas AVSIKTLIGT inte: där behövs kopieringen av max_hours nedan
+            # för att bevara reservoarvolymen genom RoR-splitten.
             fixed = [x for x in common if not bool(sdf.at[x, "p_nom_extendable"])]
             if fixed:
                 skipped = fixed

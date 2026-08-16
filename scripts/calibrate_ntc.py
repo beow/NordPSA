@@ -7,10 +7,17 @@ netto beräknas (forward – reverse), summeras över par och q95(|netto|) retur
 
 Utdata: jämförelsetabell  border | pairs | current_mw | q95_mw | ratio
 
+⚠️ FÖNSTRET ÄR AVGÖRANDE. Scheduled exchanges upphör att vara en kapacitetsindikation
+vid flow-based go-live 2024-10-30: under FB begränsas zonernas NETTOPOSITIONER av
+CNEC/PTDF/RAM, inte gränserna, och det publicerade bilaterala utbytet är en efter-
+konstruerad uppdelning av nettopositionerna. Mätt: SE2→NO3 når 6986 MW på en korridor
+som fysiskt är ~1000. Kalibrera därför på 2023-01-01 → 2024-10-30 (default nedan).
+
 Användning:
-    python scripts/calibrate_ntc.py              # år 2025
-    python scripts/calibrate_ntc.py --years 2024 2025
-    python scripts/calibrate_ntc.py --force      # ignorera cache
+    python scripts/calibrate_ntc.py                          # FB-fria fönstret
+    python scripts/calibrate_ntc.py --start 2023-01-01 --end 2024-10-30
+    python scripts/calibrate_ntc.py --end 2025-12-31         # hela perioden (EJ rekommenderat)
+    python scripts/calibrate_ntc.py --force                  # ignorera cache
 """
 import argparse
 import sys
@@ -130,7 +137,10 @@ def load_current_ntc(cfg_path: Path) -> dict[str, float]:
     return ntc
 
 
-def run(years: list[int], force: bool) -> None:
+FB_GOLIVE = "2024-10-30"
+
+
+def run(start: str, end: str, force: bool) -> None:
     import os
     token = os.environ.get("ENTSOE_API_TOKEN") or os.environ.get("ENTSOE_token", "")
     if not token:
@@ -140,22 +150,34 @@ def run(years: list[int], force: bool) -> None:
     client = EntsoePandasClient(api_key=token)
     current_ntc = load_current_ntc(CFG_PATH)
 
+    t0, t1 = pd.Timestamp(start), pd.Timestamp(end)
+    years = list(range(t0.year, t1.year + 1))
+    print(f"Fönster: {t0:%Y-%m-%d} → {t1:%Y-%m-%d}"
+          + ("  (FB-fritt)" if t1 <= pd.Timestamp(FB_GOLIVE) else
+             f"  ⚠️ INKLUDERAR flow-based efter {FB_GOLIVE} — q95 är då inte en kapacitet"))
+
     rows = []
     for border, pairs in ALL_BORDERS.items():
         print(f"\n{border}  ({', '.join(f'{a}↔{b}' for a,b in pairs)})")
-        yearly_q95 = []
+        parts = []
         for year in years:
             net = border_net_flow(client, pairs, year, force)
             if net.empty:
                 print(f"  {year}: inga data")
                 continue
-            q95 = net.abs().quantile(0.95)
-            print(f"  {year}: q95 = {q95:.0f} MW  (n={len(net)})")
-            yearly_q95.append(q95)
-
-        if not yearly_q95:
+            parts.append(net)
+        if not parts:
             continue
-        q95_mean = sum(yearly_q95) / len(yearly_q95)
+        net = pd.concat(parts).sort_index()
+        if net.index.tz is not None:
+            net.index = net.index.tz_convert("UTC").tz_localize(None)
+        net = net[(net.index >= t0) & (net.index < t1)]
+        if net.empty:
+            print("  inga data i fönstret")
+            continue
+        q95_mean = net.abs().quantile(0.95)
+        print(f"  fönstret: q95 = {q95_mean:.0f} MW  (n={len(net)} h, "
+              f"q99 {net.abs().quantile(.99):.0f}, max {net.abs().max():.0f})")
 
         # Slå upp nuvarande config
         current = current_ntc.get(border)
@@ -186,7 +208,9 @@ def run(years: list[int], force: bool) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--years", nargs="+", type=int, default=[2025])
+    parser.add_argument("--start", default="2023-01-01")
+    parser.add_argument("--end", default=FB_GOLIVE,
+                        help=f"exklusiv slutgräns; default {FB_GOLIVE} = flow-based go-live")
     parser.add_argument("--force", action="store_true", help="Ignorera cache")
     args = parser.parse_args()
-    run(args.years, args.force)
+    run(args.start, args.end, args.force)
