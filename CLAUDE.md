@@ -58,7 +58,7 @@ python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kan
 | implied by `--dispatch` | off-switch |
 |---|---|
 | `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
-| `--terminal-curve` = `config/terminal_curve_2040_calibrated.yaml` | `--no-terminal-curve` |
+| `--terminal-curve` = `config/terminal_curve_2040_gemini.yaml` (**låst 2026-08-18**, se nedan) | `--no-terminal-curve` |
 | no water-value proxy (the curve *is* the water value) | — (mode-bound, no flag) |
 | resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
 | `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
@@ -192,6 +192,24 @@ Two traps this closed: `--spill-cost` was **not** copied from the new command in
 - **New nuclear (`--add-nuclear` / `--add-nuclear-fixed`): `min_frac = 0.6` by default** since the canonical baseline (`--nuclear-min-load`, sets `min_load_frac_exp`). `--nuclear-min-load 1.0` makes new nuclear pure must-run too.
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
+
+**Terminalvärdeskurvan är LÅST (2026-08-18): `config/terminal_curve_2040_gemini.yaml`.** Den ersätter `terminal_curve_2040_calibrated.yaml`, som var kalibrerad mot *facit* (run320) och ligger kvar för att reproducera run316–run368 — namnge den då explicit med `--terminal-curve`.
+
+Kurvan är `λ_k(v,z) = λ_bas[z] · A(v,z) · P_k(x − x_ref(v,z))` och vilar på tre mätningar:
+
+| del | varifrån | not |
+|---|---|---|
+| **formen** A(v), B(v) | anpassad mot Geminis λ(period, fyllnad)-tabeller, en per zon (SE1/SE2, NO4, NO2, SE3/SE4, FI) | bara mot de **bebodda** cellerna: RMS 6,9 % mot 23,8 % om flodkollapsen >85 % tas med — och den fyllnadsgraden inträffar aldrig, EC:s median toppar på 84,5 % |
+| **x_ref(v)** säsongsreferensen | minsta kvadrat mot EC:s uppmätta magasinmedian per land | R² 0,92 (SE) / 0,95 (NO) / **0,64 (FI)** |
+| **λ_bas = 73** likformigt | reservoardriften | +12,07 TWh vid 80 → −0,74 vid 73; känslighet **1,93 TWh per enhet** |
+
+`a_amp`/`a_amp2` är därutöver skalade **×0,6** mot eSetts v/s ur en uppmätt gradient (d(v/s)/d(a_amp) ≈ −1,7 SE, −1,3 NO, −0,36 FI).
+
+⭐ **Säsongsreferensen är det som gör formen identifierbar.** Utan den mäts fyllnaden mot en fast mittpunkt 0,5, fast banan svänger 26 → 85 % — så 28 % i april lästes som knapphet, och eftersom brantheten toppade samtidigt som fyllnaden bottnade gav det en λ-spik på 4–5× och ett **prisårsmaximum i mars**, som mätdata motsäger (2023–25 faller monotont från januari i alla fem zoner). Med referensen ligger λ längs banan på λ_bas·A(v), så A styr nivån ett normalår och B styr svaret på att ligga fel. `c_amp = 0` ger bit-identiskt med den gamla formen (7·10⁻¹⁵), så inget äldre påverkas.
+
+⛔ **Geminis nivåer används INTE.** Han vill ha 1,66× spridning (NO-N 39 lägst, NO-S 65 högst); driften vill ha platt 71–76 och om något NO-N högst. Nivåerna speglar observerade zonpriser, dvs. trängsel — som modellen redan producerar endogent ur NTC:erna. Att lägga in dem i λ_bas vore dubbelräkning, och facit (run320) ger 73,02 i alla fem zoner.
+
+⚠️ **Kvarstående brist: FI:s v/s 0,75 mot målet 1,13.** Den är *inte* kurvans att laga — gradienten kräver `a_amp = −0,71`, alltså ett sommartoppat vattenvärde. FI behöver bara flytta 0,43 TWh/år och magasinet rymmer 5,5, så det är ingen lagringsgräns; FI:s vattenkraft (2,34 GW) är för liten för att vara prissättande i sin egen zon. ⛔ Och det är inte upplösningen: run374 i 1h gav v/s 1,18/1,25/0,64 mot 3h:ns 1,18/1,25/0,68, och prissvansarna fanns redan vid 3h (p99 440–500).
 
 **⚠️ Hydro bids at the HISTORICAL zone price in EXPANSION (water-value proxy, mode-bound since 2026-08-15):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
 

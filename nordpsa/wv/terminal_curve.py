@@ -70,12 +70,44 @@ LOCKED_ZONES = ("SE-N", "NO-N")
 
 @dataclass(frozen=True)
 class CurveParams:
-    """Fem fria tal per zon. Alla dimensionslösa — nivån bor i λ_bas."""
+    """Sju fria tal per zon. Alla dimensionslösa — nivån bor i λ_bas."""
     a_amp:  float = 0.35   # säsongsamplitud på nivån, 0 = ingen säsong. Krav: < 1
     a_peak: float = 5.0    # vecka då nivån toppar
     b_mean: float = 2.5    # genomsnittlig brantid mot fullt magasin. Krav: ≥ 0
     b_amp:  float = 0.6    # säsongsvariation i brantid, andel av b_mean. Krav: |·| ≤ 1
     b_peak: float = 22.0   # vecka då kurvan är brantast (vårflodens spillrisk)
+    # ANDRA HARMONISKAN, tillagd 2026-08-17. En ren cosinus är SYMMETRISK: kollapsen
+    # vid flodtoppen och återuppbyggnaden genom hösten tvingas ta lika lång tid. Verklig
+    # hydrologi är skev — spillrisken slår till snabbt när floden kommer, värdet byggs
+    # upp långsamt. Två harmoniska är den minsta periodiska formen som klarar det.
+    # 0,0 = av, dvs identiskt med den rena cosinusen (regressionssäkert).
+    a_amp2:  float = 0.0   # amplitud på andra harmoniskan (period 26 v)
+    a_peak2: float = 0.0   # dess fas, vecka
+    # TVÅ LUTNINGAR, tillagd 2026-08-18. `exp(−B·x)` med EN lutning binder ihop kurvans
+    # båda ändar: eSett vill ha brant tilt i mittintervallet för att få Norges v/s rätt,
+    # och notan betalas vid tomt magasin (388 EUR/MWh vid 10 % fyllnad, SE-S 1037).
+    # b_low_frac skalar lutningen UNDER halvfullt magasin separat. 1,0 = av, dvs
+    # identiskt med den enkla exponentialen.
+    # ⚠️ Den låga änden BESÖKS: driftintervallet är 7-83 % fyllnad (NO-N bottnar på 7,2 %,
+    # SE-N 10,2 %). Den höga änden gör det INTE — ingen zon når över 83 %, noll timmar
+    # över 95 %, så spill kan strukturellt inte uppstå i en aggregerad reservoar per zon.
+    b_low_frac: float = 1.0
+    # SÄSONGSREFERENS, tillagd 2026-08-18. Kurvan mätte fyllnaden mot en FAST mittpunkt
+    # (0,5), men magasinets naturliga bana svänger 26 -> 85 %. 28 % i april är alltså
+    # HELT NORMALT, medan kurvan behandlar det som knappt — och eftersom brantheten
+    # B(v) toppar v18 precis när fyllnaden bottnar v13-17 gav det en λ-spik på 4-5x
+    # (SE-N 189, NO-S 236) och ett prisårsmaximum i MARS, som mätdata motsäger
+    # (2023-25 faller monotont från januari i alla fem zoner).
+    # x_ref(v) = c_mid + c_amp·cos(2π(v − c_peak)/52) låter referensen följa banan.
+    # ⭐ Poängen är IDENTIFIERBARHET: när banan ligger vid referensen blir λ längs banan
+    # exakt λ_bas·A(v), så A(v) betyder "vattenvärdet ett normalår vid normal fyllnad"
+    # och B(v) betyder "hur hårt värdet svarar på att ligga FEL". I dag är de två
+    # konfunderade — båda verkar längs banan, vilket är varför a_peak och b_peak inte
+    # går att tolka var för sig.
+    # 0,0 = av, dvs identiskt med den fasta mittpunkten (regressionssäkert).
+    c_amp:  float = 0.0    # amplitud på referensfyllnaden. Krav: c_mid ± c_amp i (0, 1)
+    c_mid:  float = 0.5    # referensfyllnad vid årsmedel
+    c_peak: float = 41.0   # vecka då referensfyllnaden toppar (uppmätt v39-44)
     p_norm: str = "mean"   # vad λ_bas betyder — se segment_profile(). "mid" krävs för
                            # att ankra mot ett mätt vattenvärde
 
@@ -83,11 +115,26 @@ class CurveParams:
         if not -1.0 < self.a_amp < 1.0:
             raise ValueError(f"a_amp måste ligga i (−1, 1), fick {self.a_amp} "
                              "— annars blir nivåfaktorn negativ någon vecka")
+        # Med två harmoniska räcker det inte att pröva termerna var för sig: de kan
+        # sammanfalla i samma vecka. |a_amp| + |a_amp2| < 1 är det skarpa villkoret
+        # för att A(v) > 0 för ALLA veckor, oavsett faser.
+        if abs(self.a_amp) + abs(self.a_amp2) >= 1.0:
+            raise ValueError(
+                f"|a_amp| + |a_amp2| måste vara < 1, fick "
+                f"{abs(self.a_amp) + abs(self.a_amp2):.3f} — annars kan nivåfaktorn "
+                "bli noll eller negativ den vecka där de två harmoniska sammanfaller")
         if self.b_mean < 0.0:
             raise ValueError(f"b_mean måste vara ≥ 0, fick {self.b_mean}")
+        if self.b_low_frac < 0.0:
+            raise ValueError(f"b_low_frac måste vara ≥ 0, fick {self.b_low_frac} "
+                             "— negativa värden gör kurvan VÄXANDE i fyllnadsgrad")
         if abs(self.b_amp) > 1.0:
             raise ValueError(f"|b_amp| måste vara ≤ 1, fick {self.b_amp} "
                              "— annars blir kurvan VÄXANDE i fyllnadsgrad någon vecka")
+        if not 0.0 < self.c_mid - abs(self.c_amp) <= self.c_mid + abs(self.c_amp) < 1.0:
+            raise ValueError(
+                f"c_mid ± c_amp måste ligga i (0, 1), fick {self.c_mid} ± "
+                f"{abs(self.c_amp)} — referensfyllnaden måste vara en fyllnadsgrad")
         if self.p_norm not in ("mean", "mid"):
             raise ValueError(f"p_norm måste vara 'mean' eller 'mid', fick {self.p_norm!r}")
 
@@ -118,8 +165,12 @@ def week_of(ts) -> int:
 
 
 def a_factor(week: int, p: CurveParams) -> float:
-    """Säsongsfaktor på NIVÅN. Årsmedel exakt 1 (cosinus integrerar till noll)."""
-    return 1.0 + p.a_amp * math.cos(2.0 * math.pi * (week - p.a_peak) / WEEKS)
+    """Säsongsfaktor på NIVÅN. Årsmedel exakt 1 — båda harmoniska integrerar till noll,
+    så andra termen ändrar FORMEN men aldrig årsmedlet, och λ_bas behåller sin
+    betydelse."""
+    return (1.0
+            + p.a_amp * math.cos(2.0 * math.pi * (week - p.a_peak) / WEEKS)
+            + p.a_amp2 * math.cos(4.0 * math.pi * (week - p.a_peak2) / WEEKS))
 
 
 def b_value(week: int, p: CurveParams) -> float:
@@ -128,8 +179,15 @@ def b_value(week: int, p: CurveParams) -> float:
                                 * math.cos(2.0 * math.pi * (week - p.b_peak) / WEEKS)))
 
 
+def x_ref_value(week: int, p: CurveParams) -> float:
+    """Referensfyllnaden för veckan — den nivå magasinet NORMALT ligger på. λ_bas är
+    vattenvärdet just där, så "mid"-normaliseringen behåller sin betydelse."""
+    return p.c_mid + p.c_amp * math.cos(2.0 * math.pi * (week - p.c_peak) / WEEKS)
+
+
 def segment_profile(b: float, segments: int = DEFAULT_SEGMENTS,
-                    norm: str = "mean") -> List[float]:
+                    norm: str = "mean", b_low_frac: float = 1.0,
+                    x_ref: float = 0.5) -> List[float]:
     """Icke-växande multiplikatorer tomt→fullt. b = 0 ger platt profil (det gamla
     LINJÄRA terminalvärdet). Normaliseringen bestämmer VAD λ_bas betyder:
 
@@ -145,12 +203,18 @@ def segment_profile(b: float, segments: int = DEFAULT_SEGMENTS,
     """
     if segments < 1:
         raise ValueError(f"segments måste vara ≥ 1, fick {segments}")
+    if b_low_frac < 0.0:
+        raise ValueError(f"b_low_frac måste vara ≥ 0, fick {b_low_frac}")
     xs = [(k + 0.5) / segments for k in range(segments)]
-    vals = [math.exp(-b * x) for x in xs]
+    # Skrivet kring x = 0,5 i stället för kring x = 0: exp(−B(x−0,5)) är IDENTISKT med
+    # den gamla exp(−B·x)/exp(−B·0,5), men gör de två lutningarna möjliga och gör
+    # "mid"-normaliseringen trivial (P(0,5) = 1 per konstruktion). "mean" påverkas inte:
+    # både vals och ref skalas med samma faktor exp(0,5·B), som förkortas bort.
+    vals = [math.exp(-(b if x >= x_ref else b * b_low_frac) * (x - x_ref)) for x in xs]
     if norm == "mean":
         ref = sum(vals) / len(vals)
     elif norm == "mid":
-        ref = math.exp(-b * 0.5)
+        ref = 1.0
     else:
         raise ValueError(f"norm måste vara 'mean' eller 'mid', fick {norm!r}")
     return [v / ref for v in vals]
@@ -161,7 +225,9 @@ def curve(week: int, zone: str,
           segments: int = DEFAULT_SEGMENTS) -> tuple[float, List[float]]:
     """(nivåfaktor, segmentprofil) för zonen och veckan."""
     p = (params or DEFAULTS).get(zone, CurveParams())
-    return a_factor(week, p), segment_profile(b_value(week, p), segments, p.p_norm)
+    return (a_factor(week, p),
+            segment_profile(b_value(week, p), segments, p.p_norm, p.b_low_frac,
+                            x_ref_value(week, p)))
 
 
 # ── Adaptrar mot hydro_terminal_value(), som är keyad på LAGRETS namn ────────────
@@ -194,7 +260,8 @@ def profiles_for_week(week: int, units: Iterable[str],
     out = {}
     for u in units:
         p = params.get(_zone_of(u), CurveParams())
-        out[u] = segment_profile(b_value(week, p), segments, p.p_norm)
+        out[u] = segment_profile(b_value(week, p), segments, p.p_norm, p.b_low_frac,
+                                 x_ref_value(week, p))
     return out
 
 
@@ -246,7 +313,10 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 #: config/terminal_curve.yaml som är den okalibrerade STARTPUNKTEN från 001f87c
 #: (a_peak 5, ankare 76-84, p_norm "mean"). Ett bart --terminal-curve hämtade förut
 #: startpunkten och gav tyst en helt annan kurva än den som är verifierad.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_calibrated.yaml"
+# ⭐ LÅST 2026-08-18: Geminis fem zontabeller (run375_aamp06_3h). Den förra,
+# terminal_curve_2040_calibrated.yaml, var kalibrerad mot FACIT (run320) och ligger kvar
+# för att reproducera run316-run368 — namnge den explicit med --terminal-curve.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
@@ -260,8 +330,14 @@ def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
     doc = {
         "note": note or "Terminalvärdeskurva λ_k(vecka, zon); se nordpsa/wv/terminal_curve.py",
         "anchor_eur_per_mwh": {z: float(v) for z, v in sorted(anchor.items())},
-        "zones": {z: {"a_amp": c.a_amp, "a_peak": c.a_peak, "b_mean": c.b_mean,
-                      "b_amp": c.b_amp, "b_peak": c.b_peak, "p_norm": c.p_norm}
+        # float() på varje tal: numpy-skalärer (np.float64) går inte att serialisera med
+        # yaml.safe_dump, och en anpassning med scipy/numpy levererar just sådana.
+        "zones": {z: {"a_amp": float(c.a_amp), "a_peak": float(c.a_peak),
+                      "b_mean": float(c.b_mean), "b_amp": float(c.b_amp),
+                      "b_peak": float(c.b_peak), "a_amp2": float(c.a_amp2),
+                      "a_peak2": float(c.a_peak2), "b_low_frac": float(c.b_low_frac),
+                      "c_amp": float(c.c_amp), "c_mid": float(c.c_mid),
+                      "c_peak": float(c.c_peak), "p_norm": str(c.p_norm)}
                   for z, c in sorted(params.items())},
     }
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -271,13 +347,22 @@ def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
 
 def load_params(path: str | None = None
                 ) -> tuple[Dict[str, CurveParams], Dict[str, float]]:
-    """Läs (params, anchor). Saknas filen returneras DEFAULTS/DEFAULT_ANCHOR."""
+    """Läs (params, anchor). Saknas den IMPLICITA standardfilen returneras
+    DEFAULTS/DEFAULT_ANCHOR; en UTTRYCKLIGT namngiven fil som saknas är ett fel.
+
+    ⚠️ Tyst fallback på ett namngivet `path` är run319-fällan: anroparen tror sig köra
+    sin kandidatkurva och kör i själva verket modulens startvärden — utan ett ord i
+    konsolen. Uppmätt 2026-08-18: `curve_turns.py` på en felstavad sökväg skrev ut
+    rubriken med filnamnet men siffrorna för DEFAULTS."""
     import yaml
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     p = Path(path) if path else root / DEFAULT_PARAM_FILE
     if not p.exists():
+        if path:
+            raise SystemExit(f"terminalkurva saknas: {p} — ingen tyst fallback på en "
+                             "namngiven fil (kontrollera sökvägen)")
         return dict(DEFAULTS), dict(DEFAULT_ANCHOR)
     doc = yaml.safe_load(p.read_text()) or {}
     params = {z: CurveParams(**kw) for z, kw in (doc.get("zones") or {}).items()}

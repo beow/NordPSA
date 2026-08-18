@@ -99,10 +99,39 @@ def build_cmd(prefix, idx, name, desc, extra, label, res, common):
     return out, cmd
 
 
-def build_dispatch_cmd(exp_out, prefix, idx, name, res_disp, pin_freq, label):
+# Flaggor som `apply_dispatch_replay` tar från det NYA kommandot i stället för ur källans
+# argv. De måste därför UPPREPAS på dispatchkommandot, annars nollas scenariot TYST.
+# ⚠️ Batch 36 gick i den: run364:s dispatch tappade `--low-hydro 0.6` och körde
+# torrårsflottan på ett NORMALT hydrologiskt år (magasinproduktion 178,0 mot
+# expansionens 159,8 TWh/år, pris 67,4 mot 80,0).
+# Övriga scenarioflaggor läses ur källans argv och ska INTE upprepas — `--ntc-override`
+# och `--market-ntc-override` skrivs bara över om de är ≠ None, så `hansa` klarade sig.
+# ⛔ `--spill-cost`/`--vre-curtailment-cost` hör INTE hit: de är lägesbundna och ett
+# expansionsvärde får inte läcka in i dispatchen.
+REPLAY_FROM_NEW_CMD = ("--low-hydro", "--voll", "--no-voll")
+
+
+def _forward_scenario_flags(extra):
+    """Plocka ut de flaggor ur scenariots `extra` som replayen kräver att man upprepar.
+    Tar flaggan plus alla följande icke-flagg-token, så både `--low-hydro 0.6` och
+    flervärdesflaggor fungerar."""
+    out, i = [], 0
+    while i < len(extra):
+        if extra[i] in REPLAY_FROM_NEW_CMD:
+            out.append(extra[i]); i += 1
+            while i < len(extra) and not extra[i].startswith("--"):
+                out.append(extra[i]); i += 1
+        else:
+            i += 1
+    return out
+
+
+def build_dispatch_cmd(exp_out, prefix, idx, name, res_disp, pin_freq, label, extra=()):
     """Omdispatch av expansionskörningen med den KANONISKA dispatchmallen: kapaciteter
     frysta till dess p_nom_opt, rullande horisont 1+3 veckor, kalibrerad terminalkurva,
     ingen prisproxy. Allt det implicerar `--dispatch` sedan 2026-08-14.
+
+    `extra` = scenariots egna flaggor; de i REPLAY_FROM_NEW_CMD skickas med igen.
 
     ⛔ SOC-PINNINGEN BORTTAGEN 2026-08-16. Den var både verkningslös och skadlig:
       - VERKNINGSLÖS: run_model.py har `if args.rolling_horizon: ... elif args.soc_pin_from:`
@@ -114,12 +143,14 @@ def build_dispatch_cmd(exp_out, prefix, idx, name, res_disp, pin_freq, label):
     `pin_freq` behålls i signaturen för bakåtkompatibilitet men används inte.
     """
     out = f"run{prefix}{idx}_{name}_dispatch_{res_disp}h"
+    fwd = _forward_scenario_flags(list(extra))
     desc = (f"[batch {prefix}] {res_disp}h omdispatch av {exp_out} (frysta p_nom_opt), "
             f"kanonisk mall: rullande 1+3 v, kalibrerad terminalkurva, ingen prisproxy"
+            + (f"; scenarioflaggor {' '.join(fwd)}" if fwd else "")
             + (f"; {label}" if label else ""))
     cmd = [sys.executable, "scripts/run_model.py",
            "--dispatch", exp_out, "--resolution", str(res_disp),
-           "--output", out, "--desc", desc]
+           *fwd, "--output", out, "--desc", desc]
     return out, cmd
 
 
@@ -200,7 +231,7 @@ def main():
         if args.dispatch_resolution:
             follow = build_dispatch_cmd(out, args.prefix, idx, name,
                                         args.dispatch_resolution, args.dispatch_pin_freq,
-                                        args.label)
+                                        args.label, extra)
         jobs.append((out, cmd, follow))
 
     if skipped:

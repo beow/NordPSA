@@ -908,6 +908,21 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
         # (run340 kördes med en 20-värdesprofil) reproduceras exakt.
         segments = (len(profile) if args.terminal_lambda_profile
                     else args.terminal_segments)
+        # λ_bas kan överstyras från kommandoraden. Motivet: drift är SCENARIOBEROENDE
+        # (−3,5 till +10,7 TWh över batch 36 vid samma λ_bas = 80), så nivån hör till
+        # den enskilda körningen och inte till kurvfilen. Arbetsgången är att köra,
+        # läsa magasindriften och justera — för stor NEGATIV drift ⇒ HÖJ λ_bas.
+        if args.terminal_anchor:
+            canchor = dict(canchor)
+            for spec in args.terminal_anchor:
+                if ":" in spec:                       # ZON:VÄRDE
+                    z, v = spec.rsplit(":", 1)
+                    if z not in canchor:
+                        raise SystemExit(f"--terminal-anchor: okänd zon {z!r} "
+                                         f"(kurvan har {sorted(canchor)})")
+                    canchor[z] = float(v)
+                else:                                 # ett tal = ALLA zoner
+                    canchor = {z: float(spec) for z in canchor}
         curve = (tc, cparams, canchor, segments)
         print(f"  → TERMINALKURVA λ_k(vecka, zon), {segments} segment. λ_bas: "
               + ", ".join(f"{z} {v:.1f}" for z, v in sorted(canchor.items())))
@@ -1154,6 +1169,7 @@ def apply_dispatch_replay(parser, args):
     base.rolling_weeks           = args.rolling_weeks
     base.rolling_lookahead_weeks = args.rolling_lookahead_weeks
     base.terminal_curve          = args.terminal_curve
+    base.terminal_anchor         = args.terminal_anchor   # nivån hör till OMDISPATCHEN
     base.terminal_segments       = args.terminal_segments
     base.no_rolling_horizon      = args.no_rolling_horizon
     base.no_terminal_curve       = args.no_terminal_curve
@@ -1460,6 +1476,15 @@ def main() -> None:
                         help="Stäng av den rullande horisonten som --dispatch slår på.")
     parser.add_argument("--no-terminal-curve", action="store_true",
                         help="Stäng av terminalkurvan som --dispatch slår på.")
+    parser.add_argument("--terminal-anchor", nargs="+", default=None,
+                        metavar="VÄRDE | ZON:VÄRDE",
+                        help="Överstyr terminalkurvans λ_bas. Ett ensamt tal sätter alla "
+                             "zoner ('--terminal-anchor 82'), annars per zon "
+                             "('--terminal-anchor SE-N:82 NO-N:78'). Nivån hör till den "
+                             "enskilda körningen, inte till kurvfilen: drift är "
+                             "scenarioberoende (−3,5 till +10,7 TWh över batch 36 vid "
+                             "samma 80). Arbetsgång: kör, läs magasindriften, justera — "
+                             "för stor NEGATIV drift ⇒ HÖJ λ_bas.")
     parser.add_argument("--terminal-segments", type=int, default=20, metavar="N",
                         help="Antal lika stora SOC-segment i terminalvärdeskurvan "
                              "(--terminal-curve). DEFAULT 20. Kurvan sätter segmentens "
@@ -2192,6 +2217,9 @@ def main() -> None:
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
     if args.terminal_curve is not None: flags.append("termkurva")
+    # λ_bas måste stå i flaggraden, annars går en körnings ankarnivå bara att läsa ur
+    # console.log — samma fälla som --spill-cost hade före 2026-08-15.
+    if args.terminal_anchor: flags.append("anchor-" + "_".join(args.terminal_anchor))
     if args.terminal_lambda:            flags.append(f"termlambda-{args.terminal_lambda.replace(':','_')}")
     if args.terminal_lambda_scale:      flags.append(f"termscale-{args.terminal_lambda_scale.replace(':','_')}")
     if args.rolling_horizon and args.terminal_curve is None:

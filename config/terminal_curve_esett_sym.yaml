@@ -1,0 +1,53 @@
+note: kalibrerad mot eSett v/s + EC-band, poäng 0.2579, källa run360_baseline_2h
+anchor_eur_per_mwh:
+  FI: 80.0
+  NO-N: 80.0
+  NO-S: 80.0
+  SE-N: 80.0
+  SE-S: 80.0
+zones:
+  FI:
+    a_amp: 0.35
+    a_peak: 27.0
+    b_mean: 2.5
+    b_amp: 0.8
+    b_peak: 18.0
+    a_amp2: 0.0
+    a_peak2: 0.0
+    p_norm: mid
+  NO-N:
+    a_amp: 0.35
+    a_peak: 27.0
+    b_mean: 2.5
+    b_amp: 0.8
+    b_peak: 18.0
+    a_amp2: 0.0
+    a_peak2: 0.0
+    p_norm: mid
+  NO-S:
+    a_amp: 0.35
+    a_peak: 27.0
+    b_mean: 2.5
+    b_amp: 0.8
+    b_peak: 18.0
+    a_amp2: 0.0
+    a_peak2: 0.0
+    p_norm: mid
+  SE-N:
+    a_amp: 0.35
+    a_peak: 27.0
+    b_mean: 2.5
+    b_amp: 0.8
+    b_peak: 18.0
+    a_amp2: 0.0
+    a_peak2: 0.0
+    p_norm: mid
+  SE-S:
+    a_amp: 0.35
+    a_peak: 27.0
+    b_mean: 4.0
+    b_amp: 0.8
+    b_peak: 18.0
+    a_amp2: 0.0
+    a_peak2: 0.0
+    p_norm: mid
