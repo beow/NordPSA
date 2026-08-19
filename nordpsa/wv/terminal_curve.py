@@ -230,6 +230,48 @@ def curve(week: int, zone: str,
                             x_ref_value(week, p)))
 
 
+# ── Kurvan som hydrons marginal_cost i EXPANSION ────────────────────────────────
+
+def hydro_mc_from_curve(snapshots, zones: Iterable[str],
+                        params: Dict[str, CurveParams] | None = None,
+                        anchor: Dict[str, float] | None = None) -> Dict[str, "object"]:
+    """λ längs NORMALBANAN per snapshot och zon — avsedd som reservoarens marginal_cost.
+
+    Ersätter vattenvärdes-proxyn (zonens faktiska historiska pris), som gör en
+    2040-expansion cirkulär: hydrons dispatch ankras till den prisform modellen ska
+    förutsäga. Se `_add_hydro` i nordpsa/network.py.
+
+    ⭐ Varför just normalbanan: `marginal_cost` är EXOGEN per tidssteg, medan λ(v, x) beror
+    på fyllnadsgraden — en beslutsvariabel. `mc = λ(v, SOC)` vore bilinjärt och inte längre
+    ett LP. Med p_norm="mid" gäller per konstruktion P(x_ref(v)) = 1, alltså
+
+        λ(v, x_ref(v)) = λ_bas[z] · A(v, z)
+
+    som är en ren funktion av veckan. Exakt, inte approximativt — och till skillnad från
+    proxyn kommer A(v) ur Geminis zontabeller och EC:s magasindata, inte ur prisserien.
+
+    ⚠️ Vad man byter bort: proxyns tim-till-tim-variation. Den var till hälften önskvärd
+    (2023 års vindprognoser ska inte styra hydrons veckoprofil i 2040) och till hälften
+    nyttig (en HELT platt hydro-mc gav ett degenererat LP som OOM-dödades i 1h). Den här
+    serien är inte platt — den svänger ±26 % över året — men den är slät.
+    ⚠️ Prisgolvet försvinner också: proxyn gick ned till 0,6 i de billigaste timmarna,
+    den här bottnar kring 50, så hydron blir aldrig marginalsättare i lågprislägen.
+    """
+    import pandas as pd
+
+    params = params or DEFAULTS
+    anchor = anchor or DEFAULT_ANCHOR
+    weeks = [week_of(ts) for ts in snapshots]
+    out = {}
+    for z in zones:
+        p = params.get(z)
+        if p is None:                      # zon utan kurva → ingen serie, proxyn faller bort
+            continue
+        lam = [float(anchor.get(z, 0.0)) * a_factor(w, p) for w in weeks]
+        out[z] = pd.Series(lam, index=snapshots, name=z)
+    return out
+
+
 # ── Adaptrar mot hydro_terminal_value(), som är keyad på LAGRETS namn ────────────
 # Lagren heter "<zon> hydro"; zonen är första ordet.
 

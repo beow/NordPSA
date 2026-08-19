@@ -1169,6 +1169,10 @@ def apply_dispatch_replay(parser, args):
     base.rolling_weeks           = args.rolling_weeks
     base.rolling_lookahead_weeks = args.rolling_lookahead_weeks
     base.terminal_curve          = args.terminal_curve
+    # Nya kommandot vinner — annars nollas flaggan TYST av replayen och en användare
+    # som skrev --dispatch X --hydro-mc-curve får ingen kurva och ingen varning.
+    # Vaktposten i huvudflödet kan då aldrig larma. (run319-fällan igen.)
+    base.hydro_mc_curve          = args.hydro_mc_curve
     base.terminal_anchor         = args.terminal_anchor   # nivån hör till OMDISPATCHEN
     base.terminal_segments       = args.terminal_segments
     base.no_rolling_horizon      = args.no_rolling_horizon
@@ -1502,6 +1506,15 @@ def main() -> None:
                              "2× nära tomt, 0,2× i toppbandet). '1.0' ger det gamla LINJÄRA "
                              "beteendet, som ger bang-bang: magasin i taket och priskollaps "
                              "till VOM (run268). ⚠️ Formen är ett ANTAGANDE, ej kalibrerad.")
+    parser.add_argument("--hydro-mc-curve", nargs="?", const="", default=None, metavar="FIL",
+                        help="EXPANSION: sätt reservoarvattenkraftens marginal_cost till "
+                             "terminalkurvan längs normalbanan, lambda_bas*A(v), i stället "
+                             "för zonens FAKTISKA historiska pris (vattenvärdes-proxyn). "
+                             "Proxyn gör en 2040-expansion cirkulär — hydrons dispatch "
+                             "ankras till den prisform modellen ska förutsäga; kurvan kommer "
+                             "ur zontabeller och uppmätta magasinnivåer i stället. Utan "
+                             "argument används den låsta kurvan. Meningslös med frysta "
+                             "kapaciteter (--dispatch/--no-expansion), som saknar proxy.")
     parser.add_argument("--terminal-curve", nargs="?", const="", default=None, metavar="FIL",
                         help="Analytisk terminalvärdeskurva λ_k(vecka, zon) = λ_bas · A(w) · "
                              "P_k(B(w)) ur FIL (default config/terminal_curve.yaml). Ersätter "
@@ -1826,6 +1839,15 @@ def main() -> None:
     # (run273-276: p_nom_opt rörde sig inte mellan VOM/30/60 eftersom dualen
     # självkorrigerar). Flaggan satte ett tal som modellen sedan tog bort igen.
     hydro_price_proxy = not (bool(args.dispatch) or bool(args.no_expansion))
+
+    # --hydro-mc-curve: byt ut proxyn mot kurvan längs normalbanan. Serien byggs först
+    # efter att snapshots finns; här kontrolleras bara att flaggan är meningsfull, så att
+    # ett verkningslöst kommando säger ifrån direkt i stället för att tyst göra ingenting
+    # (samma klass av fälla som run319).
+    if args.hydro_mc_curve is not None and not hydro_price_proxy:
+        raise SystemExit("--hydro-mc-curve kräver EXPANSION: med frysta kapaciteter "
+                         "(--dispatch/--no-expansion) finns ingen proxy att ersätta, och "
+                         "hydrons mc är redan platt VOM med dualen som vattenvärde.")
 
     # --dispatch = KANONISK DISPATCH (run340:s mall). Att skriva ut --rolling-horizon och
     # --terminal-curve på varje omdispatch var både ordrikt och felbenäget: glömdes någon av
@@ -2217,6 +2239,7 @@ def main() -> None:
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
     if args.terminal_curve is not None: flags.append("termkurva")
+    if args.hydro_mc_curve is not None: flags.append("hydro-mc-kurva")
     # λ_bas måste stå i flaggraden, annars går en körnings ankarnivå bara att läsa ur
     # console.log — samma fälla som --spill-cost hade före 2026-08-15.
     if args.terminal_anchor: flags.append("anchor-" + "_".join(args.terminal_anchor))
@@ -2434,6 +2457,16 @@ def main() -> None:
         z, mw = spec.split(":")
         solar_adds.append((z.strip(), float(mw)))
 
+    hydro_mc_override = None
+    if args.hydro_mc_curve is not None:
+        from nordpsa.wv import terminal_curve as _tc
+        _cp, _ca = _tc.load_params(args.hydro_mc_curve or None)
+        hydro_mc_override = _tc.hydro_mc_from_curve(snapshots, cfg["zones"], _cp, _ca)
+        _sp = {z: (s.min(), s.mean(), s.max()) for z, s in hydro_mc_override.items()}
+        print("  hydro-mc ur terminalkurvan (lambda_bas*A(v)), ersätter prisproxyn:")
+        for z, (lo, me, hi) in sorted(_sp.items()):
+            print(f"    {z:6s} {lo:6.1f} - {hi:6.1f}  medel {me:6.1f} EUR/MWh")
+
     print(f"Bygger nätverk ({len(snapshots)} tidssteg) ...")
     n = build_network(cfg, snapshots, **inputs,
                       cyclic_soc=cyclic_soc,
@@ -2450,6 +2483,7 @@ def main() -> None:
                       onshore_adds=onshore_adds or None,
                       offshore_adds=offshore_adds or None,
                       hydro_price_proxy=hydro_price_proxy,
+                      hydro_mc_override=hydro_mc_override,
                       add_cost_scenario=args.add_cost_scenario)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt

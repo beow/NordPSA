@@ -102,6 +102,7 @@ def build_network(
     actual_inflow:           bool = True,
     cyclic_soc:              bool = True,
     hydro_price_proxy:       bool = True,
+    hydro_mc_override:       Dict[str, pd.Series] | None = None,
     soc_initial_override:    dict | None = None,
     voll:                    float | None = None,
     batteries:               list | None = None,
@@ -162,9 +163,14 @@ def build_network(
                 load[zone] = load[zone] - dh * (el_twh * 1e6 * n_years / dh_e)
 
     # zone_prices används ENBART som reservoarvattenkraftens marginal_cost (_add_hydro).
-    # hydro_price_proxy=False (frysta kapaciteter) → platt VOM; se mc-tilldelningen.
-    zone_prices = ({z: market_prices[z] for z in cfg["zones"] if z in market_prices}
-                   if hydro_price_proxy else None)
+    # Tre möjliga källor, i prioritetsordning:
+    #   1. hydro_mc_override — terminalkurvan längs normalbanan (λ_bas·A(v)), icke-cirkulär.
+    #      Vinner alltid när den ges; se terminal_curve.hydro_mc_from_curve().
+    #   2. hydro_price_proxy=True (expansion) → zonens FAKTISKA historiska pris. Cirkulärt.
+    #   3. hydro_price_proxy=False (frysta kapaciteter) → platt VOM; dualen fyller ut.
+    zone_prices = (hydro_mc_override if hydro_mc_override else
+                   ({z: market_prices[z] for z in cfg["zones"] if z in market_prices}
+                    if hydro_price_proxy else None))
 
     _add_buses(n, cfg)
     _add_links(n, cfg)
