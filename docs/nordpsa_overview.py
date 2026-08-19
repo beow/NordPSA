@@ -45,27 +45,11 @@ ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
 cfg   = yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
 
 # ───────────────────────── energibalans + kapaciteter ─────────────────────────
-COUNTRY_MAP = {"SE-N": "SE", "SE-S": "SE", "NO-N": "NO", "NO-S": "NO", "DK": "DK", "FI": "FI"}
-COUNTRIES   = ["SE", "NO", "DK", "FI", "Norden"]
-SOURCES     = ["hydro", "ror", "nuclear", "wind_onshore", "wind_offshore", "solar", "thermal", "gas", "slack"]
-SHOW_ROWS   = SOURCES + ["prod_twh", "load_twh", "h2_elec", "heat_elec", "ev_elec",
-                         "batt_net", "spill", "kont_export", "intern_export", "kons_total"]
-ROW_LABELS  = {
-    "hydro": "Vattenkraft, magasin", "ror": "Vattenkraft, älv (RoR)",
-    "nuclear": "Kärnkraft", "wind_onshore": "Vind onshore",
-    "wind_offshore": "Vind offshore", "solar": "Sol", "thermal": "Termisk (KVV-el)",
-    "gas": "Gas", "slack": "Slack (lastsk.)",
-    "prod_twh": "PRODUKTION", "load_twh": "Last", "h2_elec": "H2-elektrolys",
-    "heat_elec": "Värme-el (VP+panna)", "ev_elec": "EV-laddning", "batt_net": "Batteri (netto ut)",
-    "spill": "Spill", "kont_export": "Kont. export", "intern_export": "Intern export (NTC)",
-    "kons_total": "KONSUMTION TOTAL",
-}
-BALANCE_SIGNS = {"prod_twh": +1, "batt_net": +1, "load_twh": -1, "h2_elec": -1,
-                 "heat_elec": -1, "ev_elec": -1, "spill": -1, "kont_export": -1, "intern_export": -1}
-# Sänk-/förbruknings-rader visas NEGATIVA (utflöde) — rent KOSMETISKT; balanskontrollen
-# använder de RÅA (positiva) värdena via BALANCE_SIGNS.
-DISPLAY_NEG = {"load_twh", "h2_elec", "heat_elec", "ev_elec", "spill",
-               "kont_export", "intern_export", "kons_total"}
+# Raddefinitioner OCH balanslogiken delas med notebook-cellen — se kommentaren i
+# load_run(). Cellen är importerbar: presentationsdelen körs bara när LABEL är satt.
+sys.path.insert(0, str(ROOT / "notebooks" / "cells"))
+from ebalance import (country_balance, COUNTRIES, SOURCES, SHOW_ROWS,   # noqa: E402
+                      ROW_LABELS, DISPLAY_NEG, BALANCE_SIGNS)
 
 
 def load_run(res_label):
@@ -97,64 +81,12 @@ def load_run(res_label):
                 and nn.generators.at[g, "bus"] == zone and nn.generators.at[g, "carrier"] == "market"]
         return disp[cols].sum(axis=1) if cols else zero
 
-    rows = []
-    for zone in ZONES:
-        r = {"country": COUNTRY_MAP[zone]}
-        curt = zero.copy()                       # ackumulerad VRE-curtailment (→ spill-raden)
-        for c in SOURCES:
-            if c == "hydro":
-                # Magasin (StorageUnit); RoR-generatorerna redovisas separat som "ror".
-                s = hyd.get(f"{zone} hydro", zero).clip(lower=0)
-            elif c == "ror":
-                rcols = [g for g in disp.columns if g in nn.generators.index
-                         and nn.generators.at[g, "bus"] == zone and nn.generators.at[g, "carrier"] == "hydro"]
-                s = disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero
-            else:
-                # Summera ALLA generatorer med carrier c i zonen (t.ex. 'nuclear' +
-                # 'nuclear exp', 'wind_onshore' + 'wind_new') — ej bara exakt '{zon} {c}'.
-                ccols = [g for g in disp.columns if g in nn.generators.index
-                         and nn.generators.at[g, "bus"] == zone and nn.generators.at[g, "carrier"] == c]
-                disp_c = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero
-                if c in VRE_CARRIERS and ccols:
-                    # VRE redovisas som TILLGÄNGLIGT (p_max_pu × p_nom_opt); skillnaden mot
-                    # dispatchat = curtailment → ackumuleras till spill-raden.
-                    avail = sum((pmax[g] * nn.generators.at[g, "p_nom_opt"]
-                                 for g in ccols if g in pmax.columns), zero)
-                    curt = curt + (avail - disp_c).clip(lower=0)
-                    s = avail
-                else:
-                    s = disp_c
-            r[c] = twh(s)
-        r["spill"] = twh(curt)
-        eta_el = float(((((cfg.get("heat") or {}).get("zones") or {}).get(zone, {}).get("chp")) or {}).get("eta_el", 0.0))
-        r["thermal"] += twh(flw.get(f"{zone} chp", zero).clip(lower=0)) * eta_el
-        r["heat_elec"] = twh(flw.get(f"{zone} heat elboiler", zero).clip(lower=0)
-                             + flw.get(f"{zone} heat hp", zero).clip(lower=0))
-        r["h2_elec"]   = twh(flw.get(f"{zone} electrolyser", zero).clip(lower=0))
-        # EV-laddning = flexibel (charger-länk p0) + oflexibel (fast AC-last, svk-läget).
-        ev_inflex = sum((nl[f"{zone} EV {c} inflex"].reindex(zero.index).fillna(0.0)
-                         for c in ("car", "heavy") if f"{zone} EV {c} inflex" in nl.columns), zero)
-        r["ev_elec"]   = twh(sum((flw.get(f"{zone} EV {c} charger", zero).clip(lower=0)
-                                  for c in ("car", "heavy")), zero) + ev_inflex)
-        r["kont_export"] = -twh(zmkt(zone))
-        ie = zero.copy()
-        for l, b0, b1 in ntc:
-            f = flw.get(l, zero)
-            if   b0 == zone: ie = ie + f
-            elif b1 == zone: ie = ie - f
-        r["intern_export"] = twh(ie)
-        bz = [s for s in batt.index if nn.storage_units.at[s, "bus"] == zone]
-        r["batt_net"] = (float(nn.storage_units_t.p[bz].to_numpy().sum()) * dt_h / 1e6 / n_years) if bz else 0.0
-        r["load_twh"] = twh(ld[zone]) if zone in ld.columns else 0.0
-        rows.append(r)
-
-    d = pd.DataFrame(rows)
-    d["prod_twh"] = d[SOURCES].sum(axis=1)        # produktion inkl slack
-    # KONSUMTION TOTAL = last + nettoexport + spill − batteri (netto ut) = PRODUKTION vid balans.
-    d["kons_total"] = (d["load_twh"] + d["h2_elec"] + d["heat_elec"] + d["ev_elec"]
-                       + d["kont_export"] + d["intern_export"] + d["spill"] - d["batt_net"])
-    cyr = d.groupby("country")[SHOW_ROWS].sum()
-    cyr.loc["Norden"] = cyr.sum()
+    # Balanstabellen kommer från ebalance-CELLEN, inte från en kopia här. Kopian fanns
+    # och hade ärvt exakt de buggar som rättades i cellen 2026-08-16: loads_t.p_set
+    # missar statiskt satta laster (H2 typ 1), namnuppslag missade "electrolyser ef",
+    # och DSR saknades som källa — tillsammans 35,1 TWh/år fel i run361. Två kopior av
+    # samma identitet är en garanti för att bara den ena blir rättad.
+    cyr = country_balance(res_label)
 
     # ── kapaciteter / flöden för schematik-annoteringar (nordiska totaler) ──
     G = nn.generators; L = nn.links; SU = nn.storage_units
@@ -252,6 +184,7 @@ def load_run(res_label):
     # %bindande per kontinentanslutning = andel timmar då hela kabeln går på ±NTC
     # (|nettoflöde Σ(imp+exp)| ≥ 0.99 × Σimp-steg). Mellansteg = ej bindande (headroom kvar).
     mkt_bind = {}
+    mkt_net  = {}
     mconns = {}
     for gname in Gm.index[Gm.carrier == "market"]:
         if gname in disp.columns:
@@ -261,6 +194,10 @@ def load_run(res_label):
         net = disp[gens].sum(axis=1)
         bp = float((net.abs() >= 0.99 * cap).mean() * 100) if cap > 0 else 0.0
         mkt_bind.setdefault(Gm.at[gens[0], "bus"], {})[conn.split()[-1]] = bp
+        # NETTOIMPORT per anslutning, TWh/år. market-generatorn har p_min_pu = −1, så
+        # p > 0 = inflöde till zonen (import) och p < 0 = utflöde (export). Tecknet är
+        # alltså redan rätt: + = nettoimport, − = nettoexport.
+        mkt_net.setdefault(Gm.at[gens[0], "bus"], {})[conn.split()[-1]] = twh(net)
     # Tak-bindning per land×kraftslag: p_nom_opt ≈ p_nom_max (bara EXTENDABLE komponenter →
     # VRE + kärnkraft + gas; hydro/RoR/termik/slack är ej extendable → aldrig). Rödmarkeras i
     # balanstabellens produktionsrader. Logik = "NÅGON ZON vid taket" (landet flaggas om minst
@@ -304,7 +241,7 @@ def load_run(res_label):
         ntc_bind={frozenset((b0, b1)): (float((flw.get(l, zero).abs()
                   >= 0.99 * float(nn.links.at[l, "p_nom"])).mean() * 100)
                   if float(nn.links.at[l, "p_nom"]) > 0 else 0.0) for l, b0, b1 in ntc},
-        mkt_ntc=mkt_ntc, mkt_bind=mkt_bind, cap_binds=cap_binds,
+        mkt_ntc=mkt_ntc, mkt_bind=mkt_bind, mkt_net=mkt_net, cap_binds=cap_binds,
         # zon-snittpris: rakt tidsmedel (= LMA-troget per zon, = LMA:s årsmedelpris per
         # elområde). Kapat vid NordPool-taket 4000 EUR/MWh för att utesluta ofysikaliska
         # scarcity-spikar (FI 15195-artefakten); påverkar bara FI (övriga zoner ≤1980).
@@ -464,7 +401,7 @@ arrow(BBR, 18.5, sx, 18.5, C["evbus"])
 ax.plot([99.5, 99.5], [2, 98], color="#cccccc", lw=1.0, zorder=1)
 
 # --- zonkarta ---
-ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar & Exp/Imp-ventiler (GW)", ha="center",
+ax.text((103.0 + 138.0) / 2, 96.5, "6 zoner · NTC-länkar & Exp/Imp-ventiler (GW · %bindande · nettoimport TWh/år)", ha="center",
         fontsize=12, weight="bold", color=C["text"])
 zpos = {"NO-N": (110, 90), "SE-N": (124, 90), "FI": (137, 87),
         "NO-S": (110, 78), "SE-S": (124, 76), "DK": (119, 70)}
@@ -493,17 +430,24 @@ for a, b in links:
 # når. Riktning/etikettläge tunade mot zonkartans trånga layout (NO-S pekar vänster mot öppen yta).
 mkt_ntc = K.get("mkt_ntc", {})
 mkt_bind = K.get("mkt_bind", {})
+mkt_net  = K.get("mkt_net", {})
 mkt_dir = {"SE-S": +1, "NO-S": -1, "DK": +1, "FI": +1}          # x-riktning på ventilstubben
 mkt_lbl_pos = {  # (x_vänster, y_topp) för det staplade per-land-blocket (boxad GW + rött %)
     "NO-S": (100.0, 73.6), "SE-S": (129.0, 70.4),
-    "DK":   (123.0, 68.8), "FI":   (135.0, 80.2),
+    # DK har bara fönstret 122,0 .. 129,0: noden ligger på x = 119 med radie 3,0 och
+    # SE-S:s block börjar på 129,0. Blocket är lx .. lx+MKT_NET_DX+1,6 brett (5,8), så
+    # 122,7 är det enda som ryms med marginal åt båda håll. Mätt, inte gissat — 121,0
+    # lade rutorna bakom noden och 123,0 (värdet före nettoimport-kolumnen) sköt in i SE-S.
+    "DK":   (122.7, 68.8), "FI":   (135.0, 80.2),
 }
 MKT_ROW_H = 1.7
+MKT_NET_DX = 4.2      # x-offset för nettoimport-kolumnen, se mkt_lbl_pos['DK']
 for z in ["SE-S", "NO-S", "DK", "FI"]:
     xz, yz = zpos[z]
     ax.plot([xz, xz + 3.2 * mkt_dir[z]], [yz - 2.8, yz - 5.2], color=C["mkt"], lw=1.8, ls=":", zorder=2)
     d = mkt_ntc.get(z, {})
     db = mkt_bind.get(z, {})
+    dn = mkt_net.get(z, {})
     lx, ly = mkt_lbl_pos[z]
     for i, (c, mw) in enumerate(sorted(d.items(), key=lambda kv: -kv[1])):
         y = ly - i * MKT_ROW_H
@@ -514,6 +458,12 @@ for z in ["SE-S", "NO-S", "DK", "FI"]:
         if bp is not None:
             ax.text(lx + 2.5, y, f"{bp:.0f}%", ha="left", va="center", fontsize=5.6,
                     color="#c0392b", weight="bold", zorder=3)
+        # Nettoimport TWh/år: + in i Norden, − ut. Blått för import, grått för export, så
+        # riktningen syns utan att läsa tecknet.
+        ne = dn.get(c)
+        if ne is not None:
+            ax.text(lx + MKT_NET_DX, y, f"{ne:+.1f}", ha="left", va="center", fontsize=5.6,
+                    color=("#1f6f9c" if ne >= 0 else "#7f8c8d"), weight="bold", zorder=3)
 zprice = K.get("zprice", {})
 price_off = {  # (dx, dy) finjustering per zon; default (0, -3.9). Knuffa enskilda undan krock.
     "NO-N": (-5, 0), "SE-N": (5, 1), "FI": (-5,0),
@@ -557,7 +507,10 @@ for (r, c), cell in tbl.get_celld().items():
     if c == 0 and r > 0:
         cell.get_text().set_ha("left")
     rn = table_rows[r - 1][0] if r > 0 else ""
-    if rn in ("PRODUKTION", "KONSUMTION TOTAL"):
+    # Bind mot NYCKLARNA, inte mot etiketterna: raden hette "PRODUKTION" i den lokala
+    # kopian och "PRODUKTION TOTAL" i ebalance-cellen, så en literal sträng slutade
+    # matcha TYST när raddefinitionerna delades.
+    if rn in (ROW_LABELS["prod_twh"], ROW_LABELS["kons_total"]):
         cell.set_facecolor("#eaf2f8"); cell.get_text().set_weight("bold")
     if rn == "BALANS (≈0)":
         cell.set_facecolor("#fdebd0"); cell.get_text().set_weight("bold")

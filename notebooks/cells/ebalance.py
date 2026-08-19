@@ -16,6 +16,24 @@ residualen prod−last), avslöjar BALANS-raden ≠ 0 en glömd/felräknad post 
 från tidigare residual-brutto som gav 0 per definition.
 """
 
+# Cellen är ÄVEN importerbar som modul, så att docs/nordpsa_overview.py kan använda
+# country_balance() i stället för att hålla en andra kopia av balanslogiken. Kopian där
+# hade ärvt exakt de buggar som rättades här 2026-08-16 (loads_t.p_set missar statiskt
+# satta laster; 'electrolyser ef'; DSR saknades) — 35,1 TWh/år fel i run361.
+# Bootstrapens globala vinner alltid; det här fyller bara i när de saknas.
+if 'pd' not in globals():
+    import pandas as pd                                                  # noqa: F401
+if 'pypsa' not in globals():
+    import pypsa                                                         # noqa: F401
+if 'ROOT' not in globals():
+    from pathlib import Path as _P
+    ROOT = _P(__file__).resolve().parents[2]
+if 'ZONES' not in globals():
+    ZONES = ['SE-N', 'SE-S', 'NO-N', 'NO-S', 'DK', 'FI']
+if 'cfg' not in globals():
+    import yaml as _yaml
+    cfg = _yaml.safe_load((ROOT / 'config' / 'zones.yaml').read_text())
+
 REF_LABEL = globals().get('LABEL2', None)   # referenskörning (delad global), annars ingen
 
 COUNTRY_MAP = {'SE-N': 'SE', 'SE-S': 'SE', 'NO-N': 'NO', 'NO-S': 'NO', 'DK': 'DK', 'FI': 'FI'}
@@ -47,6 +65,15 @@ ROW_LABELS  = {
 # balanskontrollen nedan använder de RÅA (positiva) värdena via BALANCE_SIGNS.
 DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
                'kont_export', 'intern_export', 'spill', 'kons_total'}
+
+
+# Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
+#   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
+# Konstant, inte presentation: ligger utanför LABEL-vakten så att importörer (docs/
+# nordpsa_overview.py) får samma teckenkonvention som cellen.
+BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'load_twh': -1, 'h2_elec': -1,
+                 'heat_elec': -1, 'ev_elec': -1, 'spill': -1, 'kont_export': -1,
+                 'intern_export': -1}
 
 
 def country_balance(res_label):
@@ -163,40 +190,43 @@ def country_balance(res_label):
     # = PRODUKTION TOTALT vid balans → de två totalraderna möts.
     d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec']
                        + d['kont_export'] + d['intern_export'] + d['spill'] - d['batt_net'])
-    cyr = d.groupby('country')[SHOW_ROWS].sum()
+    # SHOW_ROWS + de råa källposterna som slås ihop i visningen ('hydro'/'ror' → 'vatten',
+    # 'slack' ingår i prod_twh). Importörer behöver dem uppdelade — docs/nordpsa_overview.py
+    # ritar magasin och älvkraft som separata boxar. Visningen nedan indexerar SHOW_ROWS
+    # explicit, så extrakolumnerna syns aldrig i tabellen.
+    extra = [c for c in SOURCES if c not in SHOW_ROWS]
+    cyr = d.groupby('country')[SHOW_ROWS + extra].sum()
     cyr.loc['Norden'] = cyr.sum()
     return cyr
 
 
 # ── Tabell: LABEL och (om satt) LABEL2 ───────────────────────────────────────
-labels = [LABEL] + ([REF_LABEL] if REF_LABEL else [])
-bal    = {lab: country_balance(lab) for lab in labels}
+# Hoppas över vid import — då är bara country_balance() och konstanterna önskade.
+if 'LABEL' in globals():
+  labels = [LABEL]   + ([REF_LABEL] if REF_LABEL else [])
+  bal    = {lab: country_balance(lab) for lab in labels}
 
-cols = pd.MultiIndex.from_tuples([(lab, c) for lab in labels for c in COUNTRIES],
-                                 names=['Körning', 'Land'])
-data = {(lab, c): {row: (bal[lab].loc[c, row] if c in bal[lab].index else 0.0) for row in SHOW_ROWS}
-        for lab in labels for c in COUNTRIES}
+  cols = pd.MultiIndex.from_tuples([(lab, c) for lab in labels for c in COUNTRIES],
+                                   names=['Körning', 'Land'])
+  data = {(lab, c): {row: (bal[lab].loc[c, row] if c in bal[lab].index else 0.0) for row in SHOW_ROWS}
+          for lab in labels for c in COUNTRIES}
 
-tbl = pd.DataFrame(data, columns=cols)
-# Visa förbruknings-/sänk-rader negativa (utflöde); råvärdena i `data` (positiva)
-# används oförändrade i balanskontrollen nedan.
-tbl = tbl.mul(pd.Series({r: (-1 if r in DISPLAY_NEG else 1) for r in SHOW_ROWS}), axis=0)
-tbl.index = [ROW_LABELS[r] for r in SHOW_ROWS]
-tbl.index.name = 'TWh/år (medel)'
+  tbl = pd.DataFrame(data, columns=cols)
+  # Visa förbruknings-/sänk-rader negativa (utflöde); råvärdena i `data` (positiva)
+  # används oförändrade i balanskontrollen nedan.
+  tbl = tbl.mul(pd.Series({r: (-1 if r in DISPLAY_NEG else 1) for r in SHOW_ROWS}), axis=0)
+  tbl.index = [ROW_LABELS[r] for r in SHOW_ROWS]
+  tbl.index.name = 'TWh/år (medel)'
 
-# Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
-#   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
-BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'load_twh': -1, 'h2_elec': -1,
-                 'heat_elec': -1, 'ev_elec': -1, 'spill': -1, 'kont_export': -1, 'intern_export': -1}
-bal_vals = [sum(sgn * data[col][row] for row, sgn in BALANCE_SIGNS.items()) for col in cols]
-bal_vals = [0.0 if abs(v) < 1e-6 else v for v in bal_vals]
-balance  = pd.DataFrame([bal_vals], index=['BALANS (bör ≈ 0)'], columns=cols)
-tbl_full = pd.concat([tbl, balance])
-tbl_full.index.name = tbl.index.name
+  bal_vals = [sum(sgn * data[col][row] for row, sgn in BALANCE_SIGNS.items()) for col in cols]
+  bal_vals = [0.0 if abs(v) < 1e-6 else v for v in bal_vals]
+  balance  = pd.DataFrame([bal_vals], index=['BALANS (bör ≈ 0)'], columns=cols)
+  tbl_full = pd.concat([tbl, balance])
+  tbl_full.index.name = tbl.index.name
 
-with pd.option_context('display.float_format', '{:.1f}'.format,
-                       'display.max_columns', None, 'display.width', 250):
-    out_lines = tbl_full.to_string().split('\n')
-w = max(len(l) for l in out_lines)
-out_lines.insert(len(out_lines) - 1, '-' * w)   # streckad linje före BALANS-raden
-print('\n'.join(out_lines))
+  with pd.option_context('display.float_format', '{:.1f}'.format,
+                         'display.max_columns', None, 'display.width', 250):
+      out_lines = tbl_full.to_string().split('\n')
+  w = max(len(l) for l in out_lines)
+  out_lines.insert(len(out_lines) - 1, '-' * w)   # streckad linje före BALANS-raden
+  print('\n'.join(out_lines))
