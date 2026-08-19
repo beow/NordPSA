@@ -243,5 +243,12 @@ if 'LABEL' in globals():
                          'display.max_columns', None, 'display.width', 250):
       out_lines = tbl_full.to_string().split('\n')
   w = max(len(l) for l in out_lines)
-  out_lines.insert(len(out_lines) - 1, '-' * w)   # streckad linje före BALANS-raden
+  # Två skiljelinjer, samma gruppering som nordpsa_overview:s tabell. Overview kursiverar
+  # och gråar (Curtailed VRE); i en terminal görs samma sak med en linje ovanför, så att
+  # raden syns ligga UTANFÖR balansen och inte råkar läsas som en post i den.
+  i_curt = next((i for i, l in enumerate(out_lines)
+                 if l.startswith(ROW_LABELS['curt'])), None)
+  out_lines.insert(len(out_lines) - 1, '-' * w)     # före BALANS
+  if i_curt is not None:
+      out_lines.insert(i_curt, '·' * w)             # före (Curtailed VRE)
   print('\n'.join(out_lines))
