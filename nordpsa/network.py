@@ -297,11 +297,22 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame, cfg: dict | No
 NVE_INFLOW_ZONES = {"NO-N", "NO-S", "SE-N", "SE-S"}
 
 
-def _synth_ror_profile(inflow: pd.Series, frac: float, target_cf: float) -> pd.Series:
+def _synth_ror_profile(inflow: pd.Series, frac: float, target_cf: float,
+                       alpha: float = 0.0) -> pd.Series:
     """Syntetisk run-of-river must-run-profil (MW) för zoner utan separat RoR-data.
 
-    RoR-energin = andel `frac` av inflödesenergin, formad efter avrinningen (RoR ∝
-    inflöde) men GLÄTTAD tills topp/medel ≤ 1/target_cf (energibevarande) så att
+    RoR-energin = andel `frac` av inflödesenergin, formad som en BLANDNING av
+    oreglerad avrinning och jämn avtappning från uppströms magasin:
+
+        RoR = (1 - alpha)·inflöde + alpha·platt          (energibevarande)
+
+    ⛔ `alpha` tillkom 2026-08-19. Ren inflödesform (alpha=0) är MÄTT FEL: Norges
+    uppmätta B11 har v/s 0,62-0,81 mot dess naturliga inflödes 0,09-0,10, dvs.
+    verklig strömkraft är 7-8x flackare än avrinningen — den är till största delen
+    vatten som redan passerat ett magasin. Se scripts/synth_se_ror.SE_ROR_ALPHA för
+    anpassningen. Sätts per zon med `hydro_ror_regulated_frac` i zones.yaml.
+
+    Profilen GLÄTTAS därefter tills topp/medel ≤ 1/target_cf (energibevarande) så att
     p_nom = profil.max() ger en realistisk RoR-CF ≈ target_cf. Speglar metoden i
     scripts/synth_se_ror._smooth_to_cf (där fast på veckodata; här på snapshot-data).
     Utan glättning skulle p_nom sättas av en enstaka vårflodstopp → orimligt låg CF
@@ -311,6 +322,8 @@ def _synth_ror_profile(inflow: pd.Series, frac: float, target_cf: float) -> pd.S
     total = float(base.sum())
     if total <= 0:
         return base
+    if alpha > 0:
+        base = (1.0 - alpha) * base + alpha * (total / len(base))
     ratio = 1.0 / target_cf
     prof  = base
     w, n_ = 1, len(base)
@@ -383,7 +396,9 @@ def _add_hydro(
         ror_frac = zcfg.get("hydro_ror_fraction", 0.0)
         if ror_frac > 0 and f"{zone} hydro_ror" not in n.generators.index:
             ror_cf     = ccfg["hydro"].get("ror_target_cf", 0.5)
-            ror_series = _synth_ror_profile(inflow, ror_frac, ror_cf)
+            ror_series = _synth_ror_profile(
+                inflow, ror_frac, ror_cf,
+                alpha=zcfg.get("hydro_ror_regulated_frac", 0.0))
             ror_p_nom  = float(ror_series.max())
             if ror_p_nom > 1.0:
                 pu = (ror_series / ror_p_nom).clip(0, 1)

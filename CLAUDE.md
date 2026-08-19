@@ -211,7 +211,13 @@ Kurvan är `λ_k(v,z) = λ_bas[z] · A(v,z) · P_k(x − x_ref(v,z))` och vilar 
 
 ⛔ **Geminis nivåer används INTE.** Han vill ha 1,66× spridning (NO-N 39 lägst, NO-S 65 högst); driften vill ha platt 71–76 och om något NO-N högst. Nivåerna speglar observerade zonpriser, dvs. trängsel — som modellen redan producerar endogent ur NTC:erna. Att lägga in dem i λ_bas vore dubbelräkning, och facit (run320) ger 73,02 i alla fem zoner.
 
-⚠️ **Kvarstående brist: FI:s v/s 0,75 mot målet 1,13** (på rätt basis **0,64**, alltså värre).⭐ Sannolikt ett STRUKTURfel: modellens finska RoR är must-run med v/s 0,43, men finska verk körs i verkligheten som dygns-/effektreglering — inte oreglerat. Prova `hydro_ror_fraction` för FI innan kurvan misstänks.
+⚠️ **Kvarstående brist: FI:s v/s 0,75 mot målet 1,13** (på rätt basis **0,64**).
+
+⛔ **RoR-spåret PRÖVAT OCH TILL STÖRSTA DELEN FALSIFIERAT (run382, 2026-08-19).** Hypotesen var att den syntetiska strömkraftens form bar hela felet. Strömkraften formades om till `(1−α)·inflöde + α·platt` med α = 0,80 anpassat mot Norges **uppmätta** B11 — profilerna blev som avsett (SE-N v/s 0,29 → 0,80, FI 0,43 → 0,84) — men **reservoaren kompenserade bort två tredjedelar**: SE-N:s reservoar gick 1,45 → 1,21 och totalen bara 1,15 → **1,18** mot förutsagda 1,33. FI 0,64 → 0,72 mot förutsagda 0,79.
+
+⭐ **Slutsatsen är en nära bevarandelag: uppdelningen reservoar/strömkraft är nästan irrelevant för den aggregerade v/s-kvoten.** Extra must-run vintereffekt sänkte bara vinterpriset (SE −16,8, FI −20,6 EUR/MWh, sommaren oförändrad) och reservoaren drog sig undan i samma takt. Systemet — last, kurva, NTC — sätter kvoten, inte vilken enhet som levererar. Norge är kontrollgruppen: orört och oförändrat.
+
+⇒ **SE:s och FI:s kvarstående v/s-underskott är alltså ÄKTA, inte en klassificeringsartefakt.** Det bor i kurvan eller i lastformen, och kan inte städas bort i indata. Ändringen behölls ändå på datakvalitetsgrund (α-formen är förenlig med den enda uppmätta strömkraft vi har; poängen 0,91 → 0,80). Den är *inte* kurvans att laga — gradienten kräver `a_amp = −0,71`, alltså ett sommartoppat vattenvärde. FI behöver bara flytta 0,43 TWh/år och magasinet rymmer 5,5, så det är ingen lagringsgräns; FI:s vattenkraft (2,34 GW) är för liten för att vara prissättande i sin egen zon. ⛔ Och det är inte upplösningen: run374 i 1h gav v/s 1,18/1,25/0,64 mot 3h:ns 1,18/1,25/0,68, och prissvansarna fanns redan vid 3h (p99 440–500).
 
 **⚠️ Hydro bids at the HISTORICAL zone price in EXPANSION (water-value proxy, mode-bound since 2026-08-15):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
 

@@ -10,9 +10,16 @@ som NO får via faktisk B11-data.
 
 Detta skript konstruerar en syntetisk RoR-profil:
 
-  1. Formen lånas från det naturliga reservoarinflödet (`build_inflow`), som har
-     den klassiska vårflodssäsongen. Äkta RoR följer den oreglerade avrinningen,
-     vars säsong ligger nära inflödet (om än något skarpare/tidigare topp).
+  1. Formen är en BLANDNING av det naturliga reservoarinflödet (`build_inflow`,
+     klassisk vårflodssäsong) och jämn avtappning från uppströms magasin:
+
+         RoR = (1 - α)·inflöde + α·platt              (energibevarande)
+
+     ⛔ RÄTTAT 2026-08-19. Tidigare lånades formen RAKT AV från inflödet, med
+     motiveringen "äkta RoR följer den oreglerade avrinningen". Den premissen är
+     MÄTT FALSK — se SE_ROR_ALPHA nedan. Det gav SE-N:s strömkraft v/s 0,29 mot
+     Norges uppmätta 0,62-0,81, och drog hela Sveriges vinter/sommar-kvot från
+     1,33 till 1,15 (mål 1,38).
   2. Nivån skalas till en antagen RoR-årssumma per zon (SE_ROR_TARGET_TWH).
      ⚠️ PLATSHÅLLARE — kalibreras mot SVK/Energiföretagen. SE har relativt lite
      ren RoR (~3–5 TWh totalt), mest i SE2 (mellersta Norrland) och något i SE3.
@@ -59,6 +66,19 @@ from scripts.fetch_nve import (
 # tömmer SE-S-magasinet mot 0). 20 % som kompromiss för båda SE-zonerna.
 SE_ROR_FRACTION = 0.20
 
+# UPPSTRÖMSREGLERAD ANDEL av strömkraftens vatten. Premissen i docstringen ovan
+# ("äkta RoR följer den oreglerade avrinningen") är MÄTT FALSK: Norges uppmätta B11
+# har v/s 0,62 (NO-N) / 0,81 (NO-S) medan dess naturliga inflöde har 0,09 / 0,10 —
+# verklig strömkraft är 7-8x FLACKARE än avrinningen. Minstakvadratanpassning av
+# blandningen mot NO:s B11 ger α = 0,75 (NO-N) / 0,87 (NO-S).
+#
+# ⚠️ ANTAGANDE: 0,80 för Sverige. Svenska älvar är MER reglerade än norska (Lule,
+# Skellefte och Ume är i praktiken helreglerade; svensk reglerbarhet 80-85 %), så
+# α_SE >= α_NO är ett ARGUMENT — inte en mätning. Någon svensk mätning finns inte:
+# Svenska kraftnät rapporterar ingen B11-kategori alls, `ror_entsoe_SE*` är tomma,
+# och det är själva skälet till att den här modulen existerar.
+SE_ROR_ALPHA = 0.80
+
 # Mål-kapacitetsfaktor för RoR-generatorn. p_nom = ror.max() (sätts i network.py),
 # så profilen glättas tills topp/medel ≤ 1/CF → p_nom ≈ medeleffekt/CF. Undviker att
 # den peakiga råinflödesformen (topp/medel ~4,4) skär ut orimligt mycket turbineffekt.
@@ -81,7 +101,8 @@ def _smooth_to_cf(weekly_mw: pd.Series, cf: float) -> tuple[pd.Series, int]:
     return prof, w
 
 
-def synth_zone(zone: str, fraction: float, ror_cf: float, plot_ax=None) -> None:
+def synth_zone(zone: str, fraction: float, ror_cf: float, alpha: float = SE_ROR_ALPHA,
+               plot_ax=None) -> None:
     bzns = SE_ZONE_MAP[zone]["bzns"]
     reservoir_wkly = build_reservoir_weekly_entsoe(bzns)
 
@@ -98,8 +119,11 @@ def synth_zone(zone: str, fraction: float, ror_cf: float, plot_ax=None) -> None:
             continue
 
         # 2. RoR-energi = andel av total vattenkraftsproduktion (≈ inflöde), formad
-        #    efter inflödet. Veckovis effekt (MW), index på veckostart.
-        ror_gwh0 = shape / shape.sum() * fraction * shape.sum()  # = shape*fraction
+        #    som blandning av oreglerad avrinning och jämn uppströmsavtappning.
+        #    α flyttar bara energi mellan årstider — summan är oförändrad.
+        #    Veckovis effekt (MW), index på veckostart.
+        unreg    = shape * fraction
+        ror_gwh0 = (1.0 - alpha) * unreg + alpha * (unreg.sum() / len(unreg))
         weekly = pd.Series(
             (ror_gwh0 * 1000.0 / HOURS_PER_WEEK).values,
             index=pd.to_datetime(infl["week_start"]).dt.tz_convert("UTC"),
@@ -149,6 +173,9 @@ def main() -> None:
                              "diversitet i ett lumpat magasin (flodutjämning).")
     parser.add_argument("--ror-fraction", type=float, default=SE_ROR_FRACTION,
                         help=f"RoR-andel av total vattenkraftsproduktion (default {SE_ROR_FRACTION}, NVE).")
+    parser.add_argument("--ror-alpha", type=float, default=SE_ROR_ALPHA,
+                        help=f"Uppströmsreglerad andel av RoR-vattnet (default {SE_ROR_ALPHA}; "
+                             "0 = gamla rena inflödesformen).")
     parser.add_argument("--ror-cf", type=float, default=SE_ROR_CF,
                         help=f"Mål-CF för RoR-generatorn → p_nom≈medel/CF (default {SE_ROR_CF}).")
     args = parser.parse_args()
@@ -168,9 +195,10 @@ def main() -> None:
         fig, axes = plt.subplots(2, 1, figsize=(13, 8))
 
     for i, zone in enumerate(["SE-N", "SE-S"]):
-        print(f"\n=== {zone} (RoR {100*args.ror_fraction:.0f}% av prod, mål-CF {args.ror_cf}) ===")
+        print(f"\n=== {zone} (RoR {100*args.ror_fraction:.0f}% av prod, α={args.ror_alpha}, "
+              f"mål-CF {args.ror_cf}) ===")
         ax = axes[i] if axes is not None else None
-        synth_zone(zone, args.ror_fraction, args.ror_cf, plot_ax=ax)
+        synth_zone(zone, args.ror_fraction, args.ror_cf, args.ror_alpha, plot_ax=ax)
         if ax is not None:
             ax.set_title(f"{zone} — syntetisk RoR ({100*args.ror_fraction:.0f}% av prod)")
             ax.set_ylabel("RoR [MW]"); ax.set_xlabel("Dag på året")
