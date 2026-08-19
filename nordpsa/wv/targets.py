@@ -5,9 +5,20 @@ Det är hela skälet till att de duger: [[project_hydro_seasonal_bid]] kalibrera
 mot modellens eget pris och mätte därmed sitt eget eko.
 
   1. eSetts FYSISKA hydrosäsong per land, vinter/sommar-kvoten
-     (jan+feb+dec)/(jun+jul+aug) på RESERVOARkraften. SE 1,38 · NO 1,30 · FI 1,13.
-     ⚠️ Strömkraften ska skiljas ut: den är must-run och följer tillrinningen, så
-     den späder ut måttet med en form inget modellval påverkar.
+     (jan+feb+dec)/(jun+jul+aug) på ALL vattenkraft. SE 1,38 · NO 1,30 · FI 1,13.
+
+     ⛔ RÄTTAT 2026-08-19: docstringen påstod tidigare att målen var mätta på
+     RESERVOARkraften, och run_vs() mätte därför modellen på enbart magasinet.
+     eSetts rådata har EN ENDA `hydro`-kolumn och kan omöjligt skilja magasin från
+     strömkraft; målen är reproducerade exakt ur data/raw/production_*.parquet:
+     SE 56,8/41,3 = 1,38 · NO 120,9/92,8 = 1,30 · FI 10,6/9,4 = 1,13. Tre svep och
+     ~130 körningar jämförde alltså modellens MAGASIN mot mätdatans TOTAL, vilket
+     bland annat gjorde att SE:s fel läste som "för högt" när det på lika-mot-lika
+     var för lågt. Se [[project_vs_measure_mismatch]].
+
+     ⚠️ Strömkraften kan INTE skiljas ut på mätsidan. Den är must-run och följer
+     tillrinningen, så den späder ut måttet med en form inget modellval påverkar —
+     men den utspädningen finns i målet och måste därför finnas i modellmåttet med.
 
   2. Energy Charts VECKOVISA magasinnivåer per land, 2014-2026
      (docs/NordicHydroEC.xlsx). Ger ett klimatologiskt BAND, inte en årsbana.
@@ -38,7 +49,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: Vinter/sommar-kvot på reservoarkraften, eSett 2023-25. Mätt, inte antaget.
+#: Vinter/sommar-kvot på ALL vattenkraft (magasin + strömkraft), eSett 2023-25.
+#: Mätt, inte antaget — reproducerad ur råfilerna, se modulens docstring.
 ESETT_VS: Dict[str, float] = {"SE": 1.38, "NO": 1.30, "FI": 1.13}
 
 LAND: Dict[str, list] = {"SE": ["SE-N", "SE-S"], "NO": ["NO-N", "NO-S"], "FI": ["FI"]}
@@ -138,20 +150,31 @@ def run_weekly_soc(label: str, cfg: dict | None = None) -> pd.DataFrame:
     return pd.DataFrame(out).reindex(range(1, 53))
 
 
-def run_vs(label: str) -> Dict[str, float]:
-    """Vinter/sommar-kvot på RESERVOARkraften per land, ur dispatch_hydro.csv.
+def run_vs(label: str, include_ror: bool = True) -> Dict[str, float]:
+    """Vinter/sommar-kvot på ALL vattenkraft per land — samma mått som ESETT_VS.
 
-    Strömkraften ligger inte i den filen (den är en Generator, inte StorageUnit),
-    så uppdelningen är gjord redan av datastrukturen — samma mått som
-    temp/hydro_by_country.py rapporterar under 'res'.
+    Magasinet ligger i `dispatch_hydro.csv` (StorageUnit) och strömkraften i
+    `dispatch_generators.csv` som `{zon} hydro_ror` (Generator), så de måste
+    summeras ihop för att matcha eSetts odelbara `hydro`-post.
+
+    ⛔ `include_ror=False` ger det GAMLA, felaktiga måttet (enbart magasin). Det
+    finns kvar enbart för att reproducera svep 1-3 och run316-run381 — använd det
+    aldrig som måltavla mot ESETT_VS. Strömkraften har v/s ≈ 0,4 (den följer
+    tillrinningen), så den drar ned kvoten kraftigt och olika mycket per land:
+    SE −0,35, NO −0,16, FI −0,13 i run379.
     """
     d = _read(label, "dispatch_hydro.csv")
+    g = _read(label, "dispatch_generators.csv") if include_ror else None
     out = {}
     for land, zones in LAND.items():
         cols = [f"{z} hydro" for z in zones if f"{z} hydro" in d.columns]
         if not cols:
             continue
         s = d[cols].sum(axis=1)
+        if g is not None:
+            rcols = [f"{z} hydro_ror" for z in zones if f"{z} hydro_ror" in g.columns]
+            if rcols:
+                s = s.add(g[rcols].sum(axis=1), fill_value=0.0)
         m = s.groupby(s.index.month).sum()
         w, su = m.reindex(WINTER).sum(), m.reindex(SUMMER).sum()
         out[land] = float(w / su) if su else float("nan")
@@ -291,7 +314,11 @@ def facit_score(label: str, w_vs: float = 1.0, w_soc: float = 2.0,
     året, inte bara har rätt vinter/sommar-kvot. Vikterna är samma antagande som i
     score() — 0,10 i kvotfel väger som 0,05 i fyllnadsgrad.
     """
-    v, vf = run_vs(label), run_vs(facit)
+    # ⚠️ MAGASINET ENSAMT här, till skillnad från score(). Facit är en MODELLkörning
+    # av samma flotta, så strömkraften är bit-identisk i båda och bidrar bara med
+    # utspädning — reservoaren är den enda delen kurvan styr. Det bevarar dessutom
+    # jämförbarheten med de ~130 facit-poäng som redan är rapporterade.
+    v, vf = run_vs(label, include_ror=False), run_vs(facit, include_ror=False)
     s, sf = run_weekly_soc(label), run_weekly_soc(facit)
     d_vs = {l: abs(v[l] - vf[l]) for l in LAND if l in v and l in vf}
     d_soc = {l: float((s[l] - sf[l]).abs().mean())
