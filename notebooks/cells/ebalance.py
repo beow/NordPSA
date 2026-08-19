@@ -45,9 +45,14 @@ COUNTRIES   = ['SE', 'NO', 'DK', 'FI', 'Norden']
 SOURCES     = ['hydro', 'ror', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
                'DSR', 'slack']
 # Visningsrader: vatten (= hydro+ror), produktion, demand, KONSUMTION TOTAL (= demand-summa), balans.
+# DSR ligger på KONSUMTIONSsidan: ingen energi produceras, det är efterfrågan som uteblir.
+# Modellen implementerar den som shed-generator på elbussen (den ÄR en källa i nodbalansen
+# och budar i meriten vid 100/250/500 €/MWh), men att räkna in den i PRODUKTION TOTAL gör
+# att den raden inte längre är faktisk generering. Visas därför POSITIV bland de negativa
+# förbrukningsraderna — den drar ifrån konsumtionen.
 SHOW_ROWS   = ['vatten', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
-               'DSR', 'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
-               'batt_net', 'spill', 'kont_export', 'intern_export', 'kons_total']
+               'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec', 'DSR',
+               'batt_net', 'kont_export', 'intern_export', 'kons_total', 'curt']
 ROW_LABELS  = {
     'vatten': 'Vattenkraft',
     'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
@@ -57,22 +62,30 @@ ROW_LABELS  = {
     'DSR': 'Efterfrågeflex (DSR)',
     'prod_twh': 'PRODUKTION TOTAL', 'load_twh': 'Last', 'h2_elec': 'H2 (elektrolys + oflex)',
     'heat_elec': 'Värme (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
-    'spill': 'Spill',
+    # ⚠️ UTANFÖR BALANSEN och sist i tabellen: VRE-raderna visar dispatchad energi, så
+    # curtailment är inte längre en post som ska dras av någonstans — den är en upplysning
+    # om hur mycket som fanns men inte togs. Parenteserna i etiketten signalerar det, och
+    # nordpsa_overview kursiverar raden.
+    # ⚠️ HETTE 'spill' till 2026-08-19. Raden är UTESLUTANDE VRE-curtailment —
+    # hydrons förbiledning ingår INTE (den ligger i hydro_spill.csv och är 0,0000
+    # TWh i alla körningar sedan run316). 'Spill' betyder dessutom just hydrospill
+    # i resten av kodbasen (--spill-cost), så namnet pekade på fel storhet.
+    'curt': '(Curtailed VRE)',
     'kont_export': 'Kontinental export', 'intern_export': 'Norden-intern export',
     'kons_total': 'KONSUMTION TOTAL',
 }
 # Sänk-/förbruknings-rader visas NEGATIVA (utflöde) i tabellen. Rent KOSMETISKT —
 # balanskontrollen nedan använder de RÅA (positiva) värdena via BALANCE_SIGNS.
 DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
-               'kont_export', 'intern_export', 'spill', 'kons_total'}
+               'kont_export', 'intern_export', 'kons_total'}
 
 
 # Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
 #   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
 # Konstant, inte presentation: ligger utanför LABEL-vakten så att importörer (docs/
 # nordpsa_overview.py) får samma teckenkonvention som cellen.
-BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'load_twh': -1, 'h2_elec': -1,
-                 'heat_elec': -1, 'ev_elec': -1, 'spill': -1, 'kont_export': -1,
+BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'DSR': +1, 'load_twh': -1, 'h2_elec': -1,
+                 'heat_elec': -1, 'ev_elec': -1, 'kont_export': -1,
                  'intern_export': -1}
 
 
@@ -132,16 +145,16 @@ def country_balance(res_label):
                          and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == c]
                 disp_c = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero   # slack ingår här
                 if c in VRE_CARRIERS and ccols:
-                    # VRE redovisas som TILLGÄNGLIGT (p_max_pu × p_nom_opt); skillnaden
-                    # mot dispatchat = curtailment → ackumuleras till spill-raden.
+                    # VRE redovisas som FAKTISKT DISPATCHAT (2026-08-19; visade tidigare
+                    # TILLGÄNGLIGT, vilket gjorde PRODUKTION TOTAL till en hybrid: summan
+                    # var inte vad som matades in på nätet). Curtailment räknas fortfarande
+                    # men är en UPPLYSNINGSRAD utanför balansen.
                     avail = sum((pmax[g] * nn.generators.at[g, 'p_nom_opt']
                                  for g in ccols if g in pmax.columns), zero)
                     curt = curt + (avail - disp_c).clip(lower=0)
-                    s = avail
-                else:
-                    s = disp_c
+                s = disp_c
             r[c] = twh(s)
-        r['spill']     = twh(curt)
+        r['curt']      = twh(curt)
         # Länkar väljs på CARRIER, inte på namn: LMA-uppdelningen gav flera elektrolysörer
         # per zon ('{z} electrolyser ef' för elektrobränslen), och en namnuppslagning
         # missade dem tyst (15,2 TWh/år i run361).
@@ -184,12 +197,14 @@ def country_balance(res_label):
         rows.append(r)
 
     d = pd.DataFrame(rows)
-    d['prod_twh']   = d[SOURCES].sum(axis=1)        # produktion inkl slack
+    # DSR utanför PRODUKTION TOTAL (se SHOW_ROWS); slack ingår, det ÄR levererad energi.
+    d['prod_twh']   = d[[s for s in SOURCES if s != 'DSR']].sum(axis=1)
     d['vatten']     = d['hydro'] + d['ror']         # magasin + älv (RoR) i en post
     # KONSUMTION TOTAL = inhemsk last + nettoexport (export = utflöde = last) − batteri (netto ut).
     # = PRODUKTION TOTALT vid balans → de två totalraderna möts.
     d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec']
-                       + d['kont_export'] + d['intern_export'] + d['spill'] - d['batt_net'])
+                       + d['kont_export'] + d['intern_export']
+                       - d['batt_net'] - d['DSR'])
     # SHOW_ROWS + de råa källposterna som slås ihop i visningen ('hydro'/'ror' → 'vatten',
     # 'slack' ingår i prod_twh). Importörer behöver dem uppdelade — docs/nordpsa_overview.py
     # ritar magasin och älvkraft som separata boxar. Visningen nedan indexerar SHOW_ROWS

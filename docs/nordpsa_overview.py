@@ -59,12 +59,17 @@ def expansion_source(res_label):
     if not meta.exists():
         return None
     for line in meta.read_text().splitlines():
-        if line.startswith("argv:") and "--dispatch" in line:
-            parts = line.split()
-            i = parts.index("--dispatch")
-            if i + 1 < len(parts):
-                cand = parts[i + 1].strip("'\"")
-                return cand if (ROOT / "results" / cand / "network.nc").exists() else None
+        if not line.startswith("argv:"):
+            continue
+        # Sök på TOKEN, inte delsträng: run343:s --desc innehåller ordet "dispatch", vilket
+        # matchade `"--dispatch" in line` men saknade token → ValueError i .index().
+        parts = line.split()
+        if "--dispatch" not in parts:
+            continue
+        i = parts.index("--dispatch")
+        if i + 1 < len(parts):
+            cand = parts[i + 1].strip("'\"")
+            return cand if (ROOT / "results" / cand / "network.nc").exists() else None
     return None
 
 
@@ -570,6 +575,8 @@ for (r, c), cell in tbl.get_celld().items():
     # matcha TYST när raddefinitionerna delades.
     if rn in (ROW_LABELS["prod_twh"], ROW_LABELS["kons_total"]):
         cell.set_facecolor("#eaf2f8"); cell.get_text().set_weight("bold")
+    if rn == ROW_LABELS["curt"]:      # upplysningsrad utanför balansen → kursiv
+        cell.get_text().set_style("italic"); cell.get_text().set_color("#6b7b85")
     if rn == "BALANS (≈0)":
         cell.set_facecolor("#fdebd0"); cell.get_text().set_weight("bold")
     # Rödmarkera produktionssiffror där kraftslagets kapacitet ligger vid sitt tak (p_nom_opt≈max).
