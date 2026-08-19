@@ -219,6 +219,14 @@ Kurvan är `λ_k(v,z) = λ_bas[z] · A(v,z) · P_k(x − x_ref(v,z))` och vilar 
 
 ⇒ **SE:s och FI:s kvarstående v/s-underskott är alltså ÄKTA, inte en klassificeringsartefakt.** Det bor i kurvan eller i lastformen, och kan inte städas bort i indata. Ändringen behölls ändå på datakvalitetsgrund (α-formen är förenlig med den enda uppmätta strömkraft vi har; poängen 0,91 → 0,80). Den är *inte* kurvans att laga — gradienten kräver `a_amp = −0,71`, alltså ett sommartoppat vattenvärde. FI behöver bara flytta 0,43 TWh/år och magasinet rymmer 5,5, så det är ingen lagringsgräns; FI:s vattenkraft (2,34 GW) är för liten för att vara prissättande i sin egen zon. ⛔ Och det är inte upplösningen: run374 i 1h gav v/s 1,18/1,25/0,64 mot 3h:ns 1,18/1,25/0,68, och prissvansarna fanns redan vid 3h (p99 440–500).
 
+⭐⭐⭐ **LÖST FÖR SE (run384, 2026-08-19): `config/terminal_curve_2040_aamp03.yaml`.** Identisk med den låsta kurvan så när som på `a_amp`/`a_amp2`, halverade ×0,6 → **×0,3**. SE:s v/s **1,18 → 1,32** (mål 1,38), Σ|fel| 0,64 → 0,50, poäng 0,80 → **0,66**, SE i EC-bandet 54 → **83 %**. Efter tre falsifierade strukturhypoteser (+0,03 / +0,01 / +0,01) var det den uppmätta gradienten d(v/s)/d(a_amp) ≈ −1,7 som hade rätt.
+
+⭐ **Marspuckeln — hela invändningen mot att sänka `a_amp` — slog INTE in.** Medelfel mot uppmätt (v9-12 minus v1-8) **7,6 → 6,4**, bättre i fyra zoner av fem; årsmax ligger kvar i v1-8 utom i NO-N (+0,8 mot uppmätta −1,3, marginellt). Priserna står stilla (±0,20 EUR/MWh i alla zoner), spill 0,0000, drift −0,90 → −1,29 TWh. Och λ längs EC:s medianbana planade ut mot designmålet: kvot SE-N 2,08 → 1,52, FI 2,78 → 1,84 (`temp/plot_value_surface.py` ritar ytan med banan projicerad på λ-axeln).
+
+⚠️ Kvar: **NO överskjuter** (1,35 mot 1,30) — likformig skalning är trubbig, NO hör hemma kring ×0,45. **Budkurvan blev sämre** (MAE 20-60 2,68 → 3,38 GW). ⛔ **FI rör sig inte** (0,72 → 0,74) — fyra spakar prövade utan verkan.
+
+⚠️ `terminal_curve_2040_gemini.yaml` är fortfarande **default och låst**; aamp03 är en separat fil, så run316–383 är oförändrade.
+
 **⚠️ Hydro bids at the HISTORICAL zone price in EXPANSION (water-value proxy, mode-bound since 2026-08-15):** the reservoir StorageUnit's `marginal_cost` is set to that zone's *actual observed day-ahead price* (from `market_prices.parquet`, floored at hydro VOM 0.6) — verified identical to the 2h mean of the historical series in all 13152 snapshots of run260. Hydro's effective bid is therefore
 
 ```
