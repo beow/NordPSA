@@ -4,7 +4,16 @@ country_balance, per land (TWh/år, medel över körningens år). Alla siffror i
 (TWh-flöden, GW-kapaciteter) extraheras ur körningens network.nc → auto-uppdateras per run.
 
 Användning:
-    python docs/nordpsa_overview.py [RUN] [utfil.png]
+    python docs/nordpsa_overview.py [RUN] [utfil.png] [--exp KÖRNING | --no-exp]
+
+⭐ DISPATCH-KÖRNINGAR: kapaciteterna är frysta (p_nom_extendable = False på allt), så
+expanderbarheten går inte att läsa ur körningen själv — fast/utbyggt-uppdelningen hamnar
+helt på "fast", alla taggar blir (F) och inget potentialtak kan flaggas. Figuren visar då
+RÄTT kapaciteter men kan inte säga vad som BYGGDES. Skriptet slår därför automatiskt upp
+källexpansionen ur run_meta.txt (`argv: ... --dispatch X ...`) och läser expanderbarheten
+därifrån, medan energi, flöden och priser alltid kommer från körningen som visas.
+    --exp KÖRNING   hämta expanderbarheten från en annan körning än den som anges i argv
+    --no-exp        stäng av; läs allt ur körningen själv (gamla beteendet)
 RUN kan vara hela katalognamnet (run143_svk2040mm_nucexp_3h) ELLER bara prefixet
 (run143 / run143_) — då matchas det entydigt mot results/.
 Default: RUN=run142_svk2040mm_cont2040_3h, utfil=docs/nordpsa_overview_<runNNN>.png
@@ -36,9 +45,42 @@ def resolve_run(arg):
     return hits[0]
 
 
-RUN  = resolve_run(sys.argv[1]) if len(sys.argv) > 1 else "run142_svk2040mm_cont2040_3h"
+def expansion_source(res_label):
+    """Källkörningen bakom en dispatch, ur dess run_meta.txt (`argv: ... --dispatch X ...`).
+
+    ⭐ VARFÖR: i en dispatch är kapaciteterna FRYSTA — `freeze_capacities_from` sätter
+    p_nom_extendable = False på allt. Då blir p_nom_min/p_nom_max meningslösa och de tre
+    ställen som läser dem tappar sin information: fast/utbyggt-uppdelningen (allt hamnar
+    på 'fast'), (F)/(E)/(ET)-taggarna (allt blir 'F') och takbindningen (aldrig röd).
+    Figuren visar alltså RÄTT kapaciteter men kan inte längre säga vad som BYGGDES.
+    Strukturen hämtas därför från expansionen, energin från dispatchen.
+    """
+    meta = ROOT / "results" / res_label / "run_meta.txt"
+    if not meta.exists():
+        return None
+    for line in meta.read_text().splitlines():
+        if line.startswith("argv:") and "--dispatch" in line:
+            parts = line.split()
+            i = parts.index("--dispatch")
+            if i + 1 < len(parts):
+                cand = parts[i + 1].strip("'\"")
+                return cand if (ROOT / "results" / cand / "network.nc").exists() else None
+    return None
+
+
+argv = [a for a in sys.argv[1:]]
+EXP_OVERRIDE = None
+if "--exp" in argv:                       # explicit: hämta strukturen från denna körning
+    i = argv.index("--exp")
+    EXP_OVERRIDE = argv[i + 1] if i + 1 < len(argv) else None
+    del argv[i:i + 2]
+NO_EXP = "--no-exp" in argv               # tvinga: läs strukturen ur körningen själv
+if NO_EXP:
+    argv.remove("--no-exp")
+
+RUN  = resolve_run(argv[0]) if argv else "run142_svk2040mm_cont2040_3h"
 # Default-utfil får run-prefix-suffix (nordpsa_overview_run145.png) → skriver ej över andra runs.
-OUT  = Path(sys.argv[2]) if len(sys.argv) > 2 else \
+OUT  = Path(argv[1]) if len(argv) > 1 else \
        Path(__file__).with_name(f"nordpsa_overview_{RUN.split('_')[0]}.png")
 
 ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
@@ -52,10 +94,18 @@ from ebalance import (country_balance, COUNTRIES, SOURCES, SHOW_ROWS,   # noqa: 
                       ROW_LABELS, DISPLAY_NEG, BALANCE_SIGNS)
 
 
-def load_run(res_label):
-    """Returnerar (cyr, caps): per-lands-balans (DataFrame) + dict med schematik-annoteringar."""
+def load_run(res_label, struct_label=None):
+    """Returnerar (cyr, caps): per-lands-balans (DataFrame) + dict med schematik-annoteringar.
+
+    `struct_label` = körningen som EXPANDERBARHETEN läses ur (se expansion_source()).
+    Energi, flöden och priser kommer alltid från `res_label`. None = läs allt ur körningen.
+    """
     RES_ = ROOT / "results" / res_label
     nn = pypsa.Network(); nn.import_from_netcdf(RES_ / "network.nc")
+    if struct_label:
+        ns = pypsa.Network(); ns.import_from_netcdf(ROOT / "results" / struct_label / "network.nc")
+    else:
+        ns = nn
     disp = pd.read_csv(RES_ / "dispatch_generators.csv", index_col=0, parse_dates=True)
     hyd  = pd.read_csv(RES_ / "dispatch_hydro.csv",      index_col=0, parse_dates=True)
     flw  = pd.read_csv(RES_ / "flows.csv",               index_col=0, parse_dates=True)
@@ -90,6 +140,9 @@ def load_run(res_label):
 
     # ── kapaciteter / flöden för schematik-annoteringar (nordiska totaler) ──
     G = nn.generators; L = nn.links; SU = nn.storage_units
+    # Strukturramar: expanderbarhet + potentialtak. Samma index som G/L/SU när
+    # dispatchen byggts ur samma konfiguration; okända namn faller tillbaka på nn.
+    GS = ns.generators; LS = ns.links; SUS = ns.storage_units
     pn = lambda idx: float(L.loc[idx, "p_nom_opt"].sum()) / 1e3  # GW
     lk = lambda suf: pn([l for l in L.index if l.endswith(suf)])
     hy = SU[SU.carrier == "hydro"]; ba = SU[SU.carrier != "hydro"]
@@ -119,9 +172,11 @@ def load_run(res_label):
             if g not in disp.columns:
                 continue
             e = twh(disp[g].clip(lower=0))
-            po = float(G.at[g, "p_nom_opt"])
-            if G.at[g, "p_nom_extendable"] and po > 1e-6:
-                fr = min(max(float(G.at[g, "p_nom_min"]) / po, 0.0), 1.0)
+            # Expanderbarheten ur STRUKTURkörningen; energin ur den som visas.
+            gs = GS if g in GS.index else G
+            po = float(gs.at[g, "p_nom_opt"])
+            if gs.at[g, "p_nom_extendable"] and po > 1e-6:
+                fr = min(max(float(gs.at[g, "p_nom_min"]) / po, 0.0), 1.0)
                 fixed += e * fr; expn += e * (1.0 - fr)
             else:
                 fixed += e
@@ -134,7 +189,7 @@ def load_run(res_label):
     thermal_pure = sum(twh(disp.get(f"{z} thermal", zero).clip(lower=0)) for z in ZONES)
     heat_mustrun = sum(twh(disp.get(g, zero).clip(lower=0)) for g in G.index
                        if G.at[g, "carrier"] == "heat mustrun")
-    St = nn.stores
+    St = nn.stores; StS = ns.stores
     store_gwh = lambda suf: float(St[St.bus.str.endswith(suf)].e_nom_opt.sum()) / 1e3
     emp = nn.stores_t.get("e_min_pu")
     ev_cols = [c for c in (emp.columns if emp is not None else []) if "EV" in c]
@@ -156,10 +211,10 @@ def load_run(res_label):
             return "F"
         binds = (ext[ocol] >= 0.99 * ext[ccol]) & (ext[ccol] < 1e11)
         return "ET" if bool(binds.any()) else "E"
-    cg = lambda c: _cls(G[G.carrier == c], "p_nom_opt", "p_nom_max", "p_nom_extendable")
-    cs = lambda c: _cls(SU[SU.carrier == c], "p_nom_opt", "p_nom_max", "p_nom_extendable")
-    cl = lambda suf: _cls(L.loc[[l for l in L.index if l.endswith(suf)]], "p_nom_opt", "p_nom_max", "p_nom_extendable")
-    cst = lambda suf: _cls(St[St.bus.str.endswith(suf)], "e_nom_opt", "e_nom_max", "e_nom_extendable")
+    cg = lambda c: _cls(GS[GS.carrier == c], "p_nom_opt", "p_nom_max", "p_nom_extendable")
+    cs = lambda c: _cls(SUS[SUS.carrier == c], "p_nom_opt", "p_nom_max", "p_nom_extendable")
+    cl = lambda suf: _cls(LS.loc[[l for l in LS.index if l.endswith(suf)]], "p_nom_opt", "p_nom_max", "p_nom_extendable")
+    cst = lambda suf: _cls(StS[StS.bus.str.endswith(suf)], "e_nom_opt", "e_nom_max", "e_nom_extendable")
     tags = dict(
         nuclear=cg("nuclear"), onw=cg("wind_onshore"), offw=cg("wind_offshore"), sol=cg("solar"),
         thermal=cg("thermal"), gas=cg("gas"), market=cg("market"), heat_mustrun=cg("heat mustrun"),
@@ -206,10 +261,10 @@ def load_run(res_label):
                      "DK": ["DK"], "FI": ["FI"], "Norden": ZONES}
     def _capbinds(carrier, zs):
         for z in zs:
-            m = (Gm.carrier == carrier) & Gm.p_nom_extendable & (Gm.bus == z)
+            m = (GS.carrier == carrier) & GS.p_nom_extendable & (GS.bus == z)
             if not m.any():
                 continue
-            opt, mx = Gm.loc[m, "p_nom_opt"].sum(), Gm.loc[m, "p_nom_max"].sum()
+            opt, mx = GS.loc[m, "p_nom_opt"].sum(), GS.loc[m, "p_nom_max"].sum()
             if 0 < mx < 1e12 and opt >= 0.999 * mx:
                 return True
         return False
@@ -251,8 +306,11 @@ def load_run(res_label):
     return cyr, caps
 
 
+STRUCT = None if NO_EXP else (EXP_OVERRIDE or expansion_source(RUN))
 print(f"Läser {RUN} …")
-bal, K = load_run(RUN)
+if STRUCT:
+    print(f"  expanderbarhet (F/E/ET, fast+utbyggt, takbindning) från {STRUCT}")
+bal, K = load_run(RUN, STRUCT)
 T = K["tags"]
 tag = lambda k: f" ({T[k]})" if T.get(k) else ""
 
