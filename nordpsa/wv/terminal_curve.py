@@ -108,8 +108,32 @@ class CurveParams:
     c_amp:  float = 0.0    # amplitud på referensfyllnaden. Krav: c_mid ± c_amp i (0, 1)
     c_mid:  float = 0.5    # referensfyllnad vid årsmedel
     c_peak: float = 41.0   # vecka då referensfyllnaden toppar (uppmätt v39-44)
+    # ⭐ ANDRA HARMONISKAN på referensbanan. En ren kosinus är SYMMETRISK medan den
+    # verkliga magasinbanan har ett KNÄ: fyllningen startar abrupt (FI v17, SE v19) och
+    # går nästan rakt upp i fem-sex veckor, och höstplatån är bred och sen. Residualen
+    # mot EC:s median 2014-2026 är därför systematisk, ±8-12 pp med teckenbyte just vid
+    # knäet. Andra harmoniskan halverar felet:
+    #     R²/RMS   SE 0,923→0,980 (5,7→2,9 pp) · NO 0,948→0,984 (3,9→2,2) ·
+    #              FI 0,642→0,919 (7,0→3,3 pp)  ← störst där den behövs mest
+    # Basen är ortogonal på 52-punktsrutnätet, så c_amp2 = 0 ger BIT-IDENTISKT med den
+    # rena kosinusen och inget äldre påverkas — samma egenskap som a_amp2 har.
+    c_amp2:  float = 0.0   # amplitud, andra harmoniska (period 26 veckor)
+    c_peak2: float = 0.0   # toppvecka, andra harmoniska
     p_norm: str = "mean"   # vad λ_bas betyder — se segment_profile(). "mid" krävs för
                            # att ankra mot ett mätt vattenvärde
+
+    # ⭐ EMPIRISK referensbana, 52 veckovärden — tar över helt när den finns.
+    # Kosinusen ovan är MÄTT fel funktionsfamilj: den är symmetrisk medan den verkliga
+    # magasinbanan inte är det (långsam vinteravtappning, brant fall i mars-april, snabb
+    # flodfyllning, sen höstplatå). Anpassningen mot EC:s median 2014-2026 ger R² 0,92
+    # (SE) / 0,95 (NO) / 0,64 (FI), och residualen är SYSTEMATISK med samma teckenmönster
+    # i alla tre länderna: jan-feb +3..+4,5 pp, mars-apr −3..−9,7, sep-okt −3..−5,3.
+    # ⛔ Konsekvensen är riktad, inte slumpmässig: i mars-april ligger uppmätt fyllnad
+    # UNDER kosinusen, alltså tror kurvan att normalläget är högre än det är, (x − x_ref)
+    # blir för negativt och exp(−b·(x−x_ref)) FÖR STORT. Kurvan blåser systematiskt upp λ
+    # just den årstid marspuckeln bor i — ~5 % i SE (4 EUR/MWh), 7,5 % i FI.
+    # Ingen amplitud eller fas kan laga det; bara en fri bana kan.
+    x_ref_weekly: List[float] | None = None
 
     def __post_init__(self) -> None:
         if not -1.0 < self.a_amp < 1.0:
@@ -131,10 +155,19 @@ class CurveParams:
         if abs(self.b_amp) > 1.0:
             raise ValueError(f"|b_amp| måste vara ≤ 1, fick {self.b_amp} "
                              "— annars blir kurvan VÄXANDE i fyllnadsgrad någon vecka")
-        if not 0.0 < self.c_mid - abs(self.c_amp) <= self.c_mid + abs(self.c_amp) < 1.0:
+        # Skarpt villkor med två harmoniska: de kan sammanfalla i samma vecka, så det
+        # räcker inte att pröva termerna var för sig (samma resonemang som a_amp/a_amp2).
+        _cspan = abs(self.c_amp) + abs(self.c_amp2)
+        if not 0.0 < self.c_mid - _cspan <= self.c_mid + _cspan < 1.0:
             raise ValueError(
-                f"c_mid ± c_amp måste ligga i (0, 1), fick {self.c_mid} ± "
-                f"{abs(self.c_amp)} — referensfyllnaden måste vara en fyllnadsgrad")
+                f"c_mid ± (|c_amp| + |c_amp2|) måste ligga i (0, 1), fick {self.c_mid} ± "
+                f"{_cspan:.4f} — referensfyllnaden måste vara en fyllnadsgrad")
+        if self.x_ref_weekly is not None:
+            if len(self.x_ref_weekly) != WEEKS:
+                raise ValueError(f"x_ref_weekly måste ha exakt {WEEKS} värden (vecka "
+                                 f"1..{WEEKS}), fick {len(self.x_ref_weekly)}")
+            if not all(0.0 < float(x) < 1.0 for x in self.x_ref_weekly):
+                raise ValueError("x_ref_weekly måste vara fyllnadsgrader i (0, 1)")
         if self.p_norm not in ("mean", "mid"):
             raise ValueError(f"p_norm måste vara 'mean' eller 'mid', fick {self.p_norm!r}")
 
@@ -181,8 +214,16 @@ def b_value(week: int, p: CurveParams) -> float:
 
 def x_ref_value(week: int, p: CurveParams) -> float:
     """Referensfyllnaden för veckan — den nivå magasinet NORMALT ligger på. λ_bas är
-    vattenvärdet just där, så "mid"-normaliseringen behåller sin betydelse."""
-    return p.c_mid + p.c_amp * math.cos(2.0 * math.pi * (week - p.c_peak) / WEEKS)
+    vattenvärdet just där, så "mid"-normaliseringen behåller sin betydelse.
+
+    `x_ref_weekly` (52 uppmätta värden) vinner när den finns; annars kosinusen, som
+    är kvar för bakåtkompatibilitet och för zoner utan mätdata. Se fältets kommentar
+    för varför kosinusen är mätt otillräcklig."""
+    if p.x_ref_weekly is not None:
+        return float(p.x_ref_weekly[min(WEEKS, max(1, week)) - 1])
+    return (p.c_mid
+            + p.c_amp * math.cos(2.0 * math.pi * (week - p.c_peak) / WEEKS)
+            + p.c_amp2 * math.cos(4.0 * math.pi * (week - p.c_peak2) / WEEKS))
 
 
 def segment_profile(b: float, segments: int = DEFAULT_SEGMENTS,
@@ -379,7 +420,10 @@ def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
                       "b_peak": float(c.b_peak), "a_amp2": float(c.a_amp2),
                       "a_peak2": float(c.a_peak2), "b_low_frac": float(c.b_low_frac),
                       "c_amp": float(c.c_amp), "c_mid": float(c.c_mid),
-                      "c_peak": float(c.c_peak), "p_norm": str(c.p_norm)}
+                      "c_peak": float(c.c_peak), "c_amp2": float(c.c_amp2),
+                      "c_peak2": float(c.c_peak2), "p_norm": str(c.p_norm),
+                      **({"x_ref_weekly": [float(x) for x in c.x_ref_weekly]}
+                         if c.x_ref_weekly is not None else {})}
                   for z, c in sorted(params.items())},
     }
     p.parent.mkdir(parents=True, exist_ok=True)
