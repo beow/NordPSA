@@ -76,7 +76,7 @@ market_connections:
   - [SE-S LT, SE-S,  700, LT]
   - [SE-S PL, SE-S,  600, PL]
   - [SE-S DE, SE-S,  615, DE-LU]
-  - [DK DE,   DK,   3244, DE-LU]
+  - [DK DE,   DK,   3400, DE-LU]   # FB-ekvivalent 2025: schemalagd q95 3293 (DK→DE) / 3441 (DE→DK). Var 3244
   - [DK NL,   DK,    700, NL]
   - [DK GB,   DK,   1456, GB]
   - [NO DE,   NO-S, 1400, DE-LU]
@@ -305,14 +305,17 @@ ev:
 # ⚠️ Kapaciteterna är i verkligheten ASYMMETRISKA (Fenno-Skan 1200 söderut men ~300 i
 #   median norrut). PyPSA-länken här är symmetrisk, så värdet är den större riktningen.
 links:
-  - [NO-N, SE-N,  1500]   # publ. kap. max 1400 (N→S) / 1550 (S→N). q95 1375 = efterfrågan (binder 0 %). Var 1836
+  - [NO-N, SE-N,  1150]   # FB-ekvivalent 2025: prisfiltrerad q95 av FYSISKT flöde 988 (N→S) / 1153 (S→N).
+                          # Var 1500 (publ. kap. 1400/1550, q95 1375 av schemalagt i FB-fria fönstret)
   - [SE-N, SE-S,  7300]   # q95 7240 OCH publ. kap. max 7300 sammanfaller. Binder 6,7 %. Var 7600
   - [SE-N, FI,    1550]   # q95 = publ. kap. i fönstret (pre-Aurora). Aurora live nov 2025 → 2000 nedan
   - [NO-N, NO-S,   700]   # publ. kap. 250 median → 750 max (NO3↔NO1 350 + NO3↔NO5 400). q95 498 = efterfrågan.
                           # Var 1773 = 2,4-7× för högt. Bekräftar att transiten NO-N→SE→NO-S inte finns fysiskt
-  - [NO-S, SE-S,  2100]   # publ. kap. max 2145 / 2095. q95 1877 låg ÖVER gamla configen 1674 ⇒ var för lågt
+  - [NO-S, SE-S,  1900]   # FB-ekvivalent 2025: fysisk q95 1234 (NO→SE) / 1927 (SE→NO), starkt asymmetrisk.
+                          # Var 2100 (publ. kap. 2145/2095, schemalagd q95 1877)
   - [NO-S, DK,    1681]   # q95 = q99 = max = publ. kap. 1680. Binder 15 % ⇒ hårt tak, avläst direkt
-  - [SE-S, DK,    2400]   # publ. kap. max 2415 (asymmetrisk 2015 / 2415). Var 2007
+  - [SE-S, DK,    2000]   # FB-ekvivalent 2025: fysisk q95 1991 (SE→DK) / 1066 (DK→SE); exporten kapas
+                          # exakt vid 2015 = publ. asymmetri 2015/2415. Var 2400
   - [SE-S, FI,    1200]   # Fenno-Skan. q95 = max = 1200 i BÅDE 2023-24 och 2026 YtD. Hårt tak
 
 # Tidsdimension via körtyp: dispatch (--no-expansion) modellerar historiska 2023-2025
@@ -321,6 +324,9 @@ links:
 # Aurora-linjen (SE-N–FI) togs i drift slutet 2025: 1200 (historisk) → 2000 (expansion).
 links_expansion_overrides:
   - [SE-N, FI,    2000]   # Aurora post-go-live
+  - [NO-N, NO-S,  1000]   # post-utbyggnad NO3↔NO1 + NO3↔NO5. Nutid 700 är den FB-fria kalibreringen;
+                          # fysisk q95 2025 är 1018, men den innehåller svensk transit (SE2→NO3→NO1)
+                          # som modellen redan bär på SE-N↔SE-S — 1000 är alltså ett UTBYGGNADSantagande
 
 # Dagens (befintliga) batterier — laddas som FRIA (capital_cost=0, sunk) i dispatch/
 # dagens-värld-körningar (dvs när INGET --demand-scenario är aktivt). I demand-scenario-
@@ -734,13 +740,19 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
-      - [NO-S, SE-S,  2100]   # NO1↔SE3 2040. HÖJD från 2000: nutid blev 2100 vid omkalibreringen
-                              # 2026-08-16, och 2040 får aldrig underskrida nutid
-      - [SE-S, DK,    2400]   # SE4↔DK2 + Konti-Skan 2040. HÖJD från 2300, samma skäl
+      - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 (TSO-tal). Var tillfälligt 2100 för att inte underskrida
+                              # nutid; FB-ekvivalenten 2025 sänkte nutid till 1900, så golvet binder ej
+      - [SE-S, DK,    2300]   # SE4↔DK2 + Konti-Skan 2040 (TSO-tal). Var tillfälligt 2400, samma skäl;
+                              # nutid är nu 2000, så golvet binder ej
+      - [NO-N, NO-S,  3000]   # NO3↔NO1/NO5 2040. ⚠️ ANTAGANDE utan källa i repot — 4,3× nutidens 700
+                              # och 3× expansionens 1000. Största relativa nätutbyggnaden i scenariot
+      - [NO-N, SE-N,  2000]   # NO4↔SE1/SE2 + NO3↔SE2 2040. ⚠️ ANTAGANDE utan källa i repot —
+                              # 1,74× nutidens 1150 (FB-ekvivalent 2025). Ingen exp-ov: gäller
+                              # bara i demand-scenariot, expansion utan scenario behåller 1150
     # Kontinentkablar (market_connections) — matchas på namn, ej zonpar
     market_ntc_overrides:
       - [FI EE, 1700]         # FI↔EE 2040 (var 1016)
-      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; var 3244)
+      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; nutid 3400)
       - [NO NL, 700]          # NO-S↔NL 2040 (var 640)
       - [DK GB, 1456]         # DK↔GB 2040. HÖJD från 1400: låg UNDER nutidens 1456, alltså en
                               # tyst nedgradering till 2040. ⚠️ Om 1400 är Viking Links märkeffekt
