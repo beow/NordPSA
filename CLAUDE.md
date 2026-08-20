@@ -58,7 +58,7 @@ python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kan
 | implied by `--dispatch` | off-switch |
 |---|---|
 | `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
-| `--terminal-curve` = `config/terminal_curve_2040_gemini.yaml` (**låst 2026-08-18**, se nedan) | `--no-terminal-curve` |
+| `--terminal-curve` = `config/terminal_curve_2040_gemini_v7.yaml` (**låst 2026-08-20**, se nedan) | `--no-terminal-curve` |
 | no water-value proxy (the curve *is* the water value) | — (mode-bound, no flag) |
 | resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
 | `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
@@ -192,6 +192,25 @@ Two traps this closed: `--spill-cost` was **not** copied from the new command in
 - **New nuclear (`--add-nuclear` / `--add-nuclear-fixed`): `min_frac = 0.6` by default** since the canonical baseline (`--nuclear-min-load`, sets `min_load_frac_exp`). `--nuclear-min-load 1.0` makes new nuclear pure must-run too.
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
+
+**⭐⭐⭐ TERMINALKURVAN ÄR LÅST (2026-08-20): `config/terminal_curve_2040_gemini_v7.yaml`** — kör som `run391_v7_anchors_3h`. Den ersätter `terminal_curve_2040_gemini.yaml` (låst 2026-08-18), som ligger kvar för att reproducera run316–390 — namnge den då explicit.
+
+⭐ **Kurvan har TRE globala frihetsgrader, inte tjugofem.** Allt som är en *nivå* eller *skala* är gemensamt för alla zoner; bara *formen* är zonvis:
+
+| öppen | värde | härledning |
+|---|---|---|
+| `a_scale` | **0,30** | run384: `a_amp` ×0,6 → ×0,3 gav SE:s v/s 1,18 → 1,32, bäst på båda måltavlorna |
+| `b_mean` | **0,80** likformigt | facit ger λ konstant i fyllnadsgrad ⇒ ingen uppmätt zonskillnad finns |
+| `b_amp` | **0,27** likformigt | samma argument; enkelt medel, eftersom zontalen är lika otillförlitliga |
+| λ_bas | 73 i filen | facit run386: 72,87 i alla fem zoner och alla timmar |
+
+⭐ **Att gå från 25 frihetsgrader till 3 kostade 0,01 på säsongskvoten** (run388 → run390: Σ|fel| eSett 0,42 → 0,43) och blev *bättre* mot 2040-facit (0,59 → 0,57). Geminis zonvisa `b_mean`/`b_amp` bar alltså praktiskt taget ingen information — precis vad man väntar sig om kurvans form enbart är en approximationsanordning för begränsad framsyn.
+
+**Låst form:** `x_ref` = **två harmoniska** (se nedan) · alla säsongsfaser (`a_peak`, `a_peak2`, `b_peak`) · kvoten `a_amp2/a_amp` · `b_low_frac` 1,0 · `p_norm` "mid". `a_amp`/`a_amp2` står nu med Geminis **oskalade** värden och `a_scale` bär skalningen — de måste alltid skalas tillsammans, annars ändras vintertoppens form (`A_k − 1 = k·(A − 1)`, verifierat till 2·10⁻¹⁶).
+
+⚠️ **ANKARET: `--terminal-anchor SE-N:66.0 SE-S:64.5 NO-N:70.2 NO-S:69.6 FI:72.5` i dispatch.** Det är en **driftkorrigering för begränsad framsyn**, inte ett påstående om att vatten är olika mycket värt per zon: facit ger 72,87 likformigt *och* noll drift, men en rullande horisont kan bara få det ena av två med ett enda tal. Vid gemensamt λ_bas 68,5 driver Sverige +1,0 och Norge −1,4 TWh, stabilt över tre olika kurvor. ⛔ **EXPANSION körs med 73 likformigt** — cykliskt SOC ger noll drift per konstruktion, så korrigeringen saknar mening där.
+
+⚠️ Kvarstående brister i den låsta kurvan: **SE ligger helt utanför EC-bandet** (0 %, mot run388:s 15 %; magasinet sitter ~5 pp under tionde percentilen) · **FI:s drift −0,51 går inte att nolla** (känslighet 0,069 kräver +9,0 enheter = 12 % avvikelse, takat vid +2,0) · **prisformen är något sämre** än run388 (medelfel 8,1 mot 7,3) · **FI:s v/s 0,77** mot eSetts 1,13 och facits 0,97. ⚠️ Och känslighetens tvåpunktsskattning visade sig **4× för låg** för SE-N — dämpa och taka alltid vid omkalibrering.
 
 **Terminalvärdeskurvan är LÅST (2026-08-18): `config/terminal_curve_2040_gemini.yaml`.** Den ersätter `terminal_curve_2040_calibrated.yaml`, som var kalibrerad mot *facit* (run320) och ligger kvar för att reproducera run316–run368 — namnge den då explicit med `--terminal-curve`.
 

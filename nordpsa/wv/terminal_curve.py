@@ -117,6 +117,17 @@ class CurveParams:
     #              FI 0,642→0,919 (7,0→3,3 pp)  ← störst där den behövs mest
     # Basen är ortogonal på 52-punktsrutnätet, så c_amp2 = 0 ger BIT-IDENTISKT med den
     # rena kosinusen och inget äldre påverkas — samma egenskap som a_amp2 har.
+    # ⭐ EN ENDA SKALA på hela säsongsformen. a_amp och a_amp2 ska ALLTID skalas
+    # tillsammans: A(v) − 1 = a_amp·cos(ωv') + a_amp2·cos(2ωv'), så en gemensam faktor k
+    # ger A_k(v) − 1 = k·(A(v) − 1) — formen exakt bevarad (verifierat till 2·10⁻¹⁶),
+    # bara utslaget krymper. Skalas bara a_amp ändras andra harmoniskans relativa vikt
+    # och vintertoppens FORM, vilket gör ett svep till en mätning av två saker.
+    # k var en vana fram till 2026-08-20 (run384 skalade båda ×0,5 för hand); nu är den
+    # explicit så att formen inte kan rubbas av misstag. a_scale = 1,0 ⇒ oförändrat.
+    # ⚠️ Kvoten a_amp2/a_amp (−0,27..−0,54) kommer ur Geminis λ-tabeller och är OPRÖVAD
+    # mot varje oberoende observabel — samma sorts opåstådda zonskillnad som b_mean hade.
+    a_scale: float = 1.0
+
     c_amp2:  float = 0.0   # amplitud, andra harmoniska (period 26 veckor)
     c_peak2: float = 0.0   # toppvecka, andra harmoniska
     p_norm: str = "mean"   # vad λ_bas betyder — se segment_profile(). "mid" krävs för
@@ -142,11 +153,15 @@ class CurveParams:
         # Med två harmoniska räcker det inte att pröva termerna var för sig: de kan
         # sammanfalla i samma vecka. |a_amp| + |a_amp2| < 1 är det skarpa villkoret
         # för att A(v) > 0 för ALLA veckor, oavsett faser.
-        if abs(self.a_amp) + abs(self.a_amp2) >= 1.0:
+        if self.a_scale < 0.0:
+            raise ValueError(f"a_scale måste vara ≥ 0, fick {self.a_scale} "
+                             "— negativa värden vänder säsongen upp och ner")
+        if self.a_scale * (abs(self.a_amp) + abs(self.a_amp2)) >= 1.0:
             raise ValueError(
-                f"|a_amp| + |a_amp2| måste vara < 1, fick "
-                f"{abs(self.a_amp) + abs(self.a_amp2):.3f} — annars kan nivåfaktorn "
-                "bli noll eller negativ den vecka där de två harmoniska sammanfaller")
+                f"a_scale·(|a_amp| + |a_amp2|) måste vara < 1, fick "
+                f"{self.a_scale * (abs(self.a_amp) + abs(self.a_amp2)):.3f} — annars kan "
+                "nivåfaktorn bli noll eller negativ den vecka där de två harmoniska "
+                "sammanfaller")
         if self.b_mean < 0.0:
             raise ValueError(f"b_mean måste vara ≥ 0, fick {self.b_mean}")
         if self.b_low_frac < 0.0:
@@ -202,8 +217,8 @@ def a_factor(week: int, p: CurveParams) -> float:
     så andra termen ändrar FORMEN men aldrig årsmedlet, och λ_bas behåller sin
     betydelse."""
     return (1.0
-            + p.a_amp * math.cos(2.0 * math.pi * (week - p.a_peak) / WEEKS)
-            + p.a_amp2 * math.cos(4.0 * math.pi * (week - p.a_peak2) / WEEKS))
+            + p.a_scale * (p.a_amp * math.cos(2.0 * math.pi * (week - p.a_peak) / WEEKS)
+                           + p.a_amp2 * math.cos(4.0 * math.pi * (week - p.a_peak2) / WEEKS)))
 
 
 def b_value(week: int, p: CurveParams) -> float:
@@ -399,7 +414,7 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # ⭐ LÅST 2026-08-18: Geminis fem zontabeller (run375_aamp06_3h). Den förra,
 # terminal_curve_2040_calibrated.yaml, var kalibrerad mot FACIT (run320) och ligger kvar
 # för att reproducera run316-run368 — namnge den explicit med --terminal-curve.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini.yaml"
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v7.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
@@ -415,7 +430,8 @@ def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
         "anchor_eur_per_mwh": {z: float(v) for z, v in sorted(anchor.items())},
         # float() på varje tal: numpy-skalärer (np.float64) går inte att serialisera med
         # yaml.safe_dump, och en anpassning med scipy/numpy levererar just sådana.
-        "zones": {z: {"a_amp": float(c.a_amp), "a_peak": float(c.a_peak),
+        "zones": {z: {"a_scale": float(c.a_scale),
+                      "a_amp": float(c.a_amp), "a_peak": float(c.a_peak),
                       "b_mean": float(c.b_mean), "b_amp": float(c.b_amp),
                       "b_peak": float(c.b_peak), "a_amp2": float(c.a_amp2),
                       "a_peak2": float(c.a_peak2), "b_low_frac": float(c.b_low_frac),
@@ -451,7 +467,15 @@ def load_params(path: str | None = None
                              "namngiven fil (kontrollera sökvägen)")
         return dict(DEFAULTS), dict(DEFAULT_ANCHOR)
     doc = yaml.safe_load(p.read_text()) or {}
-    params = {z: CurveParams(**kw) for z, kw in (doc.get("zones") or {}).items()}
+    # `a_scale` får stå på toppnivån och gäller då ALLA zoner — det är den avsedda
+    # användningen (en global skala på säsongsformen). Ett värde inne i en zon vinner.
+    gscale = doc.get("a_scale")
+    params = {}
+    for z, kw in (doc.get("zones") or {}).items():
+        kw = dict(kw)
+        if gscale is not None:
+            kw.setdefault("a_scale", float(gscale))
+        params[z] = CurveParams(**kw)
     anchor = {z: float(v) for z, v in (doc.get("anchor_eur_per_mwh") or {}).items()}
     return (params or dict(DEFAULTS)), (anchor or dict(DEFAULT_ANCHOR))
 
