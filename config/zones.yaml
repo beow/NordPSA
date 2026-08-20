@@ -740,8 +740,8 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
-      - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 (TSO-tal). Var tillfälligt 2100 för att inte underskrida
-                              # nutid; FB-ekvivalenten 2025 sänkte nutid till 1900, så golvet binder ej
+      - [NO-S, SE-S,  2300]   # NO1↔SE3 2040. ⚠️ ANTAGANDE utan källa i repot — 1,21× nutidens 1900
+                              # (FB-ekvivalent 2025). TSO-talet är 2000; 2300 är ett påslag utöver det
       - [SE-S, DK,    2300]   # SE4↔DK2 + Konti-Skan 2040 (TSO-tal). Var tillfälligt 2400, samma skäl;
                               # nutid är nu 2000, så golvet binder ej
       - [NO-N, NO-S,  3000]   # NO3↔NO1/NO5 2040. ⚠️ ANTAGANDE utan källa i repot — 4,3× nutidens 700
