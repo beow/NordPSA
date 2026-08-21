@@ -1938,9 +1938,20 @@ def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float):
 
         offset_k = width · ((k + ½)/K − ½),   k = 0 … K−1
 
-    Med K=3 och width=36 blir det −12 / 0 / +12 EUR/MWh. Medelvärdet över nivåerna är
-    exakt 0, så **trappan flyttar inte NIVÅN, bara spridningen** — den stör därmed inte
-    λ_bas-kalibreringen eller reservoardriften.
+    Medelvärdet över nivåerna är exakt 0, så **trappan flyttar inte NIVÅN, bara
+    spridningen** — den stör därmed inte λ_bas-kalibreringen eller reservoardriften.
+
+    ⚠️ `width` ÄR INTE BUDSPANNET. Offsetterna tas i nivåernas MITTPUNKTER (1/6, 1/2, 5/6
+    av spannet vid K=3), inte i deras kanter, så det realiserade spannet är
+
+        spann = width · (K − 1) / K
+
+    K=3, width=36 → −12 / 0 / +12, alltså spann **24**, inte 36. Samma konvention som
+    `_add_market_staircase`:s `offset_profile [0.1667, 0.5, 0.8333]`. Tolkningen är att
+    `width` är spridningen i den UNDERLIGGANDE fördelningen av vattenvärden över flottan,
+    medan nivåerna bara samplar dess bin-mittpunkter; spannet går mot `width` när K → ∞.
+    ⚠️ Följden är att K och width INTE är oberoende: höjer man K blir trappan bredare vid
+    oförändrad `width` (K=5, width=36 → spann 28,8). Ändra en i taget.
 
     ⭐ DEVIATIONSFORM — därför rörs inte `marginal_cost`. PyPSA lägger redan
     `mc·p_dispatch` i objektivet. Callbacken lägger bara till `Σ_k offset_k · d_k`, och

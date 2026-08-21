@@ -1538,8 +1538,10 @@ def main() -> None:
     parser.add_argument("--hydro-bid-ladder", default=None, metavar="K:BREDD",
                         help="Ge reservoarvattenkraften en STIGANDE budkurva i stället för "
                              "ett enda bud: uttaget delas i K nivåer à p_nom/K med "
-                             "symmetriska prisavvikelser som spänner ±BREDD/2 EUR/MWh kring "
-                             "basbudet (t.ex. 3:36 → −12/0/+12). Medlet över nivåerna är 0, "
+                             "symmetriska prisavvikelser kring basbudet. ⚠️ BREDD är INTE "
+                             "budspannet: offsetterna tas i nivåernas MITTPUNKTER, så "
+                             "spannet blir BREDD·(K−1)/K — 3:36 ger −12/0/+12, alltså 24. "
+                             "Medlet över nivåerna är 0, "
                              "så NIVÅN är oförändrad — bara spridningen ökar. Lagar att 52,4 "
                              "GW hydro annars budar vid ETT pris och pinnar zonpriset där "
                              "49-79 %% av timmarna (run400_expansion), vilket gör utbudet "
