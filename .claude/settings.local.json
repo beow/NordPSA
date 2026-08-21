@@ -45,7 +45,7 @@
       "Bash(sleep:*)",
       "Bash(test:*)",
       "Bash(ps -eo pid,sid,etime,cmd)",
-      "Write(//home/beos/claude_out.txt)",
+      "Edit(//home/beos/claude_out.txt)",
       "Read(//home/beos/claude_out.txt)",
       "WebFetch(domain:adelsfors.se)"
     ]

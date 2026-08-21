@@ -86,9 +86,19 @@ DEFAULT_DISPATCH_RESOLUTION = 2
 DEFAULT_SPILL_COST_EXPANSION = 50.0
 DEFAULT_SPILL_COST_DISPATCH  = 0.1
 
+# Hydrons marginalkostnad i EXPANSION (2026-08-20). Ersätter vattenvärdes-proxyn, som
+# satte mc till zonens FAKTISKA historiska pris och därmed gjorde en 2040-expansion
+# cirkulär: dispatchen ankrades till den prisform modellen ska förutsäga. Kurvan ger i
+# stället λ_bas·A(v) — λ längs normalbanan, ur Geminis zontabeller och EC:s magasindata.
+# ⚠️ Filen är v7 med ankaret 73 LIKFORMIGT. Den låsta v7:ans egna ankare (64,5-72,5) är
+# en DRIFTKORRIGERING för begränsad framsyn i rullande horisont; expansionen har cykliskt
+# SOC och alltså noll drift per konstruktion, så de skulle bli en artificiell zonskillnad
+# i hydrons mc. Se filens note_expansion.
+DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v7_exp73.yaml"
+
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = "baseline-v1 (run250-konfen)"
+BASELINE_DEFAULTS_TAG = "baseline-v2 (run250-konfen + hydro-mc-kurva i expansion)"
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -1514,7 +1524,14 @@ def main() -> None:
                              "ankras till den prisform modellen ska förutsäga; kurvan kommer "
                              "ur zontabeller och uppmätta magasinnivåer i stället. Utan "
                              "argument används den låsta kurvan. Meningslös med frysta "
-                             "kapaciteter (--dispatch/--no-expansion), som saknar proxy.")
+                             "kapaciteter (--dispatch/--no-expansion), som saknar proxy. "
+                             f"DEFAULT i expansion sedan 2026-08-20: {DEFAULT_HYDRO_MC_CURVE}. "
+                             "Stäng av med --no-hydro-mc-curve (= tillbaka till prisproxyn).")
+    parser.add_argument("--no-hydro-mc-curve", action="store_true",
+                        help="EXPANSION: stäng av hydro-mc-kurvan och använd "
+                             "vattenvärdes-proxyn (zonens faktiska historiska pris) i "
+                             "stället. ⚠️ Gör expansionen cirkulär — behövs bara för att "
+                             "reproducera körningar gjorda före 2026-08-20.")
     parser.add_argument("--terminal-curve", nargs="?", const="", default=None, metavar="FIL",
                         help="Analytisk terminalvärdeskurva λ_k(vecka, zon) = λ_bas · A(w) · "
                              "P_k(B(w)) ur FIL (default config/terminal_curve.yaml). Ersätter "
@@ -1841,9 +1858,29 @@ def main() -> None:
     hydro_price_proxy = not (bool(args.dispatch) or bool(args.no_expansion))
 
     # --hydro-mc-curve: byt ut proxyn mot kurvan längs normalbanan. Serien byggs först
-    # efter att snapshots finns; här kontrolleras bara att flaggan är meningsfull, så att
-    # ett verkningslöst kommando säger ifrån direkt i stället för att tyst göra ingenting
-    # (samma klass av fälla som run319).
+    # efter att snapshots finns; här löses defaulten ut och kontrolleras att flaggan är
+    # meningsfull, så att ett verkningslöst kommando säger ifrån direkt i stället för att
+    # tyst göra ingenting (samma klass av fälla som run319).
+    #
+    # DEFAULT sedan 2026-08-20: kurvan är PÅ i expansion. Samma sentinel-mönster som
+    # --spill-cost och --vre-curtailment-cost, och av samma skäl: värdet är lägesbundet
+    # och läget avgörs först efter apply_dispatch_replay. En argparse-default hade dessutom
+    # fått spärren nedan att fälla varje dispatchkörning.
+    #
+    # ⚠️ Ett BART --hydro-mc-curve löses också till DEFAULT_HYDRO_MC_CURVE, inte till
+    # load_params(None). Det senare läste den låsta v7-filen, vars ankare är DISPATCHENS
+    # driftkorrigering 64,5-72,5 — i expansion en artificiell zonskillnad i hydrons mc, och
+    # tyst: --terminal-anchor biter inte på den här vägen (den läses bara i rullande
+    # horisont). Den fällan finns inte längre.
+    _mc_curve_explicit = args.hydro_mc_curve is not None
+    if args.no_hydro_mc_curve:
+        if _mc_curve_explicit:
+            raise SystemExit("--hydro-mc-curve och --no-hydro-mc-curve är oförenliga.")
+        args.hydro_mc_curve = None
+    elif args.hydro_mc_curve == "":       # bart flaggnamn = UTTRYCKLIGT val
+        args.hydro_mc_curve = DEFAULT_HYDRO_MC_CURVE
+    elif args.hydro_mc_curve is None:     # orörd → lägesbunden default
+        args.hydro_mc_curve = DEFAULT_HYDRO_MC_CURVE if hydro_price_proxy else None
     if args.hydro_mc_curve is not None and not hydro_price_proxy:
         raise SystemExit("--hydro-mc-curve kräver EXPANSION: med frysta kapaciteter "
                          "(--dispatch/--no-expansion) finns ingen proxy att ersätta, och "
@@ -2239,7 +2276,11 @@ def main() -> None:
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
     if args.terminal_curve is not None: flags.append("termkurva")
-    if args.hydro_mc_curve is not None: flags.append("hydro-mc-kurva")
+    if args.hydro_mc_curve is not None:
+        flags.append("hydro-mc-kurva" + ("-" + Path(args.hydro_mc_curve).stem
+                                         if args.hydro_mc_curve != DEFAULT_HYDRO_MC_CURVE else ""))
+    elif not (args.dispatch or args.no_expansion):
+        flags.append("prisproxy")          # expansion UTAN kurva → proxyn, värt att synas
     # λ_bas måste stå i flaggraden, annars går en körnings ankarnivå bara att läsa ur
     # console.log — samma fälla som --spill-cost hade före 2026-08-15.
     if args.terminal_anchor: flags.append("anchor-" + "_".join(args.terminal_anchor))
