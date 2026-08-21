@@ -28,6 +28,7 @@ from nordpsa.network import (
     hydro_soc_initial_constraint,
     hydro_soc_terminal_pin_constraint,
     hydro_terminal_value,
+    hydro_bid_ladder,
     DEFAULT_TERMINAL_PROFILE,
     soc_terminal_pin_mwh,
     oc_budget_constraint,
@@ -1159,6 +1160,13 @@ def apply_dispatch_replay(parser, args):
     # --spill-cost 0.1` blir tyst verkningslöst — samma fällklass som run319. None här
     # betyder "orörd" och löses ut lägesberoende efter denna funktion.
     base.spill_cost = args.spill_cost
+    # Budtrappan hör till OMDISPATCHEN: den är ett antagande om hydroflottans interna
+    # spridning, alltså samma sorts val som --hydro-min-*. Källans argv kan dessutom
+    # aldrig innehålla den (flaggan är nyare än varenda befintlig körning), så utan den
+    # här raden blir `--dispatch X --hydro-bid-ladder 3:36` TYST verkningslöst — samma
+    # fällklass som run319 och --vre-curtailment-cost. None = orörd.
+    if args.hydro_bid_ladder is not None:
+        base.hydro_bid_ladder = args.hydro_bid_ladder
     # NTC-överstyrningar är ett SCENARIOVAL för omdispatchen (som --low-hydro): man vill
     # kunna omdispatchera samma flotta mot en annan nätutbyggnad. Utan dessa rader lästes
     # de ur KÄLLANS argv och `--dispatch X --ntc-override SE-N:SE-S:7600` blev TYST
@@ -1527,6 +1535,18 @@ def main() -> None:
                              "kapaciteter (--dispatch/--no-expansion), som saknar proxy. "
                              f"DEFAULT i expansion sedan 2026-08-20: {DEFAULT_HYDRO_MC_CURVE}. "
                              "Stäng av med --no-hydro-mc-curve (= tillbaka till prisproxyn).")
+    parser.add_argument("--hydro-bid-ladder", default=None, metavar="K:BREDD",
+                        help="Ge reservoarvattenkraften en STIGANDE budkurva i stället för "
+                             "ett enda bud: uttaget delas i K nivåer à p_nom/K med "
+                             "symmetriska prisavvikelser som spänner ±BREDD/2 EUR/MWh kring "
+                             "basbudet (t.ex. 3:36 → −12/0/+12). Medlet över nivåerna är 0, "
+                             "så NIVÅN är oförändrad — bara spridningen ökar. Lagar att 52,4 "
+                             "GW hydro annars budar vid ETT pris och pinnar zonpriset där "
+                             "49-79 %% av timmarna (run400_expansion), vilket gör utbudet "
+                             "oändligt elastiskt och dödar VRE-prissignalen. Verkar i BÅDA "
+                             "lägena (deviationsform, rör inte marginal_cost). ⚠️ BREDD ska "
+                             "kalibreras mot den OBSERVERADE budkurvan (produktion mot pris), "
+                             "aldrig mot prisfördelningen. Default: av.")
     parser.add_argument("--no-hydro-mc-curve", action="store_true",
                         help="EXPANSION: stäng av hydro-mc-kurvan och använd "
                              "vattenvärdes-proxyn (zonens faktiska historiska pris) i "
@@ -2275,6 +2295,7 @@ def main() -> None:
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
+    if args.hydro_bid_ladder:           flags.append(f"bidladder-{args.hydro_bid_ladder.replace(':', '_')}")
     if args.terminal_curve is not None: flags.append("termkurva")
     if args.hydro_mc_curve is not None:
         flags.append("hydro-mc-kurva" + ("-" + Path(args.hydro_mc_curve).stem
@@ -2635,6 +2656,28 @@ def main() -> None:
         for w in hydro_operation_feasibility_report(n, ocfg):
             print(f"  ⚠️  {w}")
         extra_callbacks.append(hydro_operation_constraints(ocfg))
+
+    # Budtrappa på reservoarvattenkraften — bryter det enda platta budet i K nivåer.
+    if args.hydro_bid_ladder:
+        try:
+            _k_txt, _w_txt = args.hydro_bid_ladder.split(":")
+            _lad_k, _lad_w = int(_k_txt), float(_w_txt)
+        except ValueError:
+            raise SystemExit(f"--hydro-bid-ladder: förväntade K:BREDD (t.ex. 3:36), "
+                             f"fick {args.hydro_bid_ladder!r}")
+        _offs = [_lad_w * ((k + 0.5) / _lad_k - 0.5) for k in range(_lad_k)]
+        _hyd  = [su for su in n.storage_units.index
+                 if n.storage_units.at[su, "carrier"] == "hydro"
+                 and float(n.storage_units.at[su, "p_nom"]) > 0.0]
+        print(f"  → HYDROBUDTRAPPA: {_lad_k} nivåer, bredd {_lad_w:g} EUR/MWh, "
+              f"{len(_hyd)} reservoarer")
+        print("       avvikelser: " + ", ".join(f"{o:+.1f}" for o in _offs)
+              + "  (medel 0,0 ⇒ NIVÅN oförändrad, bara spridningen)")
+        for _su in _hyd:
+            _pn = float(n.storage_units.at[_su, "p_nom"])
+            print(f"       {_su.split()[0]:6s} {_pn:6.0f} MW → {_lad_k} × "
+                  f"{_pn/_lad_k:.0f} MW per nivå")
+        extra_callbacks.append(hydro_bid_ladder(_lad_k, _lad_w))
 
     # Onshore-expansionstak per zon (override på default p_nom_max)
     for zone, cap in onshore_caps.items():
