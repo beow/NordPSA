@@ -273,6 +273,63 @@ This matters because the endogenous water value is nearly constant (1–6 unique
 - **⛔ `--hydro-flat-wv` was deleted with it, as measurably redundant.** Without the proxy `mc = VOM 0.6` and the SOC-balance dual supplies the rest by itself: run320 yields **exactly one water value, 73.02 EUR/MWh, in all five zones and all 13152 hours**. A flat water value therefore arises *endogenously* the moment the proxy is off, and setting its level by hand was measured inert (run273–276: `p_nom_opt` did not move between VOM / 30 / 60, because the dual self-corrects). The flag set a number the model then undid.
 - ⚠️ **Cost of the rule:** `run254_noproxy_2h` (an expansion without the proxy) can no longer be reproduced. Its role — measuring the flat full-foresight water value — is now served by **run320, which is a dispatch** and reproduces fine as `--dispatch run260_baseline_2h --no-rolling-horizon --no-terminal-curve`.
 
+**⭐ Hydrons bud som TRAPPA (`--hydro-bid-ladder K:BREDD`, default AV, 2026-08-22).** Reservoaren
+har ETT `marginal_cost` per tidssteg, så hela flottan — 52,4 GW över de fem hydrozonerna — budar
+vid samma pris. Utbudet blir oändligt elastiskt just där: landar restlasten inne i blocket är
+priset budet, oavsett vad sol och vind gör. **Mätt i `run400_expansion`:** zonpriset ligger på
+hydrons effektiva bud (`mc + μ/η`, ±2) i **64,8 % av timmarna i SE-N, 78,6 % i NO-N, 58,5 % i
+NO-S**, och en tvåpunktsmodell (andel pinnad vid budet, resten fri) reproducerar den uppmätta
+prisspridningen till ~1 enhet i alla zoner. Hydron står dessutom vid taket 17-38 % av timmarna
+och vid golvet 23-52 % — ren bang-bang.
+
+Flaggan delar uttaget i K nivåer à `p_nom/K` med `offset_k = BREDD·((k+½)/K − ½)`.
+
+- ⚠️ **BREDD är INTE budspannet.** Offsetterna tas i nivåernas MITTPUNKTER, så
+  `spann = BREDD·(K−1)/K`. K=3, BREDD=36 → −12/0/+12, alltså **24**. Samma konvention som
+  `_add_market_staircase`. ⚠️ K och BREDD är därmed KOPPLADE: för spann 24 vid K=5 krävs
+  BREDD **30**. Ändra en i taget.
+- **Deviationsform:** `marginal_cost` rörs inte. Callbacken lägger bara `Σ_k offset_k·d_k` i
+  objektivet med `Σ_k d_k = p_dispatch`, så totalen blir `Σ_k (mc+offset_k)·d_k`. Därmed
+  lägesoberoende — den lägger sig kring kurvans λ(v) i expansion och kring VOM + SOC-dualen i
+  dispatch. Växande `offset_k` ⇒ LP:t fyller billigaste nivån först, ingen ordningsvillkor.
+- **Motivet är AGGREGERINGSFELET**, inte prisstatistiken: modellen slår ihop hundratals magasin
+  till ett per zon, och ett enda `mc` *är* det felet. En verklig flotta har spridda vattenvärden.
+- ⛔ **BREDD får ALDRIG kalibreras mot prisfördelningen** — det vore prisproxyns cirkularitet i
+  ny form. Kalibrera mot den OBSERVERADE budkurvan (`temp/bidcurve_mae.py`), samma observabel som
+  låste `min_hourly_frac`. Prisfördelningen är VALIDERING.
+
+⭐ **Ren 3h-svepning (run403 spann 0 · run402 spann 24 · run404 spann 40) — monoton i bredden:**
+budkurva MAE 20-60 3,554 → 3,452 → **3,122** (hela: 2,690 → 2,371 → **2,204**) · v/s SE/NO/FI
+1,51/1,38/0,80 → 1,42/1,34/0,82 → **1,38/1,31/0,84** (eSett 1,38/1,30/1,13) · Σ|Δv/s| 0,537 →
+0,388 → **0,298** · facit 1,444 → 1,354 → **1,300**. Kriterium 1 vände INTE vid 60.
+⛔ Men prissvansen överskjuter i norr vid spann 40: h>100 SE-N 554 mot obs 276, NO-N 418 mot 107.
+**Rekommenderad bredd: `3:36`** — 62 % av v/s-vinsten till mild svansöverskjutning; över spann 24
+accelererar svansen medan v/s-vinsten är nära linjär.
+
+⛔ **HÖR HEMMA I DISPATCH, INTE EXPANSION.** `run410` (2h-expansion + trappa) mot `run401` (utan):
+pinningen bröts bara marginellt (SE-N 60,6 → 54,8 %, SE-S och FI gick UPP), priserna knappt
+(NO-N SD 9,1 → 12,3 enda tydliga rörelsen; DK, utan vattenkraft, exakt oförändrad). Orsak: i
+expansion är hydrons bud den exogena mc-kurvan UTAN tillståndsberoende, och kapacitetsmixen får
+omoptimera — priseffekten arbitreras bort. Kostnaden: **sol −2,54 GW**, real kostnad **+0,63 %**.
+⚠️ **Rå målfunktion är OBRUKBAR** över trappan (run410 −4,23 % medan real kostnad STEG). Korrigera
+med `real = objective − Σ_t Σ_k (mc_t + offset_k)·d_k·w_t`; nivåfyllnaden rekonstrueras exakt ur
+`p_dispatch` som `d_k = min(max(p − k·cap, 0), cap)` eftersom nivåerna fylls billigast först.
+⚠️ Hydrons bokförda bud faller 9,4 % trots att offsetterna summerar till noll — den
+**inframarginella rabatten** (hydron går sällan för fullt). Medelvärdesbevarande i MARGINALEN,
+inte i totalkostnaden.
+
+⭐ **`run411_ladder_dispatch_1h`** (1h-dispatch av run410): bang-bang i princip UTPLÅNAT i NO-N —
+vid taket **0,7 %**, vid golvet **1,8 %** (utan trappa 17-36 %). Budkurvan bäst uppmätt: MAE
+3,417 / 2,206. NO:s v/s träffar **1,30 exakt**. ⛔ Men drift **−1,87 TWh**, och ingen kontroll
+finns (flotta, NTC och upplösning skiljer alla) — ej attribuerbart.
+⭐ **Andelen "på bud" går INTE mot noll med en trappa** — den går mot andelen timmar hydron är
+marginell, en fysisk egenskap. Trappan byter ETT pinnat pris mot K stycken. ⇒ **SD är rätt mått,
+inte pinningandelen.** ⚠️ K=3 kvantiserar priset till tre värden när hydron är marginell.
+
+⭐ **run360:s NTC ur COMMITTAT läge** (run401 kördes dirty med handredigerad config):
+`--ntc-override NO-N:SE-N:1500 NO-N:NO-S:700 NO-S:SE-S:2100 SE-S:DK:2400`. Verifierat att last
+(719,45 TWh/år) och alla åtta interna NTC:er blir identiska med run401.
+
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 
 **Hydro inflow model:** Parameters are manually calibrated spring-flood profiles stored in `config/hydro_params.yaml` (NOT `data/processed/hydro_params.yaml` which is auto-generated and must never be used). SE-N: A=10000 MW spring flood, mu=day 135 (May 15), phi=183 (summer-high cosine). `build_inputs.py` does NOT regenerate these — they are a config artifact. Verify correct hydrology after each run: SE-N inflow should peak ~15000 MW in May, ~2600 MW in January; reservoir SOC should peak ~85% in July.
