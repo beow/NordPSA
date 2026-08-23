@@ -110,8 +110,9 @@ DEFAULT_HYDRO_BID_LADDER = "3:36"
 
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v3 (run250-konfen + hydro-mc-kurva i expansion "
-                         "+ budtrappa 3:36 i båda lägena)")
+BASELINE_DEFAULTS_TAG = ("baseline-v4 (run250-konfen + hydro-mc-kurva i expansion "
+                         "+ budtrappa 3:36 i båda lägena + start-SOC på cykliska ankaret "
+                         "i rullande horisont)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -892,10 +893,19 @@ def solve_rolling_horizon(n, cfg: dict, args, market_prices: dict, res: int,
            for u in units}
     # Start-SOC. I rullande horisont finns INGET cykliskt villkor — nivån bärs över från
     # fönster till fönster i hela perioden, så startvärdet är ett äkta begynnelsevillkor
-    # som propagerar i stället för att tvättas bort. Använd därför den FAKTISKA nivån
-    # (hydro_soc_start, ur Energy Charts) när den finns; hydro_soc_initial är cykliska
-    # körningars ankare för start = slut och är en annan sak.
-    start_cfg = cfg.get("hydro_soc_start", {}) or {}
+    # som propagerar i stället för att tvättas bort.
+    #
+    # ⭐ DEFAULT sedan 2026-08-23: samma CYKLISKA ANKARE (hydro_soc_initial) som expansionen
+    # startar på. Skälet är jämförbarhet: med hydro_soc_start (faktisk EC-nivå 2023-01-02)
+    # startade dispatchen 8 TWh under sin egen expansion — 61,1 % mot 67,5 % av 125,4 TWh —
+    # och de två lägena var då inte ett rent A/B. Uppmätt på run418/run418-dispatch: skillnaden
+    # är nästan ENERGINEUTRAL (total hydro 530,8 mot 531,2 TWh över tre år), men den flyttar
+    # hela magasinbanan och därmed var på terminalkurvan man befinner sig.
+    # ⚠️ Priset för bytet: den FAKTISKA startnivån är en uppmätt storhet (Energy Charts,
+    # veckan 2023-01-02) och det cykliska ankaret är det inte. Vill man validera dispatchen
+    # mot observerade priser är --soc-start-actual det ärligare valet — den flaggan
+    # reproducerar också allt före 2026-08-23.
+    start_cfg = (cfg.get("hydro_soc_start", {}) or {}) if args.soc_start_actual else {}
     soc_carry, start_src = {}, []
     for u in units:
         zone = u.split()[0]
@@ -1144,6 +1154,11 @@ def apply_dispatch_replay(parser, args):
     base.output     = args.output
     base.desc       = args.desc or f"omdispatch av {label} @ {base.resolution}h (frysta p_nom_opt)"
     base.dry_run    = args.dry_run            # "hur"-flaggor från nya kommandot vinner
+    # Start-SOC-källan hör till OMDISPATCHEN (den rullande horisonten är alltid det nya
+    # kommandots), och källans argv kan aldrig innehålla flaggan — den är nyare än varenda
+    # befintlig körning. Utan den här raden blir `--dispatch X --soc-start-actual` TYST
+    # verkningslöst: samma fällklass som run319, --spill-cost och --hydro-bid-ladder.
+    base.soc_start_actual = args.soc_start_actual
     base.low_hydro  = args.low_hydro          # scenario-modifierare på NYA körningen
     base.vre_curtailment_cost = args.vre_curtailment_cost   # hör till OMDISPATCHEN, inte källan:
                                               # källans argv har den aldrig (expansion förbjuder
@@ -1194,6 +1209,8 @@ def apply_dispatch_replay(parser, args):
         base.ntc_override = args.ntc_override
     if args.market_ntc_override is not None:
         base.market_ntc_override = args.market_ntc_override
+    if args.market_ntc_scale is not None:
+        base.market_ntc_scale = args.market_ntc_scale
     # Rullande horisont och terminalvärdet hör HELT till omdispatchen. Källans argv kan
     # aldrig innehålla dem — rullande är dispatch-only, så en expansionskörning förbjuder
     # dem. Utan dessa rader blir de tyst verkningslösa och körningen faller tillbaka på
@@ -1569,6 +1586,15 @@ def main() -> None:
                              f"aldrig mot prisfördelningen. DEFAULT sedan 2026-08-23: "
                              f"{DEFAULT_HYDRO_BID_LADDER} (även bart flaggnamn ger den). "
                              "Stäng av med --no-hydro-bid-ladder.")
+    parser.add_argument("--soc-start-actual", action="store_true",
+                        help="RULLANDE HORISONT: starta magasinen på den FAKTISKA uppmätta "
+                             "fyllnaden 2023-01-02 (config hydro_soc_start, ur Energy Charts) "
+                             "i stället för på expansionens cykliska ankare "
+                             "(zones.*.hydro_soc_initial). Var default till 2026-08-23; "
+                             "behövs för att reproducera run268-run418:s dispatcher, och är "
+                             "det ärligare valet när dispatchen ska valideras mot OBSERVERADE "
+                             "priser. Default är ankaret, så att dispatch och expansion "
+                             "startar på samma nivå och blir jämförbara.")
     parser.add_argument("--no-hydro-bid-ladder", action="store_true",
                         help="Låt hela reservoarflottan buda vid ETT pris igen (läget före "
                              "2026-08-23). Behövs för att reproducera körningar gjorda före "
@@ -1791,6 +1817,12 @@ def main() -> None:
                         help="Sätt intern NTC-länk Z0-Z1 till MW (t.ex. SE-S:DK:2007). "
                              "Appliceras EFTER demand-scenariots ntc_overrides → pinnar/ersätter "
                              "en enskild länk. Kan anges flera gånger.")
+    parser.add_argument("--market-ntc-scale", type=float, default=None, metavar="FAKTOR",
+                        help="Skala ALLA kontinentkablars kapacitet med FAKTOR (0.5 = halva "
+                             "2040-värdet). Verkar EFTER demand-scenariots "
+                             "market_ntc_overrides, alltså på 2040-nivåerna, och FÖRE "
+                             "--market-ntc-override, så en uttrycklig kabel vinner. Avsett "
+                             "för scenarier om minskad kontinental export/import.")
     parser.add_argument("--market-ntc-override", nargs="+", default=None, metavar="NAMN:MW",
                         help="Sätt kontinentkabel (market_connection) NAMN till MW (t.ex. "
                              "'SE-S DE:1315' för Hansa Power Bridge +700). Appliceras EFTER "
@@ -2213,6 +2245,16 @@ def main() -> None:
             if not hit:
                 raise SystemExit(f"--ntc-override: hittade ingen intern länk {z0}-{z1} i cfg['links']")
 
+    if args.market_ntc_scale is not None:
+        _mc = cfg.get("market_connections", []) or []
+        _tot0 = sum(m[2] for m in _mc)
+        print(f"  → Marknads-NTC skalas ×{args.market_ntc_scale:g} "
+              f"({len(_mc)} kablar, {_tot0:.0f} → {_tot0 * args.market_ntc_scale:.0f} MW):")
+        for mc in _mc:
+            _old = mc[2]
+            mc[2] = _old * args.market_ntc_scale
+            print(f"     {mc[0]:<12} {_old:6.0f} → {mc[2]:6.0f} MW")
+
     if args.market_ntc_override:
         for spec in args.market_ntc_override:
             name, mw = spec.rsplit(":", 1)
@@ -2335,6 +2377,10 @@ def main() -> None:
     if args.terminal_seasonal:          flags.append("term-seasonal")
     flags.append(f"bidladder-{args.hydro_bid_ladder.replace(':', '_')}"
                  if args.hydro_bid_ladder else "no-bidladder")
+    if args.rolling_horizon:
+        flags.append("socstart-faktisk" if args.soc_start_actual else "socstart-ankare")
+    if args.market_ntc_scale is not None:
+        flags.append(f"mktscale-{args.market_ntc_scale:g}")
     if args.terminal_curve is not None: flags.append("termkurva")
     if args.hydro_mc_curve is not None:
         flags.append("hydro-mc-kurva" + ("-" + Path(args.hydro_mc_curve).stem

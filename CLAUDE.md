@@ -138,6 +138,21 @@ Capital cost is charged on `p_nom_opt` (total installed capacity, not just incre
 SE-N and NO-N have no direct continental market connection — with `--no-voll` they have only slack generators.
 SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU day-ahead).
 
+Tre spakar på kablarna, alla verkande EFTER demand-scenariots `market_ntc_overrides`, dvs. på
+2040-nivåerna:
+
+| flagga | verkan |
+|---|---|
+| `--market-ntc-override NAMN:MW` | en namngiven kabel till MW |
+| `--market-ntc-scale FAKTOR` | **alla tio** kablarna ×FAKTOR (2026-08-23) |
+| `--no-market` | tar bort kontinentkopplingen helt |
+
+`--market-ntc-scale` verkar FÖRE `--market-ntc-override`, så en uttryckligen namngiven kabel
+vinner. Båda läses ur källans argv vid `--dispatch`-replay och ska därför INTE upprepas på
+dispatchkommandot. Använd i batch 42:s scenario 7 (`market50`, ×0,5: 13 820 → 6 910 MW) för att
+mäta vad minskad kontinental export/import gör med Norden. ⭐ Kan inte gå infeasible: med VOLL
+3000 i alla sex zoner blir utfallet dyra timmar, inte olöslighet.
+
 ## Important design decisions
 
 **Canonical expansion baseline (defaults since 2026-08-05):** `python scripts/run_model.py` with no flags *is* the baseline — the configuration of `run250_hydroops_2h`, adopted so that experiments differ from the baseline only by the flags they actually name. Every default has an off-switch:
@@ -158,6 +173,7 @@ SE-S, NO-S, DK, FI have `market` generators (p_nom from config, price = DE-LU da
 | `--market-elasticity` | ON (predates this change) | `--no-market-elast` |
 | `--hydro-mc-curve` | ON i expansion (2026-08-20), `config/terminal_curve_2040_gemini_v7_exp73.yaml` | `--no-hydro-mc-curve` |
 | `--hydro-bid-ladder` | **`3:36`** i BÅDA lägena (2026-08-23) | `--no-hydro-bid-ladder` |
+| start-SOC i rullande horisont | **cykliska ankaret** `hydro_soc_initial` (2026-08-23) | `--soc-start-actual` |
 
 `--voll` is the one default that does *not* reproduce `run250_hydroops_2h` exactly. It does not change the shedding price — `MC_SLACK` is already 3000 — only *where* slack exists: without it only the zones lacking a market connection (SE-N, NO-N) have a backstop, with it all six do. In an expansion run this gives the optimizer a new option: shed load at 3000 EUR/MWh instead of building peak capacity. Break-even against gas (~180 kEUR/MW/yr annualized) is roughly 60 scarcity hours per year, so FI — whose price tail is ~29 scarcity h/yr — is where a difference is most likely to show up as slightly less gas capacity. Also note `--voll` is taken from the *new* command on a `--dispatch` replay (as is `--no-voll`), so redispatch now gets VOLL by default; this removes the old trap where the flag had to be repeated manually.
 
@@ -402,6 +418,37 @@ inte pinningandelen.** ⚠️ K=3 kvantiserar priset till tre värden när hydro
 **Thermal as must-run Generator:** `p_min_pu = p_max_pu = profile/p_nom`. Dispatch is fully determined by data; optimizer has no freedom. Thermal is NOT subtracted from load.
 
 **Hydro inflow model:** Parameters are manually calibrated spring-flood profiles stored in `config/hydro_params.yaml` (NOT `data/processed/hydro_params.yaml` which is auto-generated and must never be used). SE-N: A=10000 MW spring flood, mu=day 135 (May 15), phi=183 (summer-high cosine). `build_inputs.py` does NOT regenerate these — they are a config artifact. Verify correct hydrology after each run: SE-N inflow should peak ~15000 MW in May, ~2600 MW in January; reservoir SOC should peak ~85% in July.
+
+**⭐ Start-SOC i rullande horisont = expansionens ankare (default sedan 2026-08-23).** Rullande
+horisont har inget cykliskt villkor — nivån bärs från fönster till fönster i tre år, så
+startvärdet propagerar i stället för att tvättas bort. Den läses numera ur
+`zones.*.hydro_soc_initial`, **samma tal expansionen pinnar SOC[0] till**, i stället för ur
+`hydro_soc_start` (faktisk EC-nivå 2023-01-02). Av med `--soc-start-actual`.
+
+- **Skälet är jämförbarhet.** Med den gamla defaulten startade dispatchen **8 TWh under sin egen
+  expansion** — 61,1 % mot 67,5 % av 125,4 TWh — så de två lägena var inget rent A/B.
+- ⭐ **Nästan energineutralt:** total vattenkraft över tre år 530,8 (exp) mot 531,2 TWh (disp), och
+  spill är 0 i båda. Nivån flyttar magasin*banan* och därmed var på terminalkurvan man ligger, inte
+  hur mycket energi som finns.
+- ⚠️ **Vad som byts bort:** den faktiska startnivån är en UPPMÄTT storhet (Energy Charts, veckan
+  2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16); det cykliska ankaret är det inte. Ska en dispatch
+  valideras mot OBSERVERADE priser är `--soc-start-actual` det ärligare valet.
+- ⚠️ Flaggan tas från det NYA kommandot i en `--dispatch`-replay (som `--voll`), och
+  `flaggor:`-raden skriver `socstart-ankare` eller `socstart-faktisk` — aldrig tyst ingenting.
+  **Reproducera run268–run418:s dispatcher med `--soc-start-actual`.** `defaults:`-taggen är
+  bumpad till `baseline-v4`.
+
+⭐⭐ **Vad nivåskillnaden dolde (mätt på run418 mot run418_ladder_k3_dispatch_1h):** dispatchens
+prisbias mot expansionen är **+1,8 / +0,5 / −2,7 EUR/MWh** för 2023/2024/2025 i SE (NO-N störst,
++3,2 / −3,7; DK minst, +0,6 / −0,9 — DK har ingen vattenkraft och importerar bara effekten). Det är
+en **omfördelning av vatten mellan åren**: hydro Δ(disp − exp) = −3,92 / −0,18 / **+4,52** TWh, summa
++0,42 (= driften). Orsaken är att expansionen prissätter vatten med **ETT tal för hela treårsperioden**
+(SOC-dualen har 1–2 unika värden per zon) och därför tömmer hårt under det torra 2023 — den *vet* att
+2024 ger 197,4 TWh tillrinning, +18 %. Den rullande horisonten ser en vecka + tre veckor och styrs av
+en **kalenderförankrad** kurva λ(vecka, fyllnad) som inte vet vilket ÅR det är (133–150 unika
+λ-värden, ett per fönster). Den kan per konstruktion aldrig säga "töm i år, nästa år blir blött".
+⇒ **Expansionens prisstatistik PER ÅR bär en framsynsränta som dess egen dispatch inte kan
+reproducera.** Treårsmedel är jämförbara; enskilda år är det inte.
 
 **Hydro SOC cycling:** `cyclic_state_of_charge=True` + `extra_functionality` callback pins SOC[t=0] = target from `hydro_soc_initial` in `zones.yaml`. This forces start = end = target (e.g. 70%) while the LP optimizes freely in between.
 

@@ -363,6 +363,12 @@ baseline_batteries:
 # över från fönster till fönster i tre år, och startvärdet propagerar därför genom hela
 # körningen i stället för att tvättas bort.
 #
+# ⛔ ANVÄNDS INTE LÄNGRE SOM DEFAULT (2026-08-23). Rullande horisont startar numera på
+# hydro_soc_initial — samma nivå som expansionen — så att de två lägena blir jämförbara.
+# Mätt på run418 mot run418-dispatch: den gamla defaulten startade dispatchen 8 TWh lägre
+# (61,1 % mot 67,5 % av 125,4 TWh), vilket gjorde årsvisa prisjämförelser mellan lägena
+# missvisande. Värdena här nås med --soc-start-actual, som också reproducerar run268-418.
+#
 # KÄLLA: docs/NordicHydroEC.xlsx (Energy Charts, veckovis magasinenergi TWh per land),
 # veckan 2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16 — dividerat med modellens
 # zonvolymer (SE 32,49 / NO 87,40 / FI 5,50 TWh).

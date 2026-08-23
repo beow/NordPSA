@@ -17,7 +17,12 @@ samma scenario har samma sista siffra i varje batch:
   run{PREFIX}4_lowhydro06_{R}h   + torrt 2024 (hydro ×0,6)
   run{PREFIX}5_batt25_4h_{R}h    + 25 GW 4h batterier (ist. för 12 GW 2h)
   run{PREFIX}6_notax_{R}h        + ingen elskatt på värme-el (VP+el-panna)
-  run{PREFIX}7_hansa_{R}h        + Hansa Power Bridge: SE-S↔DE 615→1315 MW
+  run{PREFIX}7_market50_{R}h     + ALLA kontinentkablar halverade (13 820 → 6 910 MW)
+
+⚠️ Plats 7 BYTTE INNEHÅLL i batch 42. Till och med batch 36 var den `hansa`
+(Hansa Power Bridge, SE-S↔DE 615→1315 MW, kvar i run198/run367). Konventionen att
+scenarionamnen är konstanta mellan batchar gäller alltså inte över den gränsen: ett
+`runXX7_hansa_*` är ≤ batch 36, ett `runXX7_market50_*` är ≥ batch 42.
 
 Scenarier som redan har ett FÄRDIGT resultat (results/<namn>/network.nc) hoppas över;
 --force kör om dem. Det skyddar bl.a. run260_baseline_2h, som redan ÄR batch 26:s
@@ -86,8 +91,13 @@ SCENARIOS = [
         ["--scenario-battery", "25:4"]),
     (6, "notax", "+ ingen elskatt pa varme-el (VP+el-panna)",
         ["--no-tax-heatpower"]),
-    (7, "hansa", "+ Hansa Power Bridge: SE-S<->DE 615->1315 MW",
-        ["--market-ntc-override", "SE-S DE:1315"]),
+    # ⭐ Ersatte `hansa` i batch 42. Syftet är att visa vad MINSKAD kontinental
+    # export/import gör med Norden: alla tio kablar till halva sitt 2040-varde
+    # (13 820 -> 6 910 MW), skalat EFTER demand-scenariots market_ntc_overrides.
+    # ⚠️ Skalan las ur kallans argv vid --dispatch-replay och ska darfor INTE
+    # upprepas pa dispatchkommandot (samma som --market-ntc-override).
+    (7, "market50", "+ ALLA kontinentkablar halverade (13 820 -> 6 910 MW)",
+        ["--market-ntc-scale", "0.5"]),
 ]
 
 

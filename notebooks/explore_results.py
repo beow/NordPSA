@@ -89,7 +89,7 @@ def _cellcode(name):
 
 
 # Sätt LABEL/LABEL2 HÄR för att byta körning — kör om cell 1 efteråt.
-LABEL, LABEL2 = "run418_ladder_k3_2h", "run360_baseline_2h"
+LABEL, LABEL2 = "run418_ladder_k3_dispatch_1h", "run418_ladder_k3_2h"
 
 exec(_cellcode("bootstrap"))
 
