@@ -3,6 +3,15 @@ Förutsätter att bootstrap.py körts (globala: LABEL, ROOT, ZONES, cfg, n, disp
 hydro_d, soc, spill, flows, prices, water_value, mkt_prices, load + hjälpfunktioner).
 """
 
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
+
 # Optimal installerad kapacitet per teknik och zon
 ext = n.generators[n.generators.p_nom_extendable].copy()
 ext['p_nom_opt_mw'] = n.generators.p_nom_opt[ext.index]

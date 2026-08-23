@@ -71,17 +71,25 @@ nuclear_synth_existing:
 # name format: "<Nord zone> <counterpart>" — becomes the PyPSA generator name
 # price_bzn: Energy Charts bidding zone code used as marginal cost signal
 # Positive flow = import (zone buys), negative flow = export (zone earns).
+# ⭐ LÅSTA 2026-08-22 (nutid OCH 2040) efter Gemini-granskning mot TYNDP 2024. Kabelnamnen
+# nedan är hans identifiering; talen är våra egna mätningar av schemalagt utbyte 2023-2025.
 market_connections:
-  - [FI EE,   FI,   1016, EE]
-  - [SE-S LT, SE-S,  700, LT]
-  - [SE-S PL, SE-S,  600, PL]
-  - [SE-S DE, SE-S,  615, DE-LU]
+  - [FI EE,   FI,   1016, EE]      # EstLink 1+2. Uppmätt max 1059 (serien har luckor)
+  - [SE-S LT, SE-S,  700, LT]      # NordBalt. Inga utbyggnadsplaner (Gemini/TYNDP)
+  - [SE-S PL, SE-S,  600, PL]      # SwePol Link. Inga officiella planer
+  - [SE-S DE, SE-S,  615, DE-LU]   # Baltic Cable. ⭐ Hansa PowerBridge (700 MW) INSTÄLLD av SvK
+                                   # ⇒ ingen 2040-utbyggnad; annars vore 1300 rimligt
   - [DK DE,   DK,   3400, DE-LU]   # FB-ekvivalent 2025: schemalagd q95 3293 (DK→DE) / 3441 (DE→DK). Var 3244
-  - [DK NL,   DK,    700, NL]
-  - [DK GB,   DK,   1456, GB]
-  - [NO DE,   NO-S, 1400, DE-LU]
-  - [NO NL,   NO-S,  640, NL]
-  - [NO GB,   NO-S, 1449, GB]
+  - [DK NL,   DK,    700, NL]      # COBRAcable, nominellt 700. Inga nya länkbeslut
+  - [DK GB,   DK,   1456, GB]      # Viking Link. ⭐ 1456 = uppmätt q95 OCH q99 (max 2120), 2023-2025.
+                                   # Gemini: märkeffekten är 1400 — den öppna frågan i 2040-blocket
+                                   # nedan är därmed BESVARAD: 1400 är nameplate, men marknaden
+                                   # klarerar 1456, och det klarerade är rätt storhet för en NTC
+  - [NO DE,   NO-S, 1400, DE-LU]   # NordLink. Norska regeringen har stoppat nya utlandskablar
+  - [NO NL,   NO-S,  640, NL]      # NorNed. Uppmätt q95 640 / q99 664; tekniskt nominellt 700 (se 2040)
+  - [NO GB,   NO-S, 1449, GB]      # North Sea Link. ⭐ q95 = q99 = MAX = 1449 i 26 304 timmar utan en
+                                   # enda överträdelse ⇒ hårt tak, samma fingeravtryck som NO-S↔DK 1680.
+                                   # Gemini föreslog 1400 (nameplate) — AVSLAGET på mätningen
 
 # Effektiv kapacitet = P80 av faktiska fysiska flöden 2024 (ENTSO-E), dvs en
 # proxy för flow-based-krympning i korrelerade exporttimmar. Aktiveras med
@@ -740,24 +748,44 @@ demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
       - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
-      - [NO-S, SE-S,  2300]   # NO1↔SE3 2040. ⚠️ ANTAGANDE utan källa i repot — 1,21× nutidens 1900
-                              # (FB-ekvivalent 2025). TSO-talet är 2000; 2300 är ett påslag utöver det
+      - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 = TSO-talet (Hasle-snittet). ⭐ LÅST 2026-08-22 efter att
+                              # Gemini oberoende angav exakt 2000 som officiell TSO-prognos — samma tal som
+                              # configens egen kommentar bärde. Var 2300 = ett osourcat påslag utöver TSO-talet;
+                              # 2300 är nu KÄNSLIGHETSFALL, ej baseline. 1,05× nutidens 1900 (FB-ekv. 2025)
       - [SE-S, DK,    2300]   # SE4↔DK2 + Konti-Skan 2040 (TSO-tal). Var tillfälligt 2400, samma skäl;
                               # nutid är nu 2000, så golvet binder ej
-      - [NO-N, NO-S,  3000]   # NO3↔NO1/NO5 2040. ⚠️ ANTAGANDE utan källa i repot — 4,3× nutidens 700
-                              # och 3× expansionens 1000. Största relativa nätutbyggnaden i scenariot
-      - [NO-N, SE-N,  2000]   # NO4↔SE1/SE2 + NO3↔SE2 2040. ⚠️ ANTAGANDE utan källa i repot —
-                              # 1,74× nutidens 1150 (FB-ekvivalent 2025). Ingen exp-ov: gäller
+      - [NO-N, NO-S,  1500]   # NO3↔NO1/NO5 2040. ⭐ LÅST 2026-08-22, sänkt från 3000. Tre skäl, två ur repot:
+                              # (a) publ. day-ahead-kap. idag 250 median / 750 max ⇒ 3000 är 4× allt som
+                              #     någonsin publicerats; (b) fysisk q95 2025 (1018) INNEHÅLLER svensk transit
+                              #     SE2→NO3→NO1 som modellen redan bär på SE-N↔SE-S ⇒ 3000 dubbelräknar samma
+                              #     fysiska väg, särskilt ihop med snitt 2 på 10700; (c) Gemini: Statnetts NUP
+                              #     saknar HVDC/400kV-korridor genom fjällkedjan, tak 1200-1500 till 2040.
+                              # ⚠️ run392 mätte 60,9 % mättnad ÄVEN vid 3000 ⇒ modellen VILL ha mer. Det är en
+                              #   ekonomisk signal (NO-N:s 2040-överskott), inte ett fysiskt byggbarhetsbevis.
+                              #   Avgörs endogent med --expand-link NO-N:NO-S:2.5:700:4000 — EJ KÖRD ÄNNU
+      - [NO-N, SE-N,  1800]   # NO4↔SE1/SE2 + NO3↔SE2 2040. ⭐ LÅST 2026-08-22, sänkt från 2000.
+                              # Geminis intervall 1500-1800 (TYNDP 2024: ingen beslutad utbyggnad på
+                              # Ofoten/Luleå-snittet) OMSLUTER vår egen publ. day-ahead-kap. max 1400/1550
+                              # — oberoende korroborering. 1800 behåller viss utbyggnad över publ. kap.
+                              # 1,57× nutidens 1150 (FB-ekvivalent 2025). Ingen exp-ov: gäller
                               # bara i demand-scenariot, expansion utan scenario behåller 1150
     # Kontinentkablar (market_connections) — matchas på namn, ej zonpar
+    # ⭐ LÅSTA 2026-08-22. Gemini-granskningen ändrade INGEN siffra men gav källor åt två
+    # tal som tidigare var flaggade som antaganden (FI EE, NO NL).
     market_ntc_overrides:
-      - [FI EE, 1700]         # FI↔EE 2040 (var 1016)
-      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; nutid 3400)
-      - [NO NL, 700]          # NO-S↔NL 2040 (var 640)
-      - [DK GB, 1456]         # DK↔GB 2040. HÖJD från 1400: låg UNDER nutidens 1456, alltså en
-                              # tyst nedgradering till 2040. ⚠️ Om 1400 är Viking Links märkeffekt
-                              # är det i stället nutidsvärdet som ska ner — går ej att avgöra lokalt
-      - [NO GB, 1449]         # NO-S↔GB 2040. HÖJD från 1400, samma skäl (North Sea Link)
+      - [FI EE, 1700]         # FI↔EE 2040 = 1016 nutid + ⭐ ESTLINK 3 (700 MW), formellt beviljat
+                              # projekt i ENTSO-E TYNDP 2024, idrifttagning ~2035 ⇒ 1716 ≈ 1700.
+                              # KÄLLA FUNNEN 2026-08-22 (var: "höjning utan angiven källa").
+                              # 2000 = full projektkapacitet OM EstLink 1/2 uppgraderas — ej antaget
+      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; nutid 3400). Gemini: 4500-5000 stämmer med
+                              # Energinet/50Hertz inkl. Bornholm Energy Island ⇒ vi ligger i underkant
+      - [NO NL, 700]          # NO-S↔NL 2040 = ⭐ NorNeds TEKNISKA NOMINELLA kapacitet. Nutidens 640
+                              # (uppmätt q95) är flaskhalsbegränsad; 700 = flaskhalsen borta.
+                              # KÄLLA FUNNEN 2026-08-22 (var: "höjning utan angiven källa")
+      - [DK GB, 1456]         # DK↔GB 2040 = nutidens uppmätta q95/q99. ⛔ Geminis 1400 AVSLAGET:
+                              # det är märkeffekten, men schemalagt utbyte klipper vid 1456
+      - [NO GB, 1449]         # NO-S↔GB 2040 = nutidens hårda tak (q95=q99=max i 26 304 h).
+                              # ⛔ Geminis 1400 AVSLAGET på samma grund
     # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
     # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
     # extendable). I expansionsläge går befintlig flotta över till syntetisk profil

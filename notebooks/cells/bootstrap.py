@@ -15,9 +15,16 @@ from pathlib import Path
 # LABEL = "run69_battery_10gw10h_1h"
 # LABEL = "run82_wind_ses_9893_1h"
 # LABEL = "run84_socpin_senose_1h"
-LABEL = "run94_elasticity_1h"          # 1h-baseline: elasticitet + hydrogolv-komp
-LABEL2 = None   # sätt till en annan körning (t.ex. 'run95_elasticity_3h') för att jämföra mot DEN i stället för faktiskt
-ROOT = Path('..').resolve()
+# LABEL = "run94_elasticity_1h"          # 1h-baseline: elasticitet + hydrogolv-komp
+# globals().get(...): notebooks/explore_results.py kan sätta LABEL/LABEL2 FÖRE
+# `import bootstrap` för att byta körning utan att röra den här filen.
+LABEL  = globals().get('LABEL',  "run400_expansion")
+LABEL2 = globals().get('LABEL2', "run360_baseline_2h")   # None = jämför bara mot faktiskt
+# Om explore_results.py redan räknat ut ROOT (walk-up från cwd) och exec:ar den här
+# filen i sitt eget namnrum (run_cell()), återanvänd DEN — annars pekar __file__ fel
+# (mot bootstrap.py:s egen plats i cells/, inte mot den exec:ande filens plats).
+if 'ROOT' not in globals():
+    ROOT = Path(__file__).resolve().parents[2] if '__file__' in globals() else Path('..').resolve()
 sys.path.insert(0, str(ROOT))
 
 RES  = ROOT / 'results' / LABEL
@@ -76,7 +83,47 @@ def zone_market(zone):
             and n.generators.loc[g, 'carrier'] == 'market']
     return dispatch[cols].sum(axis=1) if cols else pd.Series(0.0, index=dispatch.index)
 
-print(f'Tidssteg: {len(n.snapshots)}  ({n.snapshots[0]} – {n.snapshots[-1]})')
-print(f'Zoner: {ZONES}')
-print(f'Slack totalt: {dispatch.filter(like="slack").sum().sum()/1e3:.1f} GWh  (bör vara 0)')
-print(f'Last SE-N medel: {load["SE-N"].mean():.0f} MW')
+# Snapshot-viktning i timmar (2h-körning → 2.0). Används för MW→TWh-konvertering.
+dt_h = float(n.snapshot_weightings.objective.iloc[0])
+
+# Faktiska spotpriser för ALLA sex zoner (mkt_prices har fler kolumner, t.ex.
+# DE-LU/NL/PL/GB) — facit för dispatchkörningar, referensnivå för 2040-scenarier.
+_act = mkt_prices[ZONES].copy()
+_act.index = pd.to_datetime(_act.index).tz_localize(None)
+act_price = _act.reindex(dispatch.index, method='ffill')
+
+
+def twh(x):
+    """MW-serie/DataFrame → TWh över körperioden (summerar kolumner om DataFrame)."""
+    s = x.sum(axis=1) if isinstance(x, pd.DataFrame) else x
+    return float((s * dt_h).sum()) / 1e6
+
+
+def in_zone(carrier, zones=None):
+    """Generatornamn (ur dispatch.columns) med given carrier i angivna zoner
+    (default alla sex elzoner)."""
+    zs = ZONES if zones is None else zones
+    return [g for g in dispatch.columns if g in n.generators.index
+            and n.generators.at[g, 'bus'] in zs
+            and n.generators.at[g, 'carrier'] == carrier]
+
+
+def by_carrier(zones=None, df=None):
+    """Summerar generatordispatch per carrier-ATTRIBUT (inte per namn)."""
+    d = dispatch if df is None else df
+    cols = [g for g in d.columns if g in n.generators.index
+            and n.generators.at[g, 'bus'] in (ZONES if zones is None else zones)]
+    return d[cols].T.groupby(n.generators['carrier'][cols]).sum().T
+
+
+print(f'Körning : {LABEL}' + (f'  (LABEL2 = {LABEL2})' if LABEL2 else ''))
+print(f'Tidssteg: {len(n.snapshots)}  ({n.snapshots[0]} – {n.snapshots[-1]}) à {dt_h:.0f}h')
+print(f'Zoner   : {ZONES}')
+print(f'Modell  : {len(n.generators)} generatorer, {len(n.storage_units)} lager, '
+      f'{len(n.stores)} stores, {len(n.links)} länkar')
+print(f"\n{'zon':6s} {'pris':>7} {'faktiskt':>9} {'last TWh':>9} {'nettoimport TWh':>16}")
+for _z in ZONES:
+    print(f"{_z:6s} {prices[_z].mean():>7.1f} {act_price[_z].mean():>9.1f} "
+          f"{twh(load[_z]):>9.1f} {twh(zone_market(_z)):>16.2f}")
+_slack = twh(dispatch[in_zone('slack')].clip(lower=0)) if in_zone('slack') else 0.0
+print(f"\nLastbortkoppling (el-slack): {_slack:.4f} TWh   (bör vara ≈ 0)")

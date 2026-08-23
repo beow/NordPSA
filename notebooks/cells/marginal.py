@@ -8,6 +8,15 @@ lagringsbalansen). Saknas sådan enhet är ön TRÄNGSELKOPPLAD: priset = en gra
 trängselränta (= prisskillnaden över den mättade länken). Då följs kaskaden (minsta totala
 ränta) till den ö som HAR en lokal marginalenhet → den är systemets enda äkta prissättare.
 """
+
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
 import collections
 import pandas as pd
 import heapq

@@ -18,6 +18,15 @@ Förutsätter bootstrap.py (n, dispatch, hydro_d, zone_hydro_total, flows, zone_
 cfg, plt, mdates, pd, ZONES, LABEL).
 """
 
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
+
 # ── Inställningar ──────────────────────────────────────────────────────────────
 START = None        # startdatum, t.ex. '2024-01-01'   (None = från början)
 END   = None        # slutdatum,  t.ex. '2024-03-31'   (None = till slutet)

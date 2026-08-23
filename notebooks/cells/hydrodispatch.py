@@ -6,6 +6,15 @@ sista zonen), färre x-ticks.
 Förutsätter bootstrap.py (LABEL, LABEL2, ROOT, ZONES, cfg, plt, mdates, pd).
 """
 
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
+
 # ── Inledande val ────────────────────────────────────────────────────────────
 SHOW_ESETT = True    # visa eSett faktisk produktion som referens
 # ─────────────────────────────────────────────────────────────────────────────

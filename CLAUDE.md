@@ -203,7 +203,29 @@ Verify with `--dry-run`, which prints `must-run` per generator: in the baseline 
 | `a_scale` | **0,30** | run384: `a_amp` ×0,6 → ×0,3 gav SE:s v/s 1,18 → 1,32, bäst på båda måltavlorna |
 | `b_mean` | **0,80** likformigt | facit ger λ konstant i fyllnadsgrad ⇒ ingen uppmätt zonskillnad finns |
 | `b_amp` | **0,27** likformigt | samma argument; enkelt medel, eftersom zontalen är lika otillförlitliga |
-| λ_bas | 73 i filen | facit run386: 72,87 i alla fem zoner och alla timmar |
+| λ_bas | **73** — ⭐ **LÅST FÖR EXPANSION 2026-08-22** | facit run386: 72,87 i alla fem zoner och alla timmar; run320: 73,02 |
+
+⭐⭐⭐ **λ_bas är LÅST TILL 73 LIKFORMIGT I EXPANSION (2026-08-22)** — inte längre en fri parameter. Den är den **enda** av de tre frihetsgraderna som är **mätt i expansionens eget regim**: `a_scale` och `b_amp` är anpassade (mot eSett resp. Geminis tabeller), medan λ_bas är *avläst* ur facit, och facit är en **cyklisk fullframsynskörning** — samma regim som expansionen. I expansion är 73 alltså en avläsning, inte en kalibrering. Filen är `config/terminal_curve_2040_gemini_v7_exp73.yaml` = `DEFAULT_HYDRO_MC_CURVE`.
+
+⛔ **λ_bas-svepets 68,5 får INTE följa med till expansion.** run378/379/380 valde 68,5 på **reservoardriften**, som är exakt 3× det årliga flödesunderskottet (samma mätning, inte två). Cykliskt SOC tvingar start = slut, så **driften är identiskt noll oavsett λ_bas** — observabeln som pekade ut 68,5 existerar inte i expansion. Det är samma skäl som utestänger de zonvisa ankarna 64,5–72,5.
+
+**Nivån är nära inert men INTE helt.** run273–276 (`p_nom_opt` orört mellan VOM/30/60) och run377 (mc 27–58 → 73, μ 44,1 → 1,1, effektivt bud ändrat **<3 EUR/MWh** i alla fem zoner) visar att dualen äter upp nivån. ⚠️ Men kurvan är **multiplikativ**, `mc = λ_bas·A(v)`, så λ_bas skalar säsongsamplituden i absoluta tal — och run381 visade att *formen* inte är inert (platt A(v): sol +5,5 GW, havsvind −1,0 GW). 68,5 mot 73 är **6,6 %** amplitudskillnad, andra ordningen mot `a_scale` 0,6 → 0,3 (50 %), men inte noll. Påstå aldrig att λ_bas är verkningslös i expansion.
+
+✅ **BEKRÄFTAT PÅ DET LÅSTA NÄTET 2026-08-22 — utan ny körning.** Frågan var om 73, mätt på det gamla nätet (run320), överlever NTC-ändringarna 2026-08-20 och 2026-08-22. Två befintliga facit-körningar på **olika nät** svarar (NTC lästa direkt ur `network.nc`):
+
+| körning | NO-N↔SE-N | NO-N↔NO-S | NO-N export | Σ interna | **λ** | uppl. |
+|---|---:|---:|---:|---:|---:|---:|
+| run320 | 1 836 | 1 773 | 3 609 | — | **73,02** | 2h |
+| run386 | 1 500 | 700 | 2 200 | 22 281 | **72,869** | 3h |
+| **idag** | 1 800 | 1 500 | **3 300** | **23 181** | — | — |
+
+1. **λ är nästan okänsligt för NTC:** NO-N:s export skars **−39 %** och λ rörde sig **0,15 enheter (−0,2 %)**.
+2. **Dagens nät ligger inuti intervallet** de två spänner upp (export 3 300 mellan 2 200 och 3 609) — interpolation, inte extrapolation.
+3. **Och mycket nära run386:s:** +900 MW totalt (**+4,0 %**), och den största enskilda ändringen (NO-N↔NO-S 700 → 1 500) gör λ *mer* utjämnad. run386 mätte 72,87 på det **snävare** nätet.
+
+run386:s `water_value.csv` ger **exakt ett värde, 72,869, i alla fem zoner och alla timmar**. ⭐ Invariansen spänner också en upplösningsändring (2h → 3h), vilket stödjer att även 4h ger samma nivå.
+
+⚠️ **Vad som INTE är bevisat:** att λ förblir likformig *mellan zoner* om de nordliga NTC:erna sänks väsentligt under run386:s nivå. Båda facit-körningarna låg i 2040-regimen; platt λ är betingat på att nätet är utbyggt. Går NO-N↔NO-S tillbaka mot nutidens 700 i ett framtida scenario måste detta mätas om.
 
 ⭐ **Att gå från 25 frihetsgrader till 3 kostade 0,01 på säsongskvoten** (run388 → run390: Σ|fel| eSett 0,42 → 0,43) och blev *bättre* mot 2040-facit (0,59 → 0,57). Geminis zonvisa `b_mean`/`b_amp` bar alltså praktiskt taget ingen information — precis vad man väntar sig om kurvans form enbart är en approximationsanordning för begränsad framsyn.
 

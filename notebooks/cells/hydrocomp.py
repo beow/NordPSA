@@ -16,6 +16,15 @@ Producerar globala:
 Helpern wv_adjusted(label) räknar calw för VILKEN körning som helst direkt ur dess
 results-CSV:er → andra celler (t.ex. compareprice) kan kalla den för valfri körning.
 """
+
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
 import numpy as np
 
 # ── Inställning ──────────────────────────────────────────────────────────────

@@ -38,6 +38,15 @@ inte ett resultat. Det som betyder något är FÖRDELNINGEN mellan källor.
 
 Förutsätter bootstrap.py (globalerna `n`, `ZONES`, `LABEL`).
 """
+
+# Cellen kan importeras fristående (från explore_results.py) ELLER klistras in
+# i en notebook-cell efter att bootstrap.py redan körts där (explore.ipynb).
+# Guard: skippar importen om bootstrap redan satt sina globaler i detta namnrum.
+if 'LABEL' not in globals():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from bootstrap import *  # noqa: F401,F403
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
