@@ -97,9 +97,21 @@ DEFAULT_SPILL_COST_DISPATCH  = 0.1
 # i hydrons mc. Se filens note_expansion.
 DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v7_exp73.yaml"
 
+# Budtrappan är DEFAULT sedan 2026-08-23 och verkar i BÅDA lägena. K=3 / BREDD 36 ger
+# avvikelserna −12/0/+12, alltså spann 24. Låst på run417/418/419, som är en ren kontroll
+# (kanonisk 2h-expansion, endast flaggan skiljer): budkurvans MAE 20-60 3,669 → 3,525,
+# Σ|fel| v/s 0,833 → 0,490, real kostnad +0,41 %, och prissvansen flyttar mot uppmätt i
+# alla sex zoner utan att överskjuta någonstans.
+# ⚠️ K=5 (run419, `5:30`) blev INTE bättre — men den jämförelsen är konfunderad: matchat
+# SPANN matchar inte perturbationens STYRKA, som är avvikelsernas standardavvikelse
+# SD = BREDD·sqrt((1 − 1/K²)/12). `5:30` har SD 8,485 mot `3:36`:s 9,798, alltså 13 %
+# svagare trots samma spann. En ren K-jämförelse kräver `5:34.6`; den är inte körd.
+DEFAULT_HYDRO_BID_LADDER = "3:36"
+
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = "baseline-v2 (run250-konfen + hydro-mc-kurva i expansion)"
+BASELINE_DEFAULTS_TAG = ("baseline-v3 (run250-konfen + hydro-mc-kurva i expansion "
+                         "+ budtrappa 3:36 i båda lägena)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -1161,12 +1173,17 @@ def apply_dispatch_replay(parser, args):
     # betyder "orörd" och löses ut lägesberoende efter denna funktion.
     base.spill_cost = args.spill_cost
     # Budtrappan hör till OMDISPATCHEN: den är ett antagande om hydroflottans interna
-    # spridning, alltså samma sorts val som --hydro-min-*. Källans argv kan dessutom
-    # aldrig innehålla den (flaggan är nyare än varenda befintlig körning), så utan den
-    # här raden blir `--dispatch X --hydro-bid-ladder 3:36` TYST verkningslöst — samma
-    # fällklass som run319 och --vre-curtailment-cost. None = orörd.
-    if args.hydro_bid_ladder is not None:
-        base.hydro_bid_ladder = args.hydro_bid_ladder
+    # spridning, alltså samma sorts val som --hydro-min-*. Utan de här raderna blir
+    # `--dispatch X --hydro-bid-ladder 3:36` TYST verkningslöst — samma fällklass som
+    # run319 och --vre-curtailment-cost.
+    # ⚠️ Sedan trappan blev DEFAULT (2026-08-23) tas BÅDA fälten alltid från det NYA
+    # kommandot, precis som --voll och --vre-curtailment-cost. Källans värde får alltså
+    # inte läcka in: en omdispatch typad idag kör dagens default, och den som vill
+    # reproducera en källa utan trappa säger --no-hydro-bid-ladder. Det följer samma
+    # regel som resten av filen — nya defaults gäller nytypade kommandon, gamla
+    # körningar reproduceras genom att namnge de gamla värdena.
+    base.hydro_bid_ladder    = args.hydro_bid_ladder
+    base.no_hydro_bid_ladder = args.no_hydro_bid_ladder
     # NTC-överstyrningar är ett SCENARIOVAL för omdispatchen (som --low-hydro): man vill
     # kunna omdispatchera samma flotta mot en annan nätutbyggnad. Utan dessa rader lästes
     # de ur KÄLLANS argv och `--dispatch X --ntc-override SE-N:SE-S:7600` blev TYST
@@ -1535,7 +1552,8 @@ def main() -> None:
                              "kapaciteter (--dispatch/--no-expansion), som saknar proxy. "
                              f"DEFAULT i expansion sedan 2026-08-20: {DEFAULT_HYDRO_MC_CURVE}. "
                              "Stäng av med --no-hydro-mc-curve (= tillbaka till prisproxyn).")
-    parser.add_argument("--hydro-bid-ladder", default=None, metavar="K:BREDD",
+    parser.add_argument("--hydro-bid-ladder", nargs="?", const="", default=None,
+                        metavar="K:BREDD",
                         help="Ge reservoarvattenkraften en STIGANDE budkurva i stället för "
                              "ett enda bud: uttaget delas i K nivåer à p_nom/K med "
                              "symmetriska prisavvikelser kring basbudet. ⚠️ BREDD är INTE "
@@ -1548,7 +1566,13 @@ def main() -> None:
                              "oändligt elastiskt och dödar VRE-prissignalen. Verkar i BÅDA "
                              "lägena (deviationsform, rör inte marginal_cost). ⚠️ BREDD ska "
                              "kalibreras mot den OBSERVERADE budkurvan (produktion mot pris), "
-                             "aldrig mot prisfördelningen. Default: av.")
+                             f"aldrig mot prisfördelningen. DEFAULT sedan 2026-08-23: "
+                             f"{DEFAULT_HYDRO_BID_LADDER} (även bart flaggnamn ger den). "
+                             "Stäng av med --no-hydro-bid-ladder.")
+    parser.add_argument("--no-hydro-bid-ladder", action="store_true",
+                        help="Låt hela reservoarflottan buda vid ETT pris igen (läget före "
+                             "2026-08-23). Behövs för att reproducera körningar gjorda före "
+                             "dess — inklusive omdispatch av dem.")
     parser.add_argument("--no-hydro-mc-curve", action="store_true",
                         help="EXPANSION: stäng av hydro-mc-kurvan och använd "
                              "vattenvärdes-proxyn (zonens faktiska historiska pris) i "
@@ -1854,6 +1878,18 @@ def main() -> None:
     if args.vre_curtailment_cost is None:
         frozen = bool(args.dispatch) or bool(args.no_expansion)
         args.vre_curtailment_cost = DEFAULT_VRE_CURTAILMENT_COST if frozen else 0.0
+
+    # --hydro-bid-ladder: None = orörd, "" = bart flaggnamn — båda löses till den låsta
+    # defaulten. Ligger EFTER apply_dispatch_replay av samma skäl som ovan: replayen kan
+    # skriva om fälten, och defaulten ska gälla det NYA kommandot. Till skillnad från
+    # --spill-cost och --vre-curtailment-cost är den INTE lägesbunden — aggregeringsfelet
+    # den lagar (hundratals magasin hopslagna till ett per zon) finns i båda lägena.
+    if args.no_hydro_bid_ladder:
+        if args.hydro_bid_ladder:
+            raise SystemExit("--hydro-bid-ladder och --no-hydro-bid-ladder är oförenliga.")
+        args.hydro_bid_ladder = None
+    elif not args.hydro_bid_ladder:
+        args.hydro_bid_ladder = DEFAULT_HYDRO_BID_LADDER
 
     # --spill-cost: None = orörd → lägesberoende default (samma sentinel-mönster och samma
     # skäl att den inte kan vara en argparse-default: värdet beror på om kapaciteterna är
@@ -2297,7 +2333,8 @@ def main() -> None:
     if args.rolling_horizon:            flags.append(f"rolling-{args.rolling_weeks}w")
     if args.rolling_lookahead_weeks:    flags.append(f"lookahead-{args.rolling_lookahead_weeks}w")
     if args.terminal_seasonal:          flags.append("term-seasonal")
-    if args.hydro_bid_ladder:           flags.append(f"bidladder-{args.hydro_bid_ladder.replace(':', '_')}")
+    flags.append(f"bidladder-{args.hydro_bid_ladder.replace(':', '_')}"
+                 if args.hydro_bid_ladder else "no-bidladder")
     if args.terminal_curve is not None: flags.append("termkurva")
     if args.hydro_mc_curve is not None:
         flags.append("hydro-mc-kurva" + ("-" + Path(args.hydro_mc_curve).stem
