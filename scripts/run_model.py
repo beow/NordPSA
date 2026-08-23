@@ -110,9 +110,9 @@ DEFAULT_HYDRO_BID_LADDER = "3:36"
 
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v4 (run250-konfen + hydro-mc-kurva i expansion "
-                         "+ budtrappa 3:36 i båda lägena + start-SOC på cykliska ankaret "
-                         "i rullande horisont)")
+BASELINE_DEFAULTS_TAG = ("baseline-v5 (run250-konfen + hydro-mc-kurva i expansion "
+                         "+ budtrappa 3:36 i båda lägena + SOC-ankaret = uppmätt EC-nivå "
+                         "2023-01-02, delat av cyklisk start=slut och rullande horisont)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -1211,6 +1211,8 @@ def apply_dispatch_replay(parser, args):
         base.market_ntc_override = args.market_ntc_override
     if args.market_ntc_scale is not None:
         base.market_ntc_scale = args.market_ntc_scale
+    if args.hydro_soc_initial is not None:
+        base.hydro_soc_initial = args.hydro_soc_initial
     # Rullande horisont och terminalvärdet hör HELT till omdispatchen. Källans argv kan
     # aldrig innehålla dem — rullande är dispatch-only, så en expansionskörning förbjuder
     # dem. Utan dessa rader blir de tyst verkningslösa och körningen faller tillbaka på
@@ -1817,6 +1819,12 @@ def main() -> None:
                         help="Sätt intern NTC-länk Z0-Z1 till MW (t.ex. SE-S:DK:2007). "
                              "Appliceras EFTER demand-scenariots ntc_overrides → pinnar/ersätter "
                              "en enskild länk. Kan anges flera gånger.")
+    parser.add_argument("--hydro-soc-initial", nargs="+", default=None, metavar="ZON:FRAK",
+                        help="Sätt magasinens ankarfyllnad per zon, t.ex. "
+                             "'SE-N:0.62 SE-S:0.55 NO-N:0.70 NO-S:0.70 FI:0.65' (= värdena före "
+                             "2026-08-23). Ankaret är BÅDE cykliska körningars start=slut OCH "
+                             "rullande horisonts begynnelsevillkor, så flaggan reproducerar "
+                             "run≤419 i båda lägena.")
     parser.add_argument("--market-ntc-scale", type=float, default=None, metavar="FAKTOR",
                         help="Skala ALLA kontinentkablars kapacitet med FAKTOR (0.5 = halva "
                              "2040-värdet). Verkar EFTER demand-scenariots "
@@ -2245,6 +2253,15 @@ def main() -> None:
             if not hit:
                 raise SystemExit(f"--ntc-override: hittade ingen intern länk {z0}-{z1} i cfg['links']")
 
+    if args.hydro_soc_initial:
+        for spec in args.hydro_soc_initial:
+            zone, frac = spec.rsplit(":", 1)
+            if zone not in cfg.get("zones", {}):
+                raise SystemExit(f"--hydro-soc-initial: okänd zon {zone!r}")
+            _old = cfg["zones"][zone].get("hydro_soc_initial")
+            cfg["zones"][zone]["hydro_soc_initial"] = float(frac)
+            print(f"  → SOC-ankare {zone}: {_old} → {float(frac):.3f} (CLI)")
+
     if args.market_ntc_scale is not None:
         _mc = cfg.get("market_connections", []) or []
         _tot0 = sum(m[2] for m in _mc)
@@ -2381,6 +2398,8 @@ def main() -> None:
         flags.append("socstart-faktisk" if args.soc_start_actual else "socstart-ankare")
     if args.market_ntc_scale is not None:
         flags.append(f"mktscale-{args.market_ntc_scale:g}")
+    if args.hydro_soc_initial:
+        flags.append("socankare-" + "_".join(args.hydro_soc_initial))
     if args.terminal_curve is not None: flags.append("termkurva")
     if args.hydro_mc_curve is not None:
         flags.append("hydro-mc-kurva" + ("-" + Path(args.hydro_mc_curve).stem

@@ -419,24 +419,38 @@ inte pinningandelen.** ⚠️ K=3 kvantiserar priset till tre värden när hydro
 
 **Hydro inflow model:** Parameters are manually calibrated spring-flood profiles stored in `config/hydro_params.yaml` (NOT `data/processed/hydro_params.yaml` which is auto-generated and must never be used). SE-N: A=10000 MW spring flood, mu=day 135 (May 15), phi=183 (summer-high cosine). `build_inputs.py` does NOT regenerate these — they are a config artifact. Verify correct hydrology after each run: SE-N inflow should peak ~15000 MW in May, ~2600 MW in January; reservoir SOC should peak ~85% in July.
 
-**⭐ Start-SOC i rullande horisont = expansionens ankare (default sedan 2026-08-23).** Rullande
-horisont har inget cykliskt villkor — nivån bärs från fönster till fönster i tre år, så
-startvärdet propagerar i stället för att tvättas bort. Den läses numera ur
-`zones.*.hydro_soc_initial`, **samma tal expansionen pinnar SOC[0] till**, i stället för ur
-`hydro_soc_start` (faktisk EC-nivå 2023-01-02). Av med `--soc-start-actual`.
+**⭐⭐ SOC-ANKARET ÄR ETT TAL FÖR BÅDA LÄGENA (2026-08-23): den UPPMÄTTA EC-nivån 2023-01-02.**
+`zones.*.hydro_soc_initial` är satt till **SE-N/SE-S 0,567 · NO-N/NO-S 0,630 · FI 0,575**, och
+rullande horisont läser samma nyckel. Båda lägena startar därmed på **76,64 TWh av 125,4** (61,1 %).
+Av med `--hydro-soc-initial ZON:FRAK` (reproducerar run≤419: `SE-N:0.62 SE-S:0.55 NO-N:0.70
+NO-S:0.70 FI:0.65`); `--soc-start-actual` finns kvar men är numera en no-op eftersom nycklarna
+sammanfaller.
 
-- **Skälet är jämförbarhet.** Med den gamla defaulten startade dispatchen **8 TWh under sin egen
-  expansion** — 61,1 % mot 67,5 % av 125,4 TWh — så de två lägena var inget rent A/B.
-- ⭐ **Nästan energineutralt:** total vattenkraft över tre år 530,8 (exp) mot 531,2 TWh (disp), och
-  spill är 0 i båda. Nivån flyttar magasin*banan* och därmed var på terminalkurvan man ligger, inte
-  hur mycket energi som finns.
-- ⚠️ **Vad som byts bort:** den faktiska startnivån är en UPPMÄTT storhet (Energy Charts, veckan
-  2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16); det cykliska ankaret är det inte. Ska en dispatch
-  valideras mot OBSERVERADE priser är `--soc-start-actual` det ärligare valet.
-- ⚠️ Flaggan tas från det NYA kommandot i en `--dispatch`-replay (som `--voll`), och
-  `flaggor:`-raden skriver `socstart-ankare` eller `socstart-faktisk` — aldrig tyst ingenting.
-  **Reproducera run268–run418:s dispatcher med `--soc-start-actual`.** `defaults:`-taggen är
-  bumpad till `baseline-v4`.
+⛔ **Vägen dit gick via ett falsifierat mellansteg — läs det innan någon "återställer" ankaret.**
+Först flyttades bara DISPATCHEN till det gamla cykliska ankaret (67,5 %). Det gav vad man ville —
+årsbiasen mot expansionen kollapsade, SE-N 2023/24 **+1,8/+0,5 → −0,2/−0,5** — men till priset av
+**drift −7,33 TWh**: dispatchen förbrukade lager som aldrig kom in som tillrinning och producerade
+538,1 mot expansionens 530,8 TWh.
+
+⭐ **Orsaken är att den rullande horisonten har en ATTRAKTOR kring 77 TWh.** Båda varianterna
+slutade där — 77,31 respektive 76,22 — oavsett start. Driften är alltså inte annat än *avståndet
+till attraktorn*, och den gamla uppmätta startnivån råkade ligga på den. ⚠️ Det är INTE kurvans
+normalnivå: `x_ref(vecka 1)` ger 0,660/0,652/0,628, och den uppmätta nivån ligger 5,26 TWh UNDER
+den (ankaret låg 2,75 TWh över).
+
+⇒ **Kravet för jämförbarhet är inte samma STARTNIVÅ utan samma NETTOFÖRÄNDRING av lagret.**
+Cykliskt SOC gör expansionen lagerneutral per konstruktion; bara en dispatch som också slutar där
+den började är jämförbar. Därför flyttades i stället EXPANSIONENS ankare ned till den uppmätta
+nivån, så att båda är på attraktorn.
+
+- ⚠️ **Vad som byts bort:** `hydro_soc_initial` var ett **3-årssnitt per zon** (ENTSO-E A72 för SE),
+  `hydro_soc_start` är **en vecka per land** (EC). SE-N/SE-S slås ihop, 0,62/0,55 → 0,567/0,567.
+  För ett cykliskt villkor är en flerårig normalnivå i princip det riktigare objektet — men det
+  omvända valet är just det som mättes ge −7,33 TWh drift, så det finns ingen tredje väg om de ska
+  dela ett tal.
+- ⚠️ **run≤419 påverkas i BÅDA lägena** (expansionens start=slut OCH rullande horisonts
+  begynnelsevillkor). `defaults:`-taggen är bumpad till `baseline-v5`. run417/418/419:s
+  budtrappe-A/B står kvar som internt giltigt men är inte direkt jämförbart med run420+.
 
 ⭐⭐ **Vad nivåskillnaden dolde (mätt på run418 mot run418_ladder_k3_dispatch_1h):** dispatchens
 prisbias mot expansionen är **+1,8 / +0,5 / −2,7 EUR/MWh** för 2023/2024/2025 i SE (NO-N störst,
