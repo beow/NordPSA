@@ -95,7 +95,10 @@ DEFAULT_SPILL_COST_DISPATCH  = 0.1
 # en DRIFTKORRIGERING för begränsad framsyn i rullande horisont; expansionen har cykliskt
 # SOC och alltså noll drift per konstruktion, så de skulle bli en artificiell zonskillnad
 # i hydrons mc. Se filens note_expansion.
-DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v7_exp73.yaml"
+# ⚠️ b_mean är INERT här: hydro_mc_from_curve() sätter mc längs normalbanan, där
+# P(x_ref) = 1 per konstruktion. v8 följer med bara för att de två filerna ska
+# förbli identiska sånär som på ankaret. Svepet run428-432 är dispatch.
+DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v8_exp73.yaml"
 
 # Budtrappan är DEFAULT sedan 2026-08-23 och verkar i BÅDA lägena. K=3 / BREDD 36 ger
 # avvikelserna −12/0/+12, alltså spann 24. Låst på run417/418/419, som är en ren kontroll
@@ -110,9 +113,10 @@ DEFAULT_HYDRO_BID_LADDER = "3:36"
 
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v5 (run250-konfen + hydro-mc-kurva i expansion "
+BASELINE_DEFAULTS_TAG = ("baseline-v6 (run250-konfen + hydro-mc-kurva i expansion "
                          "+ budtrappa 3:36 i båda lägena + SOC-ankaret = uppmätt EC-nivå "
-                         "2023-01-02, delat av cyklisk start=slut och rullande horisont)")
+                         "2023-01-02, delat av cyklisk start=slut och rullande horisont "
+                         "+ terminalkurva v8, b_mean 2,0)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde

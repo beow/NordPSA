@@ -414,7 +414,12 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # ⭐ LÅST 2026-08-18: Geminis fem zontabeller (run375_aamp06_3h). Den förra,
 # terminal_curve_2040_calibrated.yaml, var kalibrerad mot FACIT (run320) och ligger kvar
 # för att reproducera run316-run368 — namnge den explicit med --terminal-curve.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v7.yaml"
+# ⭐⭐⭐ v8, 2026-08-25 (run429_bm20_3h): = v7 med `b_mean` 2,0 likformigt i stället för
+# 0,80. Grunden är den FÖRSTA icke-cirkulära mätningen av B — vattenvärdets svar på
+# magasinets avvikelse från normalbanan — mot EC-magasin + ENTSO-E-priser 2015-2025.
+# Modellen låg 2-12× för platt. Se filens egen `note:` för svepet run428-432.
+# v7 ligger kvar för att reproducera run316-run432 — namnge den då explicit.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v8.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],

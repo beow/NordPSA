@@ -58,7 +58,7 @@ python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kan
 | implied by `--dispatch` | off-switch |
 |---|---|
 | `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
-| `--terminal-curve` = `config/terminal_curve_2040_gemini_v7.yaml` (**låst 2026-08-20**, se nedan) | `--no-terminal-curve` |
+| `--terminal-curve` = `config/terminal_curve_2040_gemini_v8.yaml` (**låst 2026-08-25**, se nedan) | `--no-terminal-curve` |
 | no water-value proxy (the curve *is* the water value) | — (mode-bound, no flag) |
 | resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
 | `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
@@ -171,7 +171,7 @@ mäta vad minskad kontinental export/import gör med Norden. ⭐ Kan inte gå in
 | `--add-nuclear` | `SE-S:10:201 SE-N:10:202 FI:10:203` | `--no-add-nuclear` |
 | `--voll` | 3000 EUR/MWh in **all** zones | `--no-voll` |
 | `--market-elasticity` | ON (predates this change) | `--no-market-elast` |
-| `--hydro-mc-curve` | ON i expansion (2026-08-20), `config/terminal_curve_2040_gemini_v7_exp73.yaml` | `--no-hydro-mc-curve` |
+| `--hydro-mc-curve` | ON i expansion (2026-08-20), `config/terminal_curve_2040_gemini_v8_exp73.yaml` | `--no-hydro-mc-curve` |
 | `--hydro-bid-ladder` | **`3:36`** i BÅDA lägena (2026-08-23) | `--no-hydro-bid-ladder` |
 | start-SOC i rullande horisont | **cykliska ankaret** `hydro_soc_initial` (2026-08-23) | `--soc-start-actual` |
 
@@ -211,14 +211,56 @@ Two traps this closed: `--spill-cost` was **not** copied from the new command in
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
 
-**⭐⭐⭐ TERMINALKURVAN ÄR LÅST (2026-08-20): `config/terminal_curve_2040_gemini_v7.yaml`** — kör som `run391_v7_anchors_3h`. Den ersätter `terminal_curve_2040_gemini.yaml` (låst 2026-08-18), som ligger kvar för att reproducera run316–390 — namnge den då explicit.
+**⭐⭐⭐ TERMINALKURVAN ÄR LÅST (2026-08-25): `config/terminal_curve_2040_gemini_v8.yaml`** — kör som `run429_bm20_3h`. Den är **v7 med `b_mean` 2,0 i stället för 0,80**, enda fältet som skiljer; ankare, faser, `x_ref` och `a_scale` är orörda. v7 ligger kvar för att reproducera run316–432 — namnge den då explicit. (v7 ersatte i sin tur `terminal_curve_2040_gemini.yaml`, låst 2026-08-18, för run316–390.)
+
+⭐⭐⭐ **`b_mean` 0,80 → 2,0 vilar på den FÖRSTA icke-cirkulära mätningen av kurvans lutning.** B — vattenvärdets svar på magasinets avvikelse från normalbanan — mättes mot EC:s magasindata och ENTSO-E-priser **2015–2025** (11 år, n = 573/zon):
+
+```
+ln P(v) = år_FE + säsong(2 harmoniska) − B·dev(v),   dev = fyllnad − EC:s median för veckan
+```
+
+Årsdummyn absorberar NIVÅN (gaspris, torrår, krisår), säsongstermerna årsgången; B identifieras ur variationen **inom** året. Samma regression körs på modellens `prices.csv` + `hydro_soc.csv` med EC:s median som referens i båda fallen ⇒ direkt jämförbara koefficienter (`temp/measure_b.py`; prisdata via `temp/fetch_hist_prices.py`).
+
+| | SE-N | SE-S | NO-N | NO-S | FI |
+|---|---:|---:|---:|---:|---:|
+| **uppmätt 2015-2025** | 3,27 ± 0,35 | 1,53 ± 0,27 | 2,74 ± 0,42 | 2,85 ± 0,30 | 1,71 ± 0,41 |
+| modell `b_mean` 0,80 (run428) | 0,71 | 0,68 | 0,46 | 0,24 | 3,11 |
+| modell `b_mean` 2,0 (run429) | 1,17 | 1,08 | 1,16 | 0,77 | 3,56 |
+
+Modellen låg alltså **2–12× för platt** i de fyra hydrozonerna. Svepet run428/429/430 (`b_mean` 0,80/2,0/4,0, 3h-dispatch av `run420_baseline_2h`, identiska utom kurvfilen):
+
+| kriterium | 0,80 | **2,0** | 4,0 | mål |
+|---|---:|---:|---:|---|
+| Σ\|fel\| B | 9,70 | 8,06 | **6,14** | 0 |
+| budkurva MAE 20-60 · hela | 3,411 · 2,199 | 3,012 · 1,961 | **2,202 · 1,928** | min |
+| i EC-band SE · NO · FI | 1,9 · 61,5 · 40,4 % | 94,2 · 88,5 · 63,5 % | **100 · 94,2 · 69,2 %** | max |
+| v/s SE · NO · FI | **1,358 · 1,313** · 0,809 | 1,418 · 1,258 · 0,738 | 1,486 · 1,197 · 0,708 | 1,38 · 1,30 · 1,13 |
+| Σ\|fel\| v/s | **0,356** | 0,471 | 0,631 | 0 |
+| drift TWh | −0,48 | **+3,06** | +4,09 | **+3,13** |
+| poäng `score()` | 0,577 | **0,522** | 0,660 | min |
+
+⭐⭐⭐ **EC-bandet är löst för SE: 1,9 % → 94,2 %** (100 % vid 4,0). Det var v7:s egen översta kvarstående brist. **Budkurvan — det utpekade kalibreringsmålet — förbättras monotont** och vänder inte inom svepet.
+
+⭐ **2,0 och inte 4,0:** minimum på `score()`, 94 % av SE:s bandvinst till måttlig v/s-kostnad. 4,0 köper mer B och budkurva men kostar v/s hårt och överskjuter nordens prissvans mot uppmätt (h>100: SE-N 3246 mot 828, NO-N 3027 mot 320).
+
+⛔⛔ **DRIFTMÅLET ÄR INTE NOLL — kriteriet var fel ställt.** EC:s uppmätta lager växte **+3,13 TWh** över körfönstret (2023-01-02 → 2025-12-31; SE +2,24 · NO +0,70 · FI +0,19). Perioden är inte lagerneutral i verkligheten: den börjar på ett lågt 2023 och slutar högt. run429 missar med **0,07 TWh**, kontrollen run428 med 3,61. ⇒ **Drift ska mätas mot EC:s uppmätta lagerändring över körfönstret; noll gäller bara CYKLISKA (expansions-)körningar**, där start = slut per konstruktion. ⚠️ Totalen träffar delvis genom utjämning — SE 1,86 mot 2,24, NO 1,70 mot 0,70, FI −0,49 mot +0,19 (fel tecken). Landvis är driften inte löst.
+
+⛔ **λ_bas är ett SVAGT driftreglage i brant regim (run431/432, förkastade).** Ankarna driftkorrigerades med −drift/1,9 per zon; utfallet gav en implicerad känslighet på **0,37 TWh/enhet** i SE-N och NO-S och ~0 i övriga — 5× lägre än de 1,9 som mättes vid `b_mean` 0,80. En brant kurva pinnar SOC mot `x_ref` och nivåspaken tappar greppet om banan. ⚠️ Ange alltid vid vilket `b_mean` en λ_bas-känslighet är mätt. Skiftet rörde inte heller v/s (0,4714 → 0,4686) ⇒ **v/s-förlusten är ÄKTA**, inte hamstringens skugga.
+
+⚠️ **Öppet efter v8:**
+- **FI går åt fel håll.** Modellens FI-B är redan 3,11 mot uppmätta 1,71 och stiger till 3,56; extrapolationen kräver `b_mean` **−3,0**. FI är för *känsligt*, inte för trögt — första riktningsangivelsen i FI:s långa okänslighet. Ett zonvist FI-värde är nästa fråga.
+- **B är kraftigt sublinjärt:** 5× `b_mean` ger bara 2,5–6× B (`B ≈ m + k·b_mean`, k = 0,29–0,52). Att nå uppmätt nivå skulle kräva `b_mean` 3,7 (SE-S) till 8,3 (SE-N). Systemet dämpar — NTC, marknadsventil och övriga aggregat sätter priset, inte hydrons bud ensamt. Kurvan ensam räcker inte.
+- **v/s-kostnaden.** run428:s v/s är dock "rätt" på en SOC-bana som ligger utanför EC-bandet 98 % av veckorna, och v/s-målet är eSett i *dagens* system medan modellen kör 2040 — samma världsinvändning som budkurvan uttryckligen bär.
+- ⛔ **Zonvis `b_mean` prövades INTE.** På 3-årsfönstret såg de inlåsta zonerna ut att svara 2–3× starkare (run268/`LOCKED_ZONES`), men på 11 år försvinner mönstret: NO-N 2,74 ≈ NO-S 2,85. Kvar finns bara SE-N > SE-S (3,27 mot 1,53, i alla delperioder).
+- ⚠️ **B är REGIMBEROENDE:** 2015-2020 ger 0,9–2,0, 2021-2025 ger 2,0–5,3. Det är inte en log-artefakt (en konstant EUR-lutning skulle ge *större* B i billiga år). Svepets 2,0 och 4,0 var de två regimtolkningarna av 2040; valet av 2,0 säger implicit att 2040 liknar överskottsregimen mer.
+- ⚠️ **`b_mean` är inert i EXPANSION.** `hydro_mc_from_curve()` sätter mc längs normalbanan, där `P(x_ref) = 1` per konstruktion, så `mc = λ_bas·A(v)` oberoende av b. v8 följer med till `terminal_curve_2040_gemini_v8_exp73.yaml` enbart för att filerna ska förbli identiska sånär som på ankaret. **Hela svepet är dispatch.**
 
 ⭐ **Kurvan har TRE globala frihetsgrader, inte tjugofem.** Allt som är en *nivå* eller *skala* är gemensamt för alla zoner; bara *formen* är zonvis:
 
 | öppen | värde | härledning |
 |---|---|---|
 | `a_scale` | **0,30** | run384: `a_amp` ×0,6 → ×0,3 gav SE:s v/s 1,18 → 1,32, bäst på båda måltavlorna |
-| `b_mean` | **0,80** likformigt | facit ger λ konstant i fyllnadsgrad ⇒ ingen uppmätt zonskillnad finns |
+| `b_mean` | **2,0** likformigt (var 0,80 t.o.m. v7) | ⭐ MÄTT: B = 1,5-3,3 mot EC + ENTSO-E 2015-2025, modellen låg 2-12× för platt (run429) |
 | `b_amp` | **0,27** likformigt | samma argument; enkelt medel, eftersom zontalen är lika otillförlitliga |
 | λ_bas | **73** — ⭐ **LÅST FÖR EXPANSION 2026-08-22** | facit run386: 72,87 i alla fem zoner och alla timmar; run320: 73,02 |
 
@@ -449,7 +491,10 @@ nivån, så att båda är på attraktorn.
   omvända valet är just det som mättes ge −7,33 TWh drift, så det finns ingen tredje väg om de ska
   dela ett tal.
 - ⚠️ **run≤419 påverkas i BÅDA lägena** (expansionens start=slut OCH rullande horisonts
-  begynnelsevillkor). `defaults:`-taggen är bumpad till `baseline-v5`. run417/418/419:s
+  begynnelsevillkor). `defaults:`-taggen är bumpad till `baseline-v6` (v8-kurvan bumpade den från `baseline-v5`).
+  ⚠️ Terminalkurvan tas alltid från det NYA kommandot vid `--dispatch`, så en omdispatch typad
+  idag kör v8 även om källan kördes mot v7 — reproducera run316-432 med
+  `--terminal-curve config/terminal_curve_2040_gemini_v7.yaml`. run417/418/419:s
   budtrappe-A/B står kvar som internt giltigt men är inte direkt jämförbart med run420+.
 
 ⭐⭐ **Vad nivåskillnaden dolde (mätt på run418 mot run418_ladder_k3_dispatch_1h):** dispatchens
