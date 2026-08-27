@@ -14,7 +14,13 @@ lurat oss förut:
      rabatten sänker det bokförda budet (−9,4 % i run410). Medelvärdesbevarande i
      MARGINALEN, inte i totalkostnaden.
 
-  real = objective + objective_constant − Σ_t Σ_k (mc_t + offset_k)·d_k·w_t
+  real = objective + objective_constant
+         − [ Σ_t Σ_k (mc_t + offset_k)·d_k·w_t  −  VOM·Σ_t p_dispatch,t·w_t ]
+
+  ⭐ VOM-termen läggs TILLBAKA: reservoarens mc är `max(vattenvärde, VOM)`, så den
+  genuina drift- och underhållskostnaden (0,6 €/MWh) ligger INUTI det som annars
+  rensas bort — ~106 M€/år (0,52 %) i baseline. Med den blir dispatchläget dessutom
+  rätt av sig självt: där ÄR mc = VOM platt, så pseudo blir 0 och real = total.
 
 Utan trappa degenererar sista termen till Σ_t p_dispatch·mc_t·w_t (K=1, offset 0),
 så SAMMA uttryck gäller i båda lägena — det är hela poängen med cellen. K och BREDD
@@ -42,13 +48,36 @@ import re as _re
 
 
 def _ladder(label):
-    """(K, BREDD) ur run_meta.txt, eller None om trappan var av."""
+    """(K, BREDD) ur run_meta.txt, eller None om trappan var av.
+
+    ⚠️ Sedan budtrappan blev DEFAULT (b9cb401, 2026-08-23) står den normalt INTE i
+    `argv:` — bara i `flaggor:` som `bidladder-K_BREDD`. Att bara läsa flaggan gav
+    därför tyst `None` för varje körning från run420 och framåt, offsettermen föll
+    bort ur hydrons bokförda bud, och `real` blev för LÅG: 19 032,8 i stället för
+    20 250,6 M€/år för run420 (−6,0 %). Felet syntes som avstämningsrestens
+    −1 217,8 M€/år (−3,8 %), som nu stänger till +0,1.
+    Ordningen är medveten: en uttrycklig flagga vinner över `flaggor:`-taggen.
+    """
     p = ROOT / 'results' / label / 'run_meta.txt'
     if not p.is_file():
         return None
-    m = _re.search(r'--hydro-bid-ladder\s+(\d+):(\d+(?:\.\d+)?)',
-                   p.read_text(encoding='utf-8'))
+    txt = p.read_text(encoding='utf-8')
+    m = _re.search(r'--hydro-bid-ladder\s+(\d+):(\d+(?:\.\d+)?)', txt)
+    if m is None:
+        if _re.search(r'\bno-bidladder\b', txt):
+            return None
+        m = _re.search(r'\bbidladder-(\d+)_(\d+(?:\.\d+)?)', txt)
     return (int(m.group(1)), float(m.group(2))) if m else None
+
+
+def _hydro_vom():
+    """Reservoarvattenkraftens VOM, €/MWh, ur config/zones.yaml (fallback 0,6)."""
+    import yaml as _yaml
+    try:
+        c = _yaml.safe_load(open(ROOT / 'config' / 'zones.yaml', encoding='utf-8'))
+        return float(c['costs']['hydro']['vom_eur_per_mwh'])
+    except Exception:
+        return 0.6
 
 
 def _net(label):
@@ -90,6 +119,16 @@ def real_cost(label=None):
                 d_k = (pdis[u] - k * cap).clip(lower=0.0, upper=cap)
                 pseudo += float((d_k * (mc + width * ((k + 0.5) / K - 0.5)) * w).sum())
 
+    # ⭐ VOM ÄR EN VERKLIG KOSTNAD OCH SKA INTE RENSAS BORT (2026-08-27).
+    # Reservoarens marginal_cost är `max(kurva/proxy, VOM)` — VOM 0,6 €/MWh är bara ett
+    # GOLV, så när kurvan (~58-87) gäller ligger den genuina drift- och underhålls-
+    # kostnaden INUTI talet som dras bort. `pseudo` ska bara vara VATTENVÄRDET, dvs.
+    # mc över VOM. Gör dessutom dispatchläget rätt av sig självt: med frysta kapaciteter
+    # är mc = VOM platt ⇒ pseudo = 0 ⇒ real = total, vilket är korrekt.
+    vom = _hydro_vom()
+    hydro_mwh = float(sum((pdis[u] * w).sum() for u in hyd))
+    pseudo -= vom * hydro_mwh
+
     const = float(getattr(m, 'objective_constant', 0.0) or 0.0)
     total = float(m.objective) + const
 
@@ -112,6 +151,10 @@ def real_cost(label=None):
                          df.at[u, 'marginal_cost'] if 'marginal_cost' in df.columns else 0.0,
                          u, w.index)
             opex += float((dft[tname][u] * mc * w).sum())
+
+    # Hydrons VOM är nu en riktig opex-post (den rensas inte längre bort som pseudo),
+    # så den måste med i avstämningen — annars slår resten ut på just det beloppet.
+    opex += vom * hydro_mwh
 
     spill = 0.0
     if 'spill' in m.storage_units_t and not m.storage_units_t.spill.empty:
