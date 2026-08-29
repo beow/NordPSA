@@ -419,7 +419,11 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # magasinets avvikelse från normalbanan — mot EC-magasin + ENTSO-E-priser 2015-2025.
 # Modellen låg 2-12× för platt. Se filens egen `note:` för svepet run428-432.
 # v7 ligger kvar för att reproducera run316-run432 — namnge den då explicit.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v8.yaml"
+# ⭐ v9, 2026-08-29: = v8 med `b_amp` 0. Mätt i en 2x2 (b_mean {2,4} x b_amp {0,27, 0})
+# att säsongsvariationen i brantheten är nära inert — nivån gör 5-43x mer — och att
+# budkurvan till och med blir BÄTTRE utan den. Tar bort två oprövade tal: `b_amp` och
+# `b_peak`, den senare kurvans sista zonskillnad i b.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v9.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],

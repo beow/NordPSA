@@ -58,7 +58,7 @@ python scripts/run_model.py --dispatch run01_expansion --output run02_disp # kan
 | implied by `--dispatch` | off-switch |
 |---|---|
 | `--rolling-horizon`, 1 week/window + 3 weeks look-ahead | `--no-rolling-horizon` |
-| `--terminal-curve` = `config/terminal_curve_2040_gemini_v8.yaml` (**låst 2026-08-25**, se nedan) | `--no-terminal-curve` |
+| `--terminal-curve` = `config/terminal_curve_2040_gemini_v9.yaml` (**låst 2026-08-29**, se nedan) | `--no-terminal-curve` |
 | no water-value proxy (the curve *is* the water value) | — (mode-bound, no flag) |
 | resolution 2h (`DEFAULT_DISPATCH_RESOLUTION`, was 1h) | `--resolution N` |
 | `--spill-cost 0.1` (`DEFAULT_SPILL_COST_DISPATCH`, was 50 — see below) | `--spill-cost N` |
@@ -171,7 +171,7 @@ mäta vad minskad kontinental export/import gör med Norden. ⭐ Kan inte gå in
 | `--add-nuclear` | `SE-S:10:201 SE-N:10:202 FI:10:203` | `--no-add-nuclear` |
 | `--voll` | 3000 EUR/MWh in **all** zones | `--no-voll` |
 | `--market-elasticity` | ON (predates this change) | `--no-market-elast` |
-| `--hydro-mc-curve` | ON i expansion (2026-08-20), `config/terminal_curve_2040_gemini_v8_exp73.yaml` | `--no-hydro-mc-curve` |
+| `--hydro-mc-curve` | ON i expansion (2026-08-20), `config/terminal_curve_2040_gemini_v9_exp73.yaml` | `--no-hydro-mc-curve` |
 | `--hydro-bid-ladder` | **`3:36`** i BÅDA lägena (2026-08-23) | `--no-hydro-bid-ladder` |
 | start-SOC i rullande horisont | **cykliska ankaret** `hydro_soc_initial` (2026-08-23) | `--soc-start-actual` |
 
@@ -211,7 +211,27 @@ Two traps this closed: `--spill-cost` was **not** copied from the new command in
 
 Verify with `--dry-run`, which prints `must-run` per generator: in the baseline `SE-S nuclear` shows 0.837 (= its CF, pure must-run) while `SE-S nuclear exp` shows 0.517 (= 0.6 × CF).
 
-**⭐⭐⭐ TERMINALKURVAN ÄR LÅST (2026-08-25): `config/terminal_curve_2040_gemini_v8.yaml`** — kör som `run429_bm20_3h`. Den är **v7 med `b_mean` 2,0 i stället för 0,80**, enda fältet som skiljer; ankare, faser, `x_ref` och `a_scale` är orörda. v7 ligger kvar för att reproducera run316–432 — namnge den då explicit. (v7 ersatte i sin tur `terminal_curve_2040_gemini.yaml`, låst 2026-08-18, för run316–390.)
+**⭐⭐⭐ TERMINALKURVAN ÄR LÅST (2026-08-29): `config/terminal_curve_2040_gemini_v9.yaml`** — = v8 med **`b_amp` 0** (var 0,27), enda fältet som skiljer.
+
+⭐⭐ **Säsongsvariationen i brantheten är MÄTT NÄRA INERT och borttagen.** Full 2×2 i 1h-dispatch av `run420_baseline_2h` (`b_mean` {2, 4} × `b_amp` {0,27, 0}) — huvudeffekter:
+
+| kriterium | `b_mean` 2→4 | `b_amp` 0,27→0 | kvot |
+|---|---:|---:|---:|
+| Σ\|fel\| B | **−1,93** | +0,05 | 43× |
+| budkurva 20-60 | **−0,858** | −0,069 | 12× |
+| Σ\|fel\| v/s | +0,152 | +0,032 | 4,8× |
+| drift | +0,90 | +0,20 | 4,5× |
+
+⭐ **Ingen nämnvärd växelverkan** — `b_amp`-effekten är lika stor vid båda nivåerna, trots att amplituden i absoluta tal fördubblas (`b` 1,46-2,55 vid `b_mean` 2, men 2,92-5,08 vid 4). Orsak: `b` toppar i maj medan `A(v)` bottnar där, så de tar delvis ut varandra i produkten, och utjämningen skalar med nivån.
+⭐ **Budkurvan blir BÄTTRE utan säsongsvariation**, och mer så ju brantare kurvan är (−0,040 vid `b_mean` 2, −0,098 vid 4). `run420_baseline_dispatch_1h_bm40_bamp0` ger 2,071/1,835 — bäst uppmätt i repot.
+
+**Grunden:** `b_amp` 0,27 var ett enkelt medelvärde av externa tabellers zonvärden (0,10-0,48), aldrig prövat. Elasticitetsregressionen med säsongsinteraktion (`dev × cos/sin(vecka)`) ger uppmätt `B_amp` 0,26-0,36 i fyra zoner men med **t = 0,4-1,0**, alltså inte skiljbart från noll; bara NO-S är signifikant (0,78, t = 3,7). ⛔ Och den uppmätta **fasen** pekar på **v34-37** (sensommar, när vinterns tillräcklighet avgörs), inte kurvans v20-27 (vårfloden, spillrisk) som var den ursprungliga hydrologiska gissningen.
+
+⚠️ **`b_peak` (20,2-26,7) är nu INERT** och ligger kvar enbart som historik. Den var kurvans **sista zonskillnad i `b`**. Den som återaktiverar `b_amp` ska INTE lita på de lagrade faserna.
+
+v8 (`b_amp` 0,27) ligger kvar för att reproducera run420-run432 och alla `_v8`-dispatcher.
+
+**⭐⭐⭐ v8 (2026-08-25): `config/terminal_curve_2040_gemini_v8.yaml`** — kör som `run429_bm20_3h`. Den är **v7 med `b_mean` 2,0 i stället för 0,80**, enda fältet som skiljer; ankare, faser, `x_ref` och `a_scale` är orörda. v7 ligger kvar för att reproducera run316–432 — namnge den då explicit. (v7 ersatte i sin tur `terminal_curve_2040_gemini.yaml`, låst 2026-08-18, för run316–390.)
 
 ⭐⭐⭐ **`b_mean` 0,80 → 2,0 vilar på den FÖRSTA icke-cirkulära mätningen av kurvans lutning.** B — vattenvärdets svar på magasinets avvikelse från normalbanan — mättes mot EC:s magasindata och ENTSO-E-priser **2015–2025** (11 år, n = 573/zon):
 
@@ -261,6 +281,7 @@ Modellen låg alltså **2–12× för platt** i de fyra hydrozonerna. Svepet run
 |---|---|---|
 | `a_scale` | **0,30** | run384: `a_amp` ×0,6 → ×0,3 gav SE:s v/s 1,18 → 1,32, bäst på båda måltavlorna |
 | `b_mean` | **2,0** likformigt (var 0,80 t.o.m. v7) | ⭐ MÄTT: B = 1,5-3,3 mot EC + ENTSO-E 2015-2025, modellen låg 2-12× för platt (run429) |
+| `b_amp` | **0** sedan v9 (var 0,27) | ⭐ MÄTT nära inert i 2×2; uppmätt amplitud ej skiljbar från noll (t 0,4-1,0) |
 | `b_amp` | **0,27** likformigt | samma argument; enkelt medel, eftersom zontalen är lika otillförlitliga |
 | λ_bas | **73** — ⭐ **LÅST FÖR EXPANSION 2026-08-22** | facit run386: 72,87 i alla fem zoner och alla timmar; run320: 73,02 |
 
@@ -491,7 +512,7 @@ nivån, så att båda är på attraktorn.
   omvända valet är just det som mättes ge −7,33 TWh drift, så det finns ingen tredje väg om de ska
   dela ett tal.
 - ⚠️ **run≤419 påverkas i BÅDA lägena** (expansionens start=slut OCH rullande horisonts
-  begynnelsevillkor). `defaults:`-taggen är bumpad till `baseline-v6` (v8-kurvan bumpade den från `baseline-v5`).
+  begynnelsevillkor). `defaults:`-taggen är bumpad till `baseline-v7` (v8 bumpade till v6, v9 till v7).
   ⚠️ Terminalkurvan tas alltid från det NYA kommandot vid `--dispatch`, så en omdispatch typad
   idag kör v8 även om källan kördes mot v7 — reproducera run316-432 med
   `--terminal-curve config/terminal_curve_2040_gemini_v7.yaml`. run417/418/419:s
