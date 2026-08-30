@@ -147,9 +147,12 @@ class CurveParams:
     x_ref_weekly: List[float] | None = None
 
     def __post_init__(self) -> None:
-        if not -1.0 < self.a_amp < 1.0:
-            raise ValueError(f"a_amp måste ligga i (−1, 1), fick {self.a_amp} "
-                             "— annars blir nivåfaktorn negativ någon vecka")
+        # ⚠️ Den gamla kontrollen `-1 < a_amp < 1` är BORTTAGEN (2026-08-29). Den skrevs
+        # innan `a_scale` fanns och testade fel storhet: det som måste hållas är att
+        # A(v) > 0, alltså a_scale·(|a_amp| + |a_amp2|) < 1 — precis vad villkoret nedan
+        # prövar, och skarpare. Med a_scale < 1 var den gamla gränsen dessutom onödigt
+        # snäv och blockerade den NORMALISERADE formen (a_amp = 1, hela amplituden i
+        # a_scale), som är den enda uppdelning där a_scale och a_amp inte är redundanta.
         # Med två harmoniska räcker det inte att pröva termerna var för sig: de kan
         # sammanfalla i samma vecka. |a_amp| + |a_amp2| < 1 är det skarpa villkoret
         # för att A(v) > 0 för ALLA veckor, oavsett faser.
