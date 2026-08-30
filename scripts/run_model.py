@@ -1203,6 +1203,16 @@ def apply_dispatch_replay(parser, args):
     # körningar reproduceras genom att namnge de gamla värdena.
     base.hydro_bid_ladder    = args.hydro_bid_ladder
     base.no_hydro_bid_ladder = args.no_hydro_bid_ladder
+    # Inflödesbruset hör till OMDISPATCHEN, inte till källan: det är ett antagande om
+    # hydrologins finstruktur, samma sorts val som --hydro-bid-ladder, och en källa
+    # kan aldrig ha haft flaggan i sin argv. Tas därför alltid från det NYA kommandot
+    # — annars blir `--dispatch X --inflow-noise 0.12` tyst verkningslöst (run319-fällan).
+    base.inflow_noise      = args.inflow_noise
+    base.inflow_noise_seed = args.inflow_noise_seed
+    base.inflow_noise_tau  = args.inflow_noise_tau
+    base.ror_hifreq      = args.ror_hifreq
+    base.ror_hifreq_seed = args.ror_hifreq_seed
+    base.ror_hifreq_tau  = args.ror_hifreq_tau
     # NTC-överstyrningar är ett SCENARIOVAL för omdispatchen (som --low-hydro): man vill
     # kunna omdispatchera samma flotta mot en annan nätutbyggnad. Utan dessa rader lästes
     # de ur KÄLLANS argv och `--dispatch X --ntc-override SE-N:SE-S:7600` blev TYST
@@ -1601,6 +1611,34 @@ def main() -> None:
                              "det ärligare valet när dispatchen ska valideras mot OBSERVERADE "
                              "priser. Default är ankaret, så att dispatch och expansion "
                              "startar på samma nivå och blir jämförbara.")
+    parser.add_argument("--ror-hifreq", type=float, default=0.0, metavar="SIGMA",
+                        help="Ger SYNTETISK strömkraft (SE-N/SE-S/FI) den högfrekventa "
+                             "struktur Norges RAPPORTERADE B11 har. NO-N/NO-S rörs ej. "
+                             "0 = av (default). Mål: NO:s uppmätta CV 0,089-0,175 och "
+                             "tau 1,4 d; SIGMA 0.22 ger CV 0,122 = geometriska mitten. "
+                             "p_nom LÅSES och veckoenergin bevaras exakt, så det är en "
+                             "ren formändring — varken kapacitet eller energi rör sig.")
+    parser.add_argument("--ror-hifreq-seed", type=int, default=0, metavar="N")
+    parser.add_argument("--ror-hifreq-tau", type=float, default=3.5, metavar="DYGN",
+                        help="Dekorrelationstid. 3.5 ger realiserat 1,31 d (mål 1,4).")
+    parser.add_argument("--inflow-noise", type=float, default=0.0, metavar="SIGMA",
+                        help="Stokastisk modulering av reservoarernas inflöde: "
+                             "multiplikativ lognormal AR(1) med std SIGMA i logrummet. "
+                             "0 = av (default), så run420-434 reproduceras oförändrat. "
+                             "Kalibrerad mot timvis NVE-RoR 2015-2025 (NO-N 0,178 / "
+                             "NO-S 0,089 i CV mot veckomedel). ⚠️ INSATT != REALISERAT: "
+                             "veckonormaliseringen krymper spridningen ~0,81x, så SIGMA "
+                             "0.15 ger uppmätt CV 0,12 (mitt i spannet). Volymbevarande: "
+                             "NVE-zonerna per ISO-vecka (uppmätt veckosignal orörd), "
+                             "FI per kalenderår.")
+    parser.add_argument("--inflow-noise-seed", type=int, default=0, metavar="N",
+                        help="Frö för --inflow-noise. Varje zon får N + 1000*index, "
+                             "så zonerna blir oberoende men körningen reproducerbar.")
+    parser.add_argument("--inflow-noise-tau", type=float, default=1.4, metavar="DYGN",
+                        help="Dekorrelationstid i AR(1):n. ⚠️ Ange 3.5 för att TRÄFFA "
+                             "de uppmätta 1,4 dygnen (NVE:s timvisa RoR, NO-N och NO-S) "
+                             "— veckonormaliseringen krymper minnet, och tau_ut mättar "
+                             "mot ~1,5 d. Defaulten 1,4 ger realiserat 1,0 d.")
     parser.add_argument("--no-hydro-bid-ladder", action="store_true",
                         help="Låt hela reservoarflottan buda vid ETT pris igen (läget före "
                              "2026-08-23). Behövs för att reproducera körningar gjorda före "
@@ -2398,6 +2436,12 @@ def main() -> None:
     if args.terminal_seasonal:          flags.append("term-seasonal")
     flags.append(f"bidladder-{args.hydro_bid_ladder.replace(':', '_')}"
                  if args.hydro_bid_ladder else "no-bidladder")
+    if args.inflow_noise > 0:
+        flags.append(f"inflownoise-{args.inflow_noise:g}"
+                     f"_tau{args.inflow_noise_tau:g}_seed{args.inflow_noise_seed}")
+    if args.ror_hifreq > 0:
+        flags.append(f"rorhifreq-{args.ror_hifreq:g}"
+                     f"_tau{args.ror_hifreq_tau:g}_seed{args.ror_hifreq_seed}")
     if args.rolling_horizon:
         flags.append("socstart-faktisk" if args.soc_start_actual else "socstart-ankare")
     if args.market_ntc_scale is not None:
@@ -2654,7 +2698,13 @@ def main() -> None:
                       offshore_adds=offshore_adds or None,
                       hydro_price_proxy=hydro_price_proxy,
                       hydro_mc_override=hydro_mc_override,
-                      add_cost_scenario=args.add_cost_scenario)
+                      add_cost_scenario=args.add_cost_scenario,
+                      inflow_noise=args.inflow_noise,
+                      inflow_noise_seed=args.inflow_noise_seed,
+                      inflow_noise_tau_days=args.inflow_noise_tau,
+                      ror_hifreq=args.ror_hifreq,
+                      ror_hifreq_seed=args.ror_hifreq_seed,
+                      ror_hifreq_tau_days=args.ror_hifreq_tau)
 
     if args.low_hydro is not None:             # torrårs-scenario: skala 2024 hydro nedåt
         apply_low_hydro(n, args.low_hydro)

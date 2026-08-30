@@ -19,7 +19,8 @@ import pandas as pd
 import pypsa
 import yaml
 
-from nordpsa.hydro import inflow_timeseries, load_nve_inflow, load_nve_ror
+from nordpsa.hydro import (add_ror_hifreq, inflow_timeseries, load_nve_inflow,
+                          load_nve_ror, modulate_inflow)
 from nordpsa.nuclear_availability import availability_timeseries
 
 # Load shedding pris (EUR/MWh)
@@ -118,6 +119,12 @@ def build_network(
     onshore_adds:            list | None = None,
     offshore_adds:           list | None = None,
     add_cost_scenario:       str = "svk_2040",
+    inflow_noise:            float = 0.0,
+    inflow_noise_seed:       int = 0,
+    inflow_noise_tau_days:   float = 1.4,
+    ror_hifreq:              float = 0.0,
+    ror_hifreq_seed:         int = 0,
+    ror_hifreq_tau_days:     float = 3.5,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -180,7 +187,13 @@ def build_network(
     _add_hydro(n, cfg, hydro_params, snapshots, ccfg,
                actual_inflow=actual_inflow,
                cyclic_soc=cyclic_soc, soc_initial_override=soc_initial_override,
-               zone_prices=zone_prices)
+               zone_prices=zone_prices,
+               inflow_noise=inflow_noise,
+               inflow_noise_seed=inflow_noise_seed,
+               inflow_noise_tau_days=inflow_noise_tau_days,
+               ror_hifreq=ror_hifreq,
+               ror_hifreq_seed=ror_hifreq_seed,
+               ror_hifreq_tau_days=ror_hifreq_tau_days)
     _add_nuclear(n, cfg, nuclear_profile, ccfg, r, fom, n_years,
                  snapshots, synthetic_nuclear)
     _add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
@@ -295,6 +308,12 @@ def _add_thermal(n: pypsa.Network, thermal_profile: pd.DataFrame, cfg: dict | No
 
 
 NVE_INFLOW_ZONES = {"NO-N", "NO-S", "SE-N", "SE-S"}
+# Zoner vars STRÖMKRAFT är syntetisk och därför saknar högfrekvent struktur.
+# SE: Svenska kraftnät rapporterar ingen B11 till ENTSO-E, serierna byggs av
+# scripts/synth_se_ror.py. FI: splittas av _synth_ror_profile ur den analytiska
+# inflödeskurvan. ⛔ NO-N/NO-S saknas medvetet — deras B11 är RAPPORTERAD timvis
+# (7 943/8 476 unika värden per år mot SE:s 52) och ska inte röras.
+SYNTHETIC_ROR_ZONES = {"SE-N", "SE-S", "FI"}
 
 
 def _synth_ror_profile(inflow: pd.Series, frac: float, target_cf: float,
@@ -344,6 +363,12 @@ def _add_hydro(
     cyclic_soc:           bool = True,
     soc_initial_override: dict | None = None,
     zone_prices:          dict | None = None,
+    inflow_noise:         float = 0.0,
+    inflow_noise_seed:    int = 0,
+    inflow_noise_tau_days: float = 1.4,
+    ror_hifreq:           float = 0.0,
+    ror_hifreq_seed:      int = 0,
+    ror_hifreq_tau_days:  float = 3.5,
 ) -> None:
     mc_default = ccfg["hydro"]["vom_eur_per_mwh"]
     for zone, zcfg in cfg["zones"].items():
@@ -352,13 +377,22 @@ def _add_hydro(
         if p_nom == 0 or zone not in hydro_params:
             continue
 
-        if actual_inflow and zone in NVE_INFLOW_ZONES:
+        used_nve = bool(actual_inflow and zone in NVE_INFLOW_ZONES)
+        if used_nve:
             inflow = load_nve_inflow(zone, snapshots)
             # Run-of-river: separat must-run-generator. Reservoarinflödet
             # (inflow_nve) exkluderar redan B11. Reducera reservoar-p_nom med
             # RoR-turbinkapaciteten så total turbinkapacitet bevaras.
             ror = load_nve_ror(zone, snapshots)
             ror_p_nom = float(ror.max())
+            if (ror_hifreq > 0 and zone in SYNTHETIC_ROR_ZONES):
+                _z = ror_hifreq_seed + 100 * (sorted(cfg["zones"]).index(zone) + 1)
+                _b = float(ror.std() / ror.mean()) if ror.mean() > 0 else 0.0
+                ror = add_ror_hifreq(ror, ror_p_nom, sigma=ror_hifreq,
+                                     tau_days=ror_hifreq_tau_days, seed=_z)
+                print(f"  → RoR-högfrekvens {zone}: sigma={ror_hifreq:g} "
+                      f"tau={ror_hifreq_tau_days:g}d frö={_z}  "
+                      f"p_nom {ror_p_nom:.0f} MW LÅST, veckoenergi bevarad")
             if ror_p_nom > 1.0:
                 pu = (ror / ror_p_nom).clip(0, 1)
                 n.add(
@@ -400,6 +434,17 @@ def _add_hydro(
                 inflow, ror_frac, ror_cf,
                 alpha=zcfg.get("hydro_ror_regulated_frac", 0.0))
             ror_p_nom  = float(ror_series.max())
+            # ⚠️ Moduleras FÖRE avdraget nedan, så att TOTALVATTNET bevaras: får
+            # strömkraften mer variation får reservoarinflödet komplementär variation.
+            # Det är rätt fysik (summan är given) och gör dessutom FI jämförbar med
+            # SE, där inflow_nve redan har RoR avdraget vecka för vecka.
+            if (ror_hifreq > 0 and zone in SYNTHETIC_ROR_ZONES):
+                _z = ror_hifreq_seed + 100 * (sorted(cfg["zones"]).index(zone) + 1)
+                ror_series = add_ror_hifreq(ror_series, ror_p_nom, sigma=ror_hifreq,
+                                            tau_days=ror_hifreq_tau_days, seed=_z)
+                print(f"  → RoR-högfrekvens {zone}: sigma={ror_hifreq:g} "
+                      f"tau={ror_hifreq_tau_days:g}d frö={_z}  "
+                      f"p_nom {ror_p_nom:.0f} MW LÅST, veckoenergi bevarad")
             if ror_p_nom > 1.0:
                 pu = (ror_series / ror_p_nom).clip(0, 1)
                 n.add(
@@ -424,6 +469,32 @@ def _add_hydro(
                       f"{100*ror_twh/(ror_twh+res_twh):.0f}%); "
                       f"reservoar {p_nom:.0f} MW / {p_nom*max_h/1e6:.1f} TWh, "
                       f"inflöde {res_twh:.1f} TWh")
+
+        # Stokastisk modulering av RESERVOARENS inflöde (--inflow-noise).
+        # ⚠️ Läggs medvetet EFTER RoR-splitten, alltså bara på reservoardelen. Att
+        # modulera före splitten hade också stört strömkraftens must-run-profil, vars
+        # p_nom sätts ur seriens MAX — bruset hade då ändrat installerad effekt, och
+        # A/B:t vore inte längre en enfaktorändring. Fysiskt är RoR den mer variabla
+        # delen, så detta är en NEDRE gräns för systemets totala inflödesvariabilitet.
+        # preserve: NVE-zonernas vecka-till-vecka-signal är UPPMÄTT och bevaras exakt;
+        # FI (parametrisk gren) saknar mätt veckovariation och normaliseras per år.
+        if inflow_noise > 0:
+            # Eget frö per zon: samma frö i alla zoner hade gett IDENTISKT brus i hela
+            # Norden, dvs. perfekt samvarierande chocker. ⚠️ Oberoende är också fel —
+            # zonerna delar vädersystem — men veckosummorna (som BÄR den verkliga
+            # samvariationen) är bevarade, så det är residualen inom veckan som antas
+            # oberoende. Det är det försiktigare av de två felen.
+            zseed = inflow_noise_seed + 1000 * (sorted(cfg["zones"]).index(zone) + 1)
+            before = float(inflow.sum())
+            inflow = modulate_inflow(
+                inflow, sigma=inflow_noise, tau_days=inflow_noise_tau_days,
+                seed=zseed, preserve=("week" if used_nve else "year"))
+            after = float(inflow.sum())
+            print(f"  → inflödesbrus {zone}: sigma={inflow_noise:g} "
+                  f"tau={inflow_noise_tau_days:g}d frö={zseed} "
+                  f"bevara={'vecka' if used_nve else 'år'}  "
+                  f"volym {before/1e6*((snapshots[1]-snapshots[0]).total_seconds()/3600):.2f}"
+                  f" -> {after/1e6*((snapshots[1]-snapshots[0]).total_seconds()/3600):.2f} TWh")
 
         if cyclic_soc:
             soc_init = 0.0  # ignoreras när cyclic=True
