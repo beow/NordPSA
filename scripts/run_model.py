@@ -98,7 +98,7 @@ DEFAULT_SPILL_COST_DISPATCH  = 0.1
 # ⚠️ b_mean är INERT här: hydro_mc_from_curve() sätter mc längs normalbanan, där
 # P(x_ref) = 1 per konstruktion. v8 följer med bara för att de två filerna ska
 # förbli identiska sånär som på ankaret. Svepet run428-432 är dispatch.
-DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v11_exp73.yaml"
+DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v12_exp73.yaml"
 
 # Budtrappan är DEFAULT sedan 2026-08-23 och verkar i BÅDA lägena. K=3 / BREDD 36 ger
 # avvikelserna −12/0/+12, alltså spann 24. Låst på run417/418/419, som är en ren kontroll
@@ -125,10 +125,10 @@ DEFAULT_ROR_HIFREQ_SEED = 7
 
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v9 (run250-konfen + hydro-mc-kurva i expansion "
+BASELINE_DEFAULTS_TAG = ("baseline-v10 (run250-konfen + hydro-mc-kurva i expansion "
                          "+ budtrappa 3:36 i båda lägena + SOC-ankaret = uppmätt EC-nivå "
                          "2023-01-02, delat av cyklisk start=slut och rullande horisont "
-                         "+ terminalkurva v11, b_mean 2,0, b_amp 0, medianbanor per zon, global A-form "
+                         "+ terminalkurva v12, b_mean 4,0, a_scale 0,15, b_amp 0, medianbanor per zon, global A-form "
                          "+ RoR-högfrekvens 0,22 i SE-N/SE-S/FI)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning

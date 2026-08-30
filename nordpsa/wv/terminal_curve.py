@@ -436,8 +436,16 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # i alla fem zoner, 20 formtal -> 4. De zonvisa talen kom alla ur samma oprovade
 # bedomningstabell; dispatch-A/B gav medelprisskillnad <0,2 EUR/MWh. ⚠️ Valet ar gjort
 # pa PARSIMONI, inte utfall - svepet gav poang 0,545 zonal mot 0,611 global.
-# ⚠️ Reproducera run420-438 med v9, och de ZONVISA A-formerna finns i v10.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v11.yaml"
+# ⭐⭐⭐ v12 (LAST 2026-08-30) = v11 med b_mean 4,0 (var 2,0) och a_scale 0,15 (var 0,30).
+# b_mean 4 vilar pa ELASTICITETSMATNINGEN: verkliga marknader ger B = 1,5-3,3 over 11 ar,
+# modellen 1,2 vid b=2 och 1,9 vid b=4 - verkligheten ar brantare an modellen aven vid 4,0.
+# Budkurvan (primarkriteriet) 2,937 -> 2,029 i MAE 20-60.
+# a_scale 0,15 ar valt pa ROBUSTHET, inte utfall: den ar den enda sasongssignal som INTE gar
+# genom x_ref, och b=4 fordubblar kansligheten for att x_ref (matt 2015-2025) ar fel i 2040.
+# ⛔ EC-bandet duger INTE som stod for b - b ar precis den parameter som drar SOC mot den
+# observerade fordelningen. Se note_v12 i kurvfilen for full riskbeskrivning.
+# ⚠️ v11 = b_mean 2 / a_scale 0,30 · v10 = zonvisa A-former · v9 reproducerar run420-438.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v12.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
