@@ -432,8 +432,12 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # SE-N snosmaltningsmatat, faktor 5,6 i tillrinningens sasong. SE-S beskrevs med 14,6 pp
 # RMS-fel mot sin uppmatta bana; med egen bana 3,3. Kalla: ENTSO-E A72 per budzon (SE),
 # NVE Magasinstatistikk per prisomrade (NO), 2015-2025. Nivan bevarad => ren formandring.
-# ⚠️ Reproducera run420-438 med config/terminal_curve_2040_gemini_v9.yaml explicit.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v10.yaml"
+# ⭐ v11 (2026-08-30) = v10 med GLOBAL A(v)-form: a_amp/a_amp2/a_peak/a_peak2 likformiga
+# i alla fem zoner, 20 formtal -> 4. De zonvisa talen kom alla ur samma oprovade
+# bedomningstabell; dispatch-A/B gav medelprisskillnad <0,2 EUR/MWh. ⚠️ Valet ar gjort
+# pa PARSIMONI, inte utfall - svepet gav poang 0,545 zonal mot 0,611 global.
+# ⚠️ Reproducera run420-438 med v9, och de ZONVISA A-formerna finns i v10.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v11.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],
