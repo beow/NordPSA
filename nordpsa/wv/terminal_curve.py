@@ -426,7 +426,14 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 # att säsongsvariationen i brantheten är nära inert — nivån gör 5-43x mer — och att
 # budkurvan till och med blir BÄTTRE utan den. Tar bort två oprövade tal: `b_amp` och
 # `b_peak`, den senare kurvans sista zonskillnad i b.
-DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v9.yaml"
+# ⭐ v10 (2026-08-30) = v9 med MEDIANBANOR PER ZON (x_ref-familjen), enda skillnaden.
+# EC:s median finns bara per land, sa SE-N/SE-S och NO-N/NO-S delade bana. Billigt i
+# Norge (zonerna ar hydrologiskt nastan lika) men dyrt i Sverige: SE-S ar regnmatat och
+# SE-N snosmaltningsmatat, faktor 5,6 i tillrinningens sasong. SE-S beskrevs med 14,6 pp
+# RMS-fel mot sin uppmatta bana; med egen bana 3,3. Kalla: ENTSO-E A72 per budzon (SE),
+# NVE Magasinstatistikk per prisomrade (NO), 2015-2025. Nivan bevarad => ren formandring.
+# ⚠️ Reproducera run420-438 med config/terminal_curve_2040_gemini_v9.yaml explicit.
+DEFAULT_PARAM_FILE = "config/terminal_curve_2040_gemini_v10.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],

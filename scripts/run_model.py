@@ -98,7 +98,7 @@ DEFAULT_SPILL_COST_DISPATCH  = 0.1
 # ⚠️ b_mean är INERT här: hydro_mc_from_curve() sätter mc längs normalbanan, där
 # P(x_ref) = 1 per konstruktion. v8 följer med bara för att de två filerna ska
 # förbli identiska sånär som på ankaret. Svepet run428-432 är dispatch.
-DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v9_exp73.yaml"
+DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v10_exp73.yaml"
 
 # Budtrappan är DEFAULT sedan 2026-08-23 och verkar i BÅDA lägena. K=3 / BREDD 36 ger
 # avvikelserna −12/0/+12, alltså spann 24. Låst på run417/418/419, som är en ren kontroll
@@ -111,12 +111,25 @@ DEFAULT_HYDRO_MC_CURVE = "config/terminal_curve_2040_gemini_v9_exp73.yaml"
 # svagare trots samma spann. En ren K-jämförelse kräver `5:34.6`; den är inte körd.
 DEFAULT_HYDRO_BID_LADDER = "3:36"
 
+# ⭐ Högfrekvent struktur i SYNTETISK strömkraft, DEFAULT sedan 2026-08-30.
+# Motivet är DATAKVALITET, inte kalibrering: SE:s RoR har 52 unika värden per år (en
+# veckotrappa) eftersom Svenska kraftnät inte rapporterar någon B11-kategori till
+# ENTSO-E, medan NO:s RAPPORTERADE B11 har 7 943-8 476 och ändras i 99,7-99,9 % av
+# timmarna. Trappan är en mätbar artefakt uppmätt data inte har (språng vid veckoskifte
+# 13 516x mot NO:s 1,1x). sigma 0,22 -> realiserad CV 0,122 = geometriska mitten av
+# NO-N 0,175 och NO-S 0,089. p_nom låses och veckoenergin bevaras ⇒ ren formändring.
+# Av med --no-ror-hifreq (krävs för att reproducera run<=436 och allt äldre).
+DEFAULT_ROR_HIFREQ      = 0.22
+DEFAULT_ROR_HIFREQ_TAU  = 3.5
+DEFAULT_ROR_HIFREQ_SEED = 7
+
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v7 (run250-konfen + hydro-mc-kurva i expansion "
+BASELINE_DEFAULTS_TAG = ("baseline-v8 (run250-konfen + hydro-mc-kurva i expansion "
                          "+ budtrappa 3:36 i båda lägena + SOC-ankaret = uppmätt EC-nivå "
                          "2023-01-02, delat av cyklisk start=slut och rullande horisont "
-                         "+ terminalkurva v9, b_mean 2,0, b_amp 0)")
+                         "+ terminalkurva v10, b_mean 2,0, b_amp 0, medianbanor per zon "
+                         "+ RoR-högfrekvens 0,22 i SE-N/SE-S/FI)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -1211,6 +1224,7 @@ def apply_dispatch_replay(parser, args):
     base.inflow_noise_seed = args.inflow_noise_seed
     base.inflow_noise_tau  = args.inflow_noise_tau
     base.ror_hifreq      = args.ror_hifreq
+    base.no_ror_hifreq   = args.no_ror_hifreq
     base.ror_hifreq_seed = args.ror_hifreq_seed
     base.ror_hifreq_tau  = args.ror_hifreq_tau
     # NTC-överstyrningar är ett SCENARIOVAL för omdispatchen (som --low-hydro): man vill
@@ -1611,15 +1625,22 @@ def main() -> None:
                              "det ärligare valet när dispatchen ska valideras mot OBSERVERADE "
                              "priser. Default är ankaret, så att dispatch och expansion "
                              "startar på samma nivå och blir jämförbara.")
-    parser.add_argument("--ror-hifreq", type=float, default=0.0, metavar="SIGMA",
+    parser.add_argument("--ror-hifreq", type=float, default=None, metavar="SIGMA",
                         help="Ger SYNTETISK strömkraft (SE-N/SE-S/FI) den högfrekventa "
                              "struktur Norges RAPPORTERADE B11 har. NO-N/NO-S rörs ej. "
                              "0 = av (default). Mål: NO:s uppmätta CV 0,089-0,175 och "
                              "tau 1,4 d; SIGMA 0.22 ger CV 0,122 = geometriska mitten. "
                              "p_nom LÅSES och veckoenergin bevaras exakt, så det är en "
-                             "ren formändring — varken kapacitet eller energi rör sig.")
-    parser.add_argument("--ror-hifreq-seed", type=int, default=0, metavar="N")
-    parser.add_argument("--ror-hifreq-tau", type=float, default=3.5, metavar="DYGN",
+                             f"ren formändring. ⭐ DEFAULT {DEFAULT_ROR_HIFREQ} sedan "
+                             "2026-08-30; av med --no-ror-hifreq (krävs för att "
+                             "reproducera run<=436 och allt äldre).")
+    parser.add_argument("--no-ror-hifreq", action="store_true",
+                        help="Stänger av RoR-högfrekvensen: syntetisk strömkraft behåller "
+                             "sin veckotrappa. Reproducerar run<=436 och allt äldre.")
+    parser.add_argument("--ror-hifreq-seed", type=int, default=DEFAULT_ROR_HIFREQ_SEED,
+                        metavar="N")
+    parser.add_argument("--ror-hifreq-tau", type=float, default=DEFAULT_ROR_HIFREQ_TAU,
+                        metavar="DYGN",
                         help="Dekorrelationstid. 3.5 ger realiserat 1,31 d (mål 1,4).")
     parser.add_argument("--inflow-noise", type=float, default=0.0, metavar="SIGMA",
                         help="Stokastisk modulering av reservoarernas inflöde: "
@@ -1972,6 +1993,14 @@ def main() -> None:
         args.hydro_bid_ladder = None
     elif not args.hydro_bid_ladder:
         args.hydro_bid_ladder = DEFAULT_HYDRO_BID_LADDER
+    # --ror-hifreq: None = orörd -> defaulten. Sentinel i stället för argparse-default
+    # så att --no-ror-hifreq kan skilja "oangiven" från "uttryckligen 0".
+    if args.no_ror_hifreq:
+        if args.ror_hifreq:
+            raise SystemExit("--ror-hifreq och --no-ror-hifreq är oförenliga.")
+        args.ror_hifreq = 0.0
+    elif args.ror_hifreq is None:
+        args.ror_hifreq = DEFAULT_ROR_HIFREQ
 
     # --spill-cost: None = orörd → lägesberoende default (samma sentinel-mönster och samma
     # skäl att den inte kan vara en argparse-default: värdet beror på om kapaciteterna är
@@ -2439,9 +2468,9 @@ def main() -> None:
     if args.inflow_noise > 0:
         flags.append(f"inflownoise-{args.inflow_noise:g}"
                      f"_tau{args.inflow_noise_tau:g}_seed{args.inflow_noise_seed}")
-    if args.ror_hifreq > 0:
-        flags.append(f"rorhifreq-{args.ror_hifreq:g}"
-                     f"_tau{args.ror_hifreq_tau:g}_seed{args.ror_hifreq_seed}")
+    flags.append(f"rorhifreq-{args.ror_hifreq:g}"
+                 f"_tau{args.ror_hifreq_tau:g}_seed{args.ror_hifreq_seed}"
+                 if args.ror_hifreq else "no-rorhifreq")
     if args.rolling_horizon:
         flags.append("socstart-faktisk" if args.soc_start_actual else "socstart-ankare")
     if args.market_ntc_scale is not None:
