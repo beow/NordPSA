@@ -63,3 +63,6 @@ config/archive_terminal_curve_sweeps/
 # skärmklipp och valideringsbilder
 docs/*.png
 
+
+# Bloggutkast och figurer — lever utanför versionshanteringen
+blog/

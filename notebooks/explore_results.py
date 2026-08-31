@@ -89,7 +89,17 @@ def _cellcode(name):
 
 
 # Sätt LABEL/LABEL2 HÄR för att byta körning — kör om cell 1 efteråt.
-LABEL, LABEL2 = "run418_ladder_k3_dispatch_1h", "run418_ladder_k3_2h"
+LABEL, LABEL2 = "run423_onshore80_dispatch_1h_v8", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run420_baseline_dispatch_1h_v8", None
+LABEL, LABEL2 = "run423_onshore80_dispatch_1h_v8", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run424_lowhydro06_dispatch_1h", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run427_market50_dispatch_1h", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run420_baseline_dispatch_1h_bm40", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run420_baseline_dispatch_1h_bamp0", "run420_baseline_dispatch_1h_v8"
+LABEL, LABEL2 = "run420_baseline_dispatch_1h_aglobal", "run420_baseline_dispatch_1h_bamp0"
+LABEL, LABEL2 = "run420_baseline_dispatch_1h_as065","run420_baseline_dispatch_1h_aglobal"
+LABEL, LABEL2 = "run434_aglobal_2h", "run420_baseline_2h"
+LABEL, LABEL2 = "run443_facit_run434_2h", "run438_xrefzon_dispatch_1h"
 
 exec(_cellcode("bootstrap"))
 
