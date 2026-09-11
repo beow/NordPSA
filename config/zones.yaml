@@ -200,15 +200,50 @@ electrolyser_overcapacity: {type1: 1.0, type2: 1.5, type3: 1.0}
 #   ~2,3 GW dras av. OKONTROLLERAT.
 industrial_dsr:
   enabled: true
+  # ⛔⛔ TRÖSKLARNA OCH ANDELARNA ÄR MODELLANTAGANDEN UTAN KÄLLA. LMA26 s.60 säger bara
+  #   "priser och volymer från TYNDP 2024, endast reduktion vid över 90 EUR/MWh medtagen"
+  #   och redovisar utfallet som en stapel (Fig. 15) utan nedbrytning på prisnivåer.
+  #   TYNDP 2024:s DSR-tabell är INTE PUBLICERAD: genomsökt 2026-09-09 (Scenarios Report,
+  #   Annex, Methodology Report, Implementation Guidelines, Final Supply Inputs, Scenario
+  #   Report Data Figures) — Annex V pekar ut "DSR → Electricity → ENTSO-E", dvs. en
+  #   TSO-insamling som inte ingår i det öppna paketet. Vi kan alltså inte verifiera dem.
+  # ⭐ Externt STÖD för steg 2-3 (Gemini, industrins smärtgränser, spotpris):
+  #     massa & papper       1,50-3,00 kr/kWh = 130-261 EUR/MWh  → vårt steg 2 (250) ✓
+  #     järn/stål/smältverk  3,00-5,00+       = 261-435+         → vårt steg 3 (500) ✓
+  #   Robust mot växelkursen (10,5-12,0 SEK/EUR). ⛔ Men steg 1 (100 = 1,15 kr/kWh) ligger
+  #   UNDER hans lägsta smärtgräns — ingen tung industri reagerar där. Trolig förklaring:
+  #   LMA flyttade all sub-90-flex till industriposten ("modelltekniskt ingen betydelse"),
+  #   så steg 1 är uppsamlad ÖVRIG flexibilitet, inte pappersbruk. ⚠️ Läs det inte som
+  #   industri. Steg 1 gör 96 % av allt uttag i modellen (run450: 2,880 av 3,013 TWh/år).
+  # ⛔ LMA nämner även "restriktioner på hur många timmar per dygn" — vi har INGET dygnstak.
   price_steps_eur_per_mwh: [100, 250, 500]   # steg 4 = VOLL, se ovan
-  step_shares: [0.25, 0.25, 0.25]            # av volymen; resterande 0,25 = VOLL-slacken
+  # ⭐ 2026-09-09: 25/25/25 → 20/40/25 (+15 % på VOLL-kvartilen). Tyngdpunkten flyttas till
+  #   250 = massa/pappers-nivån, som är den sektor Gemini kallar den mest flexibla. Byggd
+  #   andel går 75 → 85 %. Vid volym 6000: steg1 1200 (var 2125, −44 %) · steg2 2400 (+13 %)
+  #   · steg3 1500 (−29 %) · VOLL 900. ⚠️ Summan är 100 % — kontrollera det vid ändring,
+  #   koden validerar bara att listan är lika lång som price_steps.
+  step_shares: [0.20, 0.40, 0.25]            # av volymen; resterande 0,15 = VOLL-slacken
+  # ⭐ VOLYMERNA OMLAGDA 2026-09-09: 8500 → 6000 MW, i LMA26 Figur 15:s proportioner.
+  #   Var: SE 2500 · NO 3000 · FI 2000 · DK 1000 (användarens tal, utan källa).
+  #   LMA26 Fig. 15 (MM), kategori Industri: FI 2,61 · NO 2,27 · SE 1,74 · DK 0,26 GW
+  #   = 6,88 GW ⇒ andelar 0,3794 / 0,3299 / 0,2529 / 0,0378. Skalat till 6000.
+  #   ⚠️ Fig. 15 är för 2050; Fig. 10 visar att SE:s industripost är KONSTANT 1,7 GW i
+  #     alla år och scenarier, vilket stöder att använda den för 2040.
+  #   ⚠️ Rangordningen VÄNDER mot förr: FI är störst, inte NO. DK faller 1000 → 227.
+  # ⭐ N/S-splitten är nu HÄRLEDD, inte handsatt: lastens P05 (alltid-på-baskomponenten som
+  #   industriproxy) ger SE-N/SE-S 0,217/0,783 och NO-N/NO-S 0,377/0,623. Kontroll med
+  #   medellast ger 0,206/0,794 resp. 0,356/0,644 — ≤2,1 pp isär, alltså robust mot valet
+  #   av statistika. Ersätter den tidigare 50/50-splitten, som var uttryckligen handsatt.
+  #   ⚠️ P05 isolerar inte industri — den fångar all alltid-på-last, inkl. stora
+  #     kommersiella kunder. Men LMA:s volymer är aggregerad TYNDP-flex utan geografisk
+  #     upplösning, så det finns inget i källan som stöder en nordlig övervikt.
   volume_mw:
-    SE-N: 1250
-    SE-S: 1250
-    NO-N: 1500
-    NO-S: 1500
-    DK:   1000
-    FI:   2000
+    SE-N:  329   # 0,2529 × 6000 × 0,217
+    SE-S: 1188   # 0,2529 × 6000 × 0,783
+    NO-N:  746   # 0,3299 × 6000 × 0,377
+    NO-S: 1233   # 0,3299 × 6000 × 0,623
+    DK:    227   # 0,0378 × 6000
+    FI:   2276   # 0,3794 × 6000
 
 market_elasticity:
   enabled: false
@@ -275,7 +310,7 @@ heat:
     #    till skillnad från SE. Det är exakt varför LMA2026:s VP- och elpanne-flexibilitet
     #    får genomslag i just DK och FI. ANTAGANDE: satt till 0, verkliga finska klass II
     #    och danska reducerade satser är låga men inte noll.
-    DK:   {el_tax_eur_per_mwh: 0.0, dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 4.0, mustrun_share: 0.25, store_gwh: 20,
+    DK:   {el_tax_eur_per_mwh: 0.0, dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 3.0, mustrun_share: 0.25, store_gwh: 20,
            chp: {eta_el: 0.26, eta_heat: 0.54, fuel_vom: 22.0, share_of_thermal: 1.0}}
     # FI (Finsk Energi "District heating 2024", first version): konsumtion 32.7 TWh; VP/återvinning 7.8 TWh (~22%,
     #   FI elektrifierar hårt); KVV-andel 37% (ner från 76%), DH-KVV-el 4.5 TWh. NYCKEL: FI-thermal (12.3 TWh i
@@ -755,7 +790,19 @@ cost_scenarios:
 demand_scenarios:
   svk_2040_mm:
     ntc_overrides:
-      - [SE-N, SE-S, 10700]   # Snitt 2 / NordSyd 2040 (Tabell 10; var q95 7600)
+      - [SE-N, SE-S,  9000]   # Snitt 2 / NordSyd 2040. ⭐ SÄNKT 2026-09-09 från Tabell 10:s
+                              #   10700, som är ett MAXTAL. Uppmätt tilldelad day-ahead-kapacitet
+                              #   (query_offered_capacity A01, FB-fria fönstret 2023-01→2024-10-29,
+                              #   n=16032 h) ger SE2→SE3 medel 6195 av max 7300 ⇒ medel/max = 0,849
+                              #   i den BEGRÄNSANDE riktningen. 0,849 × 10700 = 9084 → 9000.
+                              # ⚠️ Tvåriktningsmedlet är 0,92 (SE3→SE2 ligger på 0,995 av max) och
+                              #   hade gett 9900. Den begränsande riktningen vald medvetet — snittet
+                              #   används mest norr→söder. Se project_ntc_offered_capacity_derate.
+                              # ⚠️ Överföringen av en NUTIDS-derate till 2040 är OPRÖVAD. Stöd finns
+                              #   i dagens värld (run458 7300 mot run459 5000: Σ|prisbias| 37,1→14,0,
+                              #   trängsel 29,4→65,8 % mot uppmätta 58,2), men där drar driften åt
+                              #   ANDRA hållet (+1,70 mot +11,05 TWh, EC +3,13) ⇒ avvägning, ej dom.
+                              # ⏳ Direkt test saknas: 2040-A/B 9000 mot 10700 är EJ körd.
       - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 = TSO-talet (Hasle-snittet). ⭐ LÅST 2026-08-22 efter att
                               # Gemini oberoende angav exakt 2000 som officiell TSO-prognos — samma tal som
                               # configens egen kommentar bärde. Var 2300 = ett osourcat påslag utöver TSO-talet;
@@ -802,7 +849,21 @@ demand_scenarios:
     # 2023-25-serien per bzn (behåller timform/väderkorrelation, byter nivå).
     # DE-LU/LT/PL = SvK p79; NL/GB/EE = ANTAGANDEN (NL≈DE, GB lägre, EE≈Baltikum).
     # ⚠️ Underplays 2040:s ökade volatilitet (metod 3 = äkta 2040-profil krävs för det).
-    continent_price_eur_mwh: {DE-LU: 79, LT: 87, PL: 83, NL: 78, GB: 75, EE: 84}
+    # ⭐ UPPDATERAD 2026-09-09 mot LMA26 Figur 31 (simulerat årsmedelpris, 2040 MM) och
+    # för GB mot en extern 2040-prognos. NIVÅ-metoden: skala vår uppmätta 2023-25-serie så
+    # att dess snitt träffar målet. (Alternativet KVOT — applicera LMA:s egen 2026→2040-
+    # förändring på vår serie — ger samma svar för DE/PL men 9-10 % lägre för LT/EE, där
+    # LMA:s 2026-tal ligger 10 % över vår mätning. NIVÅ vald av användaren.)
+    #   DE-LU 79,6 · PL 83,1 · LT 90,1  = LMA26 Fig. 31, 2040 MM (hårda tal)
+    #   NL 78,7 = lånad DE-LU-faktor (NL och DE-LU är i praktiken samma marknad i vår data:
+    #             86,6 mot 87,7 i snitt, båda med −500-golv och ~450 negativa h/år)
+    #   EE 87,2 = lånad LT-faktor (samma marknadsområde; LT är enda ankaret som finns)
+    #   GB 84   = extern 2040-prognos ~70 GBP (dec 2024) × 1,20. ⚠️ Var 75, ett rent
+    #             ANTAGANDE ("GB lägre"); nu enda talet med källa utanför LMA. Höjningen går
+    #             åt MOTSATT håll mot övriga och ökar Nordens exportintäkt över Viking Link
+    #             och North Sea Link (10,1 TWh import + 7,0 TWh export/år i run450).
+    # ⚠️ LMA26 Fig. 31 saknar NL, GB och EE — därav lånen/den externa källan.
+    continent_price_eur_mwh: {DE-LU: 79.6, LT: 90.1, PL: 83.1, NL: 78.7, GB: 84, EE: 87.2}
     # Batterier EXOGENT (storskaliga, stödtjänst-drivna). SvK:s egen modell bygger 0
     # endogena batterier (Bilaga C: dagen-före-intäkter fångar ej stödtjänstvärdet) —
     # samma i vår modell. Storskalig MM 2040 (GW): SE 5.5 / DK 3.8 / FI 2.7 / NO 0.

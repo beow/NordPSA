@@ -125,11 +125,15 @@ DEFAULT_ROR_HIFREQ_SEED = 7
 
 # Skrivs som 'defaults:'-rad i run_meta.txt. Körningar UTAN raden är gjorda före
 # omläggningen och måste replayas mot dåtidens defaults (PRE_BASELINE_DEFAULTS).
-BASELINE_DEFAULTS_TAG = ("baseline-v10 (run250-konfen + hydro-mc-kurva i expansion "
+BASELINE_DEFAULTS_TAG = ("baseline-v11 (run250-konfen + hydro-mc-kurva i expansion "
                          "+ budtrappa 3:36 i båda lägena + SOC-ankaret = uppmätt EC-nivå "
                          "2023-01-02, delat av cyklisk start=slut och rullande horisont "
                          "+ terminalkurva v12, b_mean 4,0, a_scale 0,15, b_amp 0, medianbanor per zon, global A-form "
-                         "+ RoR-högfrekvens 0,22 i SE-N/SE-S/FI)")
+                         "+ RoR-högfrekvens 0,22 i SE-N/SE-S/FI "
+                         "+ SCENARIOÄNDRINGAR 2026-09-09: snitt 2 i 2040 10700→9000, "
+                         "industri-DSR 8500→6000 MW i LMA26 Fig.15-proportioner med P05-split, "
+                         "DSR-trappan 25/25/25→20/40/25, DK värmepump COP 4,0→3,0, "
+                         "kontinentpriser 2040 mot LMA26 Fig.31 + GB 84)")
 
 # Defaultvärden som gällde FÖRE omläggningen. En --dispatch-replay av en körning
 # som gjordes innan dess ska återge KÄLLANS värld, inte dagens defaults: körde
@@ -502,7 +506,11 @@ def apply_demand_scenario(cfg: dict, name: str,
     for z0, z1, mw in scen.get("ntc_overrides", []):
         for link in cfg.get("links", []):
             if link[0] == z0 and link[1] == z1 and link[2] != mw:
-                print(f"     NTC {z0}-{z1}: {link[2]} → {mw} MW (Tabell 10)")
+                # ⚠️ Ingen källetikett här. "(Tabell 10)" stod tidigare hårdkodat, men av
+                # de fyra interna 2040-talen bär bara snitt 2 spår av Tabell 10 — och sedan
+                # 2026-09-09 är även det deratat (10700 → 9000). De tre övriga är antaganden
+                # utan källa; se kommentarerna vid ntc_overrides i zones.yaml.
+                print(f"     NTC {z0}-{z1}: {link[2]} → {mw} MW")
                 link[2] = mw
 
     # Kontinentkablar: matchas på connection-namn (market_connections = [namn, zon, mw, bzn])
