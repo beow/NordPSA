@@ -57,6 +57,7 @@ Cellerna:
   8  Produktionsstapel för valt utsnitt                 → prodstack.py
   9  Jämför två körningar (valfri)                      → compareprice.py
  10  Marginal källa vid EN given timme                  → marginal.py
+ 10b Utbudskurva: hur prisön når sitt marginalpris     → bidstack.py
  11  Systemkostnad på REAL basis (trappkorrigerad)       → objcost.py
 """
 
@@ -89,17 +90,23 @@ def _cellcode(name):
 
 
 # Sätt LABEL/LABEL2 HÄR för att byta körning — kör om cell 1 efteråt.
-LABEL, LABEL2 = "run423_onshore80_dispatch_1h_v8", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run420_baseline_dispatch_1h_v8", None
-LABEL, LABEL2 = "run423_onshore80_dispatch_1h_v8", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run424_lowhydro06_dispatch_1h", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run427_market50_dispatch_1h", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run420_baseline_dispatch_1h_bm40", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run420_baseline_dispatch_1h_bamp0", "run420_baseline_dispatch_1h_v8"
-LABEL, LABEL2 = "run420_baseline_dispatch_1h_aglobal", "run420_baseline_dispatch_1h_bamp0"
-LABEL, LABEL2 = "run420_baseline_dispatch_1h_as065","run420_baseline_dispatch_1h_aglobal"
-LABEL, LABEL2 = "run434_aglobal_2h", "run420_baseline_2h"
-LABEL, LABEL2 = "run443_facit_run434_2h", "run438_xrefzon_dispatch_1h"
+LABEL, LABEL2 =  "run451_senuc15exo_dispatch_1h","run191_senuc15exo_3h"
+LABEL, LABEL2 =  "run451_senuc15exo_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run452_se_disc3_dispatch_1h","run192_se_disc3_3h"
+LABEL, LABEL2 =  "run452_se_disc3_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run453_onshore80_dispatch_1h","run193_onshore80_3h"
+LABEL, LABEL2 =  "run453_onshore80_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run450_baseline_dispatch_1h_scarcity_g3","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run450_baseline_dispatch_1h_scarcity_g3","run197_baseline_exp_1h"
+LABEL, LABEL2 =  "run450_baseline_dispatch_1h_scarcity_g8","run197_baseline_exp_1h"
+LABEL, LABEL2 =  "run197_baseline_exp_1h", None
+LABEL, LABEL2 =  "run450_baseline_dispatch_1h","run197_baseline_exp_1h"
+LABEL, LABEL2 =  "run455_batt25_4h_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run456_notax_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run457_market50_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run460_baseline_dispatch_1h","run450_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run461_senuc15exo_dispatch_1h","run460_baseline_dispatch_1h"
+LABEL, LABEL2 =  "run462_se_disc3_dispatch_1h","run460_baseline_dispatch_1h"
 
 exec(_cellcode("bootstrap"))
 
@@ -116,18 +123,18 @@ exec(_cellcode("prisgrafer"))   # modellpris vs referens, veckomedel, 2×3
 # %% 4 — Prisbildning: vad sätter priset, och hur mycket är NTC-kopplat
 exec(_cellcode("priceformation"))  # ändra ZONE i cells/priceformation.py
 
-
+# %%
 # %% 5 — Hydrologi
 exec(_cellcode("soclevels"))      # magasinsfyllnad per hydrozon
 exec(_cellcode("hydrodispatch"))  # vattenkraftsdispatch, månadsmedel
 
 
-# %% 6 — Flexibilitet: batteri, vätgas, värme, EV
-exec(_cellcode("flexassets"))
+# # %% 6 — Flexibilitet: batteri, vätgas, värme, EV
+# exec(_cellcode("flexassets"))
 
 
-# %% 7 — Handel: intern NTC och kontinentventilen
-exec(_cellcode("trading"))
+# # %% 7 — Handel: intern NTC och kontinentventilen
+# exec(_cellcode("trading"))
 
 
 # %% 8 — Produktionsstapel för valt utsnitt
@@ -139,10 +146,16 @@ exec(_cellcode("compareprice"))  # ändra ZONE/DATE_RANGE i cells/compareprice.p
 
 
 # %% 10 — Marginal källa vid EN given timme (prisöar + trängselkaskad)
-exec(_cellcode("marginal"))  # definierar marginal_source(); auto-kör exemplet i filen
-marginal_source("2024-12-12 17:00")   # anropa igen med valfri annan timme
+MARGINAL_TS = "2024-12-12 16:00"   # timme att analysera (None = bara definiera funktionen)
+exec(_cellcode("marginal"))        # kör MARGINAL_TS; marginal_source("...") för fler timmar
 
 
-# %% 11 — Systemkostnad på REAL basis (trappkorrigerad)
-exec(_cellcode("objcost"))            # auto-kör cost_table() på LABEL (+ LABEL2)
-# cost_table("run417_baseline_noladder_2h", "run418_ladder_k3_2h")   # valfri jämförelse
+# %% 10b — Utbudskurva: HUR prisön når sitt marginalpris vid samma timme
+BIDSTACK_TS   = "2024-01-06 10:00"   # timme att rita (None = bara definiera bid_stack())
+BIDSTACK_ZONE = 'SE-S'               # zon; kurvan ritas för HELA dess prisö
+exec(_cellcode("bidstack"))          # bid_stack("2024-12-12 10:00", 'FI') för fler
+
+
+# # %% 11 — Systemkostnad på REAL basis (trappkorrigerad)
+# exec(_cellcode("objcost"))            # auto-kör cost_table() på LABEL (+ LABEL2)
+# # cost_table("run417_baseline_noladder_2h", "run418_ladder_k3_2h")   # valfri jämförelse
