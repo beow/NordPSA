@@ -121,9 +121,9 @@ print(f'Tidssteg: {len(n.snapshots)}  ({n.snapshots[0]} – {n.snapshots[-1]}) �
 print(f'Zoner   : {ZONES}')
 print(f'Modell  : {len(n.generators)} generatorer, {len(n.storage_units)} lager, '
       f'{len(n.stores)} stores, {len(n.links)} länkar')
-print(f"\n{'zon':6s} {'pris':>7} {'faktiskt':>9} {'last TWh':>9} {'nettoimport TWh':>16}")
+print(f"\n{'zon':6s} {'pris':>7} {'last TWh':>9} {'nettoimport TWh':>16}")
 for _z in ZONES:
-    print(f"{_z:6s} {prices[_z].mean():>7.1f} {act_price[_z].mean():>9.1f} "
+    print(f"{_z:6s} {prices[_z].mean():>7.1f} "
           f"{twh(load[_z]):>9.1f} {twh(zone_market(_z)):>16.2f}")
 _slack = twh(dispatch[in_zone('slack')].clip(lower=0)) if in_zone('slack') else 0.0
 print(f"\nLastbortkoppling (el-slack): {_slack:.4f} TWh   (bör vara ≈ 0)")
