@@ -102,6 +102,18 @@ python scripts/nordpsa_overview.py run002_disp        # writes docs/nordpsa_over
 A full three-year expansion at 2h resolution takes several hours and ~6 GB of RAM; a
 single year at 3h runs in minutes.
 
+## Tests
+
+```bash
+pytest
+```
+
+runs the unit tests in `tests/unit/`: settings layering and validation, how worlds and
+scenarios transform the configuration, cost annualisation, the terminal water-value
+curve, the data profiles, and the custom constraints (SOC anchor, bid ladder, terminal
+value, hydro operating restrictions) on small networks solved with HiGHS. They need no
+fetched data and run on every push via GitHub Actions.
+
 ## Repository layout
 
 ```
@@ -114,7 +126,8 @@ nordpsa/            the model
   data/             clients for eSett, Energy Charts, ENTSO-E, Renewables.ninja
   wv/               terminal water-value curve
 config/             zones.yaml (model data), defaults.yaml, worlds/, experiments/, terminal_curves/
-scripts/            data fetching and building, batch runs, NTC calibration
+scripts/            data fetching and building, batch runs, overview figure, NTC calibration
+tests/unit/         unit tests (pytest), no data needed
 ```
 
 `CLAUDE.md` documents the design decisions and the measurements behind them. Code

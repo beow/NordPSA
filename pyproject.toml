@@ -13,3 +13,7 @@ nordpsa = "nordpsa.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nordpsa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "-q"

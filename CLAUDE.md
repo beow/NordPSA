@@ -67,6 +67,10 @@ Visualize results:
 python scripts/plot_dispatch.py results/run01_spring_flood_cyclic/ --resample 7D
 ```
 
+### Tests
+
+`pytest` runs `tests/unit/` (no data needed; also on every push via `.github/workflows/tests.yml`). Run it after any code change. It checks behaviour on toy networks and the real `config/`, not that results match earlier runs.
+
 ## Architecture
 
 ### Data flow
@@ -211,7 +215,7 @@ A single `marginal_cost` per reservoir makes the whole 52 GW fleet bid at one pr
 - The weekly caps and the bypass κ come from Ek Fälth et al. (2025), Sweden only; NO and FI are assumptions argued from reservoir hours. A year-constant cap cannot capture the strong seasonality in the source.
 - With cyclic SOC the constraints are consistent only if `min_daily ≤ inflow/(p_nom·H) ≤ max_weekly`; `run.py` prints that ratio per zone before solving (0.46–0.55 for 2024).
 - ⚠️ Known leak: rolling windows run Sunday–Saturday while the weekly cap groups ISO weeks, so realized weeks can reach 0.848 against a 0.83 cap (1–4 weeks of 156 per zone). Expansion is exact.
-- `bypass_spill` is off because PyPSA bounds spill by the same-snapshot inflow, which can make a high-production/low-inflow week infeasible. Verify with `python scripts/test_hydro_operation.py`.
+- `bypass_spill` is off because PyPSA bounds spill by the same-snapshot inflow, which can make a high-production/low-inflow week infeasible. Verified on a toy network in `tests/unit/test_hydro_ops.py`.
 
 ### Hydro SOC anchor
 
