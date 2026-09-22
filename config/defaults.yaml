@@ -1,0 +1,80 @@
+# Körinställningar — DEFAULTS för alla körningar.
+#
+# En körning byggs i lager, där senare lager vinner:
+#
+#     defaults.yaml  ←  worlds/<värld>.yaml  ←  --experiment FIL …  ←  --set NYCKEL=VÄRDE …
+#
+# Den fullständigt upplösta inställningen sparas i results/<run>/run_config.yaml, så en
+# körning går alltid att läsa av och återskapa. Modellens DATA (zoner, NTC, kostnader,
+# scenariodefinitioner, hydro-driftparametrar, lösare) ligger i zones.yaml; den här filen
+# säger bara VILKA delar som används och hur.
+#
+# Varje nyckel nedan är det enda stället dess default finns. Okända nycklar i en värld,
+# ett experiment eller --set är ett fel (fångar felstavningar). Undantaget är de
+# fritt ifyllda tabellerna (markerade "fri tabell"), vars nycklar är zon- eller kabelnamn.
+
+period:
+  year: null                # null = hela zones.yaml:snapshots (2023-2025); annars ett år
+  resolution_hours: 2       # kanonisk upplösning i båda lägena
+
+scenario:
+  cost: null                # namn i zones.yaml:cost_scenarios, null = dagens kostnader
+  demand: null              # namn i zones.yaml:demand_scenarios, null = dagens last
+  battery_total: null       # [GW, timmar]: skala om demand-scenariots batterier (behåll zonfördelningen)
+  post_expansion_ntc: false # applicera zones.yaml:links_expansion_overrides (framtida nät)
+  extra_load_mw: {}         # fri tabell, zon: MW flat extra last
+  low_hydro: null           # {factor: 0.6, year: 2024}: skala ett års tillrinning + RoR
+
+nuclear:
+  add: []                   # [[zon, antal, seed]]: NY extendable kärnkraft, syntetisk tillgänglighet
+  add_fixed: []             # [[zon, antal, MW]] eller [[zon, antal, MW, seed]]: exogen fast, kostnadssatt
+  new_min_load: null        # p_min/p_max för NY kärnkraft; null = zones.yaml:nuclear_synth.min_load_frac
+  discount_rate_by_zone: {} # fri tabell, zon: ränta för ny kärnkraft
+
+vre:
+  onwind_capfac_increase: 0.0   # relativ CF-höjning landvind (potens-transform)
+  offwind_capfac_increase: 0.0  # relativ CF-höjning havsvind
+  offwind_discount_rate_by_zone: {}  # fri tabell, zon: ränta för havsvind
+  onshore_potential_scale: 1.0  # skalar demand-scenariots landvindspotential (pnom_max_mw)
+
+grid:
+  ntc_override: {}          # fri tabell, "Z0:Z1": MW — efter demand-scenariots ntc_overrides
+  expand_link: []           # [[z0, z1, M€/MW, golv|null, tak]]: endogen länkutbyggnad
+
+market:
+  enabled: true             # false = inga kontinentkablar
+  ntc_scale: null           # skala ALLA kontinentkablar (efter scenariot, före ntc_override)
+  ntc_override: {}          # fri tabell, kabelnamn: MW
+  elasticity: true          # pristrappa vid kontinentgränsen (zones.yaml:market_elasticity)
+
+heat:
+  enabled: false            # fjärrvärmesektorn (zones.yaml:heat)
+  el_tax_zero: false        # nolla energiskatten på VP/el-panna
+
+voll: 3000                  # VOLL-slack i ALLA zoner (EUR/MWh); null = bara zoner utan marknad
+
+hydro:
+  restrictions: true        # driftrestriktioner på reservoaren (zones.yaml:hydro_operation)
+  operation: {}             # fri tabell: overrides på zones.yaml:hydro_operation
+  soc_initial: {}           # fri tabell, zon: fyllnadsfraktion (override på zones.<zon>.hydro_soc_initial)
+  bid_ladder: [3, 36]       # [K, BREDD]: budtrappa på reservoaren; null = ett enda bud
+  ror_hifreq:               # högfrekvent struktur i syntetisk RoR (SE-N/SE-S/FI); null = av
+    sigma: 0.22
+    tau_days: 3.5
+    seed: 7
+
+solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex. user_bound_scale)
+
+# ---- lägesberoende; bara det aktiva lägets sektion används ----------------------------
+expansion:
+  spill_cost: 50            # räcke mot fantomabsorption av VRE (se CLAUDE.md)
+  hydro_mc_curve: config/terminal_curves/terminal_curve_2040_gemini_v12_exp73.yaml
+
+dispatch:
+  spill_cost: 0.1           # fysisk kostnad; vattnets värde bärs redan av SOC-dualen
+  vre_curtailment_cost: 5   # ursprungsgarantier; enda vägen till negativa priser
+  rolling_weeks: 1          # fönsterlängd
+  lookahead_weeks: 3        # extra look-ahead som löses men kastas
+  terminal_curve: config/terminal_curves/terminal_curve_2040_gemini_v12.yaml
+  terminal_anchor: null     # tal (alla zoner) eller {zon: λ_bas}; null = kurvfilens ankare
+  terminal_segments: 20

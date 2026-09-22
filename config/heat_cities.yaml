@@ -1,0 +1,46 @@
+# Befolkningsorter per NordPSA-zon för befolkningsvägd temperatur (värmeprofiler).
+# T_zon(t) = Σ(pop · T_ort(t)) / Σ pop. Orterna approximerar elområdenas
+# befolkningstyngdpunkt. pop ≈ kommun/tätort (tusental), används bara som relativ vikt.
+# lat/lon i grader. Lätt att justera/utöka.
+
+heat_cities:
+  SE-N:   # SE1 + SE2 (norra Sverige)
+    - {namn: Umeå,       lat: 63.83, lon: 20.26, pop: 130}
+    - {namn: Sundsvall,  lat: 62.39, lon: 17.31, pop: 99}
+    - {namn: Luleå,      lat: 65.58, lon: 22.15, pop: 79}
+    - {namn: Skellefteå, lat: 64.75, lon: 20.95, pop: 73}
+    - {namn: Östersund,  lat: 63.18, lon: 14.64, pop: 64}
+
+  SE-S:   # SE3 + SE4 (södra Sverige)
+    - {namn: Stockholm,  lat: 59.33, lon: 18.07, pop: 975}
+    - {namn: Göteborg,   lat: 57.71, lon: 11.97, pop: 600}
+    - {namn: Malmö,      lat: 55.61, lon: 13.00, pop: 350}
+    - {namn: Uppsala,    lat: 59.86, lon: 17.64, pop: 170}
+    - {namn: Örebro,     lat: 59.27, lon: 15.21, pop: 125}
+    - {namn: Linköping,  lat: 58.41, lon: 15.62, pop: 115}
+
+  NO-N:   # NO3 + NO4 (midt-/Nord-Norge)
+    - {namn: Trondheim,  lat: 63.43, lon: 10.39, pop: 210}
+    - {namn: Tromsø,     lat: 69.65, lon: 18.96, pop: 78}
+    - {namn: Bodø,       lat: 67.28, lon: 14.40, pop: 55}
+    - {namn: "Mo i Rana", lat: 66.31, lon: 14.14, pop: 26}
+
+  NO-S:   # NO1 + NO2 + NO5 (Sør-Norge)
+    - {namn: Oslo,       lat: 59.91, lon: 10.75, pop: 700}
+    - {namn: Bergen,     lat: 60.39, lon: 5.32,  pop: 290}
+    - {namn: Stavanger,  lat: 58.97, lon: 5.73,  pop: 145}
+    - {namn: Drammen,    lat: 59.74, lon: 10.20, pop: 100}
+    - {namn: Kristiansand, lat: 58.15, lon: 8.00, pop: 95}
+
+  DK:     # DK1 + DK2
+    - {namn: København,  lat: 55.68, lon: 12.57, pop: 1300}
+    - {namn: Aarhus,     lat: 56.16, lon: 10.20, pop: 285}
+    - {namn: Odense,     lat: 55.40, lon: 10.39, pop: 180}
+    - {namn: Aalborg,    lat: 57.05, lon: 9.92,  pop: 120}
+
+  FI:     # hela Finland
+    - {namn: Helsinki,   lat: 60.17, lon: 24.94, pop: 660}
+    - {namn: Tampere,    lat: 61.50, lon: 23.79, pop: 245}
+    - {namn: Oulu,       lat: 65.01, lon: 25.47, pop: 210}
+    - {namn: Turku,      lat: 60.45, lon: 22.27, pop: 200}
+    - {namn: Jyväskylä,  lat: 62.24, lon: 25.75, pop: 145}

@@ -1,0 +1,3 @@
+# torrår — 2024 års tillrinning och RoR × 0,6.
+scenario:
+  low_hydro: {factor: 0.6, year: 2024}

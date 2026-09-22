@@ -1,0 +1,100 @@
+note: "PRODUKTIONSKANDIDAT v2, 2026-08-19. Efterföljare till terminal_curve_2040_gemini.yaml\
+  \ (som ligger kvar LÅST och default tills v2 utvärderats — run316-385 reproduceras\
+  \ oförändrat).\nTVÅ ÄNDRINGAR mot v1, båda mätta:\n  1. a_amp och a_amp2 HALVERADE\
+  \ (x0,6 -> x0,3 av Geminis tabellvärden). Belagt av run384: SE:s v/s 1,18 -> 1,32,\
+  \ Sigma|fel| 0,64 -> 0,50 mot eSett och 0,61 -> 0,56 mot 2040-facit (run386) - BÄST\
+  \ PÅ BÅDA MÅLTAVLORNA. Marspuckeln, hela invändningen mot att sänka a_amp, slog\
+  \ inte in: medelfel mot uppmätt 7,6 -> 6,4, bättre i fyra zoner av fem. Dessutom\
+  \ planade lambda ut längs EC:s medianbana (kvot SE-N 2,08 -> 1,52), vilket är designmålet.\n\
+  \  2. FI b_mean 1,038 -> 0,75. FI är ENDA zonen där båda måltavlorna pekar åt samma\
+  \ håll (eSett 1,13, facit 0,97, modellen 0,74) och run386 bevisar att 0,97 är UPPNÅELIGT\
+  \ med exakt denna flotta och detta magasin - alltså inget fysiskt tak. a_amp är\
+  \ mätt trögast av alla i FI (gradient -0,13; run384 gav +0,02, run385 +0,05), så\
+  \ b_mean är den enda spaken kvar. Riktningen ur eSett-svepen: b_mean UPP => v/s\
+  \ NED (0,9 -> 2,5 sänkte NO 1,98 -> 1,30).\n  ⚠️ FI:s b_mean 0,75 är ETT STEG, inte\
+  \ ett anpassat värde - ingen gradient finns mätt för b_mean -> v/s i den här kurvfamiljen.\
+  \ Bevaka att FI-magasinet inte bottnar: en flackare kurva dränerar djupare, och\
+  \ NO-N med b_mean 1 gick INFEASIBLE i tvålutningssvepet.\nOFÖRÄNDRAT: x_ref (säsongsreferensen),\
+  \ b_amp/b_peak, a_peak, p_norm mid, b_low_frac 1,0.\n⚠️ ANKARET ÄR LIKFORMIGT 73\
+  \ MED FLIT. Facit (run386) ger vattenvärdet 72,87 EUR/MWh i ALLA fem zoner och alla\
+  \ timmar - en replikering av run320:s 73,02 på en annan flotta. Per-zons nivåer\
+  \ vore dubbelräkning av trängsel modellen redan producerar endogent. Den rullande\
+  \ horisontens DRIFTkorrigering hör till körningen, inte till filen (se run_model.py):\
+  \ kör dispatch med --terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5,\
+  \ härlett ur den uppmätta känsligheten run378 vs run379 (TWh drift per enhet lambda_bas:\
+  \ NO-S 1,21, NO-N 0,41, SE-N 0,34, FI 0,069, SE-S 0,039), dämpat 0,8 och TAKAT vid\
+  \ +-2,0 - de två små magasinen SE-S och FI kräver -6,1 respektive +7,2 för nolldrift,\
+  \ vilket lambda_bas inte är rätt instrument för. EXPANSION körs med 73 rakt av:\
+  \ cykliskt SOC ger noll drift per konstruktion, så korrigeringen saknar mening där."
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.1605
+    a_peak: 1.1
+    b_mean: 0.75
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.0675
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.132
+    c_mid: 0.603
+    c_peak: 36.3
+    p_norm: mid
+  NO-N:
+    a_amp: 0.1295
+    a_peak: 4.2
+    b_mean: 0.998
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.0695
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+  NO-S:
+    a_amp: 0.0915
+    a_peak: 5.1
+    b_mean: 0.641
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.0275
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+  SE-N:
+    a_amp: 0.128
+    a_peak: 5.1
+    b_mean: 0.934
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.0635
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid
+  SE-S:
+    a_amp: 0.1375
+    a_peak: 5.3
+    b_mean: 0.767
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.0375
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid

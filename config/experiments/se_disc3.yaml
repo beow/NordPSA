@@ -1,0 +1,5 @@
+# 3 % diskonteringsränta för ny kärnkraft och havsvind i Sverige.
+nuclear:
+  discount_rate_by_zone: {SE-N: 0.03, SE-S: 0.03}
+vre:
+  offwind_discount_rate_by_zone: {SE-N: 0.03, SE-S: 0.03}

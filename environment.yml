@@ -1,0 +1,23 @@
+name: nordpsa-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pypsa>=1.0
+  - linopy>=0.3
+  - pandas>=2.1
+  - numpy
+  - scipy
+  - pyarrow
+  - requests
+  - pytz
+  - pyyaml
+  - highspy
+  - matplotlib
+  - jupyter
+  - ipykernel
+  - ipywidgets
+  - pip
+  - pip:
+    - -e .

@@ -1,0 +1,87 @@
+note: '⛔ FORKASTAD 2026-08-19 (run385). Per-zons a_amp ur linjar extrapolation: SE/FI
+  x0,20, NO x0,49. Overskot 3x i BADA riktningarna (SE +0,21 mot forutsagda +0,06,
+  NO -0,15 mot -0,05) eftersom zonerna kopplar via natet. Samst av alla mot 2040-facit
+  (0,86). Behalls for att reproducera run385.
+
+
+  --- ursprunglig anteckning ---
+
+  PROV 2026-08-19 (run385). PER-ZONS a_amp/a_amp2 ur den uppmätta gradienten mellan
+  run382 (×0,6) och run384 (×0,3) på TOTAL-basis: SE −1,09, NO −0,62, FI −0,13 per
+  enhet a_amp. SE och FI ×0,20 av Geminis värden (SE mot 1,38), NO ×0,49 (run384 sköt
+  över: 1,35 mot 1,30). FI följer SE eftersom dess gradient är för flack för att nå
+  1,13 med någon amplitud alls. ⚠️ LINJÄR EXTRAPOLATION från EN mätning — zonerna
+  kopplar via nätet och samma metod har fallerat förut (project_gemini_curve_tables).
+  Förvänta avvikelse; det här är ett steg, inte en lösning.'
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.107
+    a_peak: 1.1
+    b_mean: 1.038
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.045
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.132
+    c_mid: 0.603
+    c_peak: 36.3
+    p_norm: mid
+  NO-N:
+    a_amp: 0.2115
+    a_peak: 4.2
+    b_mean: 0.998
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.1135
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+  NO-S:
+    a_amp: 0.1494
+    a_peak: 5.1
+    b_mean: 0.641
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.0449
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+  SE-N:
+    a_amp: 0.0853
+    a_peak: 5.1
+    b_mean: 0.934
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.0423
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid
+  SE-S:
+    a_amp: 0.0917
+    a_peak: 5.3
+    b_mean: 0.767
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.025
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid

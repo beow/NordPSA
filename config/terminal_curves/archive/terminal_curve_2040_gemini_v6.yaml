@@ -1,0 +1,105 @@
+note: "PRODUKTIONSKANDIDAT v6, 2026-08-20. Samma KURVA som v5 -- men sasongsformens\
+  \ skala ar nu\nen EXPLICIT GLOBAL parameter `a_scale` pa toppnivan, och a_amp/a_amp2\
+  \ star med Geminis\nOSKALADE tabellvarden.\n\n    A(v) = 1 + a_scale * ( a_amp*cos(2pi(v-a_peak)/52)\
+  \ + a_amp2*cos(4pi(v-a_peak2)/52) )\n\nMOTIV: a_amp och a_amp2 maste ALLTID skalas\
+  \ tillsammans -- en gemensam faktor k ger\nA_k(v) - 1 = k*(A(v) - 1), alltsa formen\
+  \ exakt bevarad (verifierat till 2e-16) och bara\nutslaget krympt. Skalas bara a_amp\
+  \ andras andra harmoniskans relativa vikt och\nvintertoppens FORM, och ett svep\
+  \ mater da tva saker samtidigt. Fram till nu var detta en\nVANA (run384 skalade\
+  \ bada x0,5 for hand); nu kan formen inte rubbas av misstag.\n\na_scale = 0,3 ar\
+  \ dagens varde och ger BIT-IDENTISKT med v5 (verifierat, 2e-16).\na_scale = 1,0\
+  \ ger Geminis ursprungliga amplituder; 0,6 ger den ursprungligen lasta v1.\n\nFRIHETSGRADER:\
+  \ a_scale (1 global) + b_amp (5 zonvisa) + lambda_bas (1 global) = 7.\nLasta: b_mean\
+  \ 0,80 likformigt · alla sasongsfaser (a_peak, a_peak2, b_peak) · hela x_ref\n(tva\
+  \ harmoniska, per land) · kvoten a_amp2/a_amp · b_low_frac 1,0 · p_norm 'mid'.\n\
+  \nVARNING: kvoten a_amp2/a_amp (-0,27..-0,54) kommer ur Geminis lambda-tabeller\
+  \ och ar\nOPROVAD mot varje oberoende observabel -- samma sorts opastadda zonskillnad\
+  \ som b_mean\nhade innan den togs bort. Den ar last av bekvamlighet, inte av bevis.\n\
+  VARNING: facit (run386) ger lambda konstant i BADE tid och fyllnadsgrad, dvs vid\
+  \ optimum\nar a_scale = 0 OCH b = 0. Hela kurvans form ar en approximationsanordning\
+  \ for BEGRANSAD\nframsyn. Det ar darfor sankningen 0,6 -> 0,3 hjalpte, och det ar\
+  \ oppet om ett varde\ndaremellan eller under ar battre.\n\nAnkaret likformigt 73.\
+  \ Dispatch med\n--terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5."
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.535
+    a_peak: 1.1
+    b_mean: 0.8
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.225
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.1319
+    c_mid: 0.6032
+    c_peak: 36.3
+    p_norm: mid
+    c_amp2: 0.0867
+    c_peak2: 25.6
+  NO-N:
+    a_amp: 0.43166667
+    a_peak: 4.2
+    b_mean: 0.8
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.23166667
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  NO-S:
+    a_amp: 0.305
+    a_peak: 5.1
+    b_mean: 0.8
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.09166667
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  SE-N:
+    a_amp: 0.42666667
+    a_peak: 5.1
+    b_mean: 0.8
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.21166667
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4
+  SE-S:
+    a_amp: 0.45833333
+    a_peak: 5.3
+    b_mean: 0.8
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.125
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4
+a_scale: 0.3

@@ -1,0 +1,127 @@
+note: 'PRODUKTIONSKANDIDAT v5, 2026-08-20. = v4 (a_amp x0,3, x_ref tva harmoniska
+  LAST) med
+
+  b_mean LIKFORMIGT 0,80 i alla zoner, i stallet for 0,64-1,00 ur Geminis tabeller.
+
+
+  MOTIV, samma som for likformigt lambda_bas men STARKARE: i facit (run386, run320)
+  beror
+
+  lambda INTE ALLS pa fyllnadsgraden -- den ar konstant 72,87 EUR/MWh i alla zoner
+  och
+
+  alla timmar. Vid optimum ar b alltsa NOLL. b existerar uteslutande som en anordning
+  for
+
+  BEGRANSAD FRAMSYN, som ska ersatta den framsyn det rullande fonstret saknar. Det
+  finns
+
+  darfor inget ''sant'' zonvist b att mata upp; differentieringen kom enbart ur Geminis
+
+  tabeller och har aldrig provats mot nagon oberoende observabel.
+
+
+  NIVAN 0,80 ar robust mot viktning: enkelt medel 0,818, volymviktat 0,802,
+
+  produktionsviktat 0,800. Att valet av vikt knappt spelar roll ar ett gott tecken.
+
+
+  STORSTA FORANDRINGARNA: NO-S 0,641 -> 0,80 (+25 %) och NO-N 0,998 -> 0,80 (-20 %).
+
+  VARNING: NO-S ar den zon som enligt 2040-facit ska bara HELA Nordens sasongsbalansering
+
+  (v/s 1,59 mot eSetts 1,30), sa att gora dess knapphetssvar 25 % hardare ar inte
+  en
+
+  kosmetisk andring. Mat NO sarskilt.
+
+
+  OPPNA FRIHETSGRADER EFTER v5: a_amp (+a_amp2), b_amp, lambda_bas. b_mean och alla
+
+  sasongsfaser (a_peak, a_peak2, b_peak) samt hela x_ref ar lasta.
+
+  Ankaret likformigt 73. Dispatch med
+
+  --terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5.'
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.1605
+    a_peak: 1.1
+    b_mean: 0.8
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.0675
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.1319
+    c_mid: 0.6032
+    c_peak: 36.3
+    p_norm: mid
+    c_amp2: 0.0867
+    c_peak2: 25.6
+  NO-N:
+    a_amp: 0.1295
+    a_peak: 4.2
+    b_mean: 0.8
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.0695
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  NO-S:
+    a_amp: 0.0915
+    a_peak: 5.1
+    b_mean: 0.8
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.0275
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  SE-N:
+    a_amp: 0.128
+    a_peak: 5.1
+    b_mean: 0.8
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.0635
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4
+  SE-S:
+    a_amp: 0.1375
+    a_peak: 5.3
+    b_mean: 0.8
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.0375
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4

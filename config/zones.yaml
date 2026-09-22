@@ -1,0 +1,801 @@
+# NordPSA zone definitions
+# Hydro p_nom and max_hours are initial estimates — to be calibrated against eSett data.
+# NTC capacities based on approximate published values; adjust as needed.
+
+zones:
+  SE-N:
+    mbas: [SE1, SE2]
+    hydro_p_nom_mw: 13300   # SvK/Energiföretagen 2024: SE1 5.2 + SE2 8.1 GW (var 11500)
+    hydro_max_hours: 2180   # 29.0 TWh reservoarvolym bevarad (13300×2180); var 2522×11500
+    hydro_soc_initial: 0.567  # = hydro_soc_start (EC 2023-01-02, SE). VAR 0.62 (3-årssnitt
+                              # ENTSO-E A72 SE1+SE2) till 2026-08-23 — se noten vid hydro_soc_start.
+    nuclear_p_nom_mw: 0
+
+  SE-S:
+    mbas: [SE3, SE4]
+    hydro_p_nom_mw: 2900    # SvK/Energiföretagen 2024: SE3 2.6 + SE4 0.3 GW (var 2000)
+    hydro_max_hours: 1207   # 3.5 TWh reservoarvolym bevarad (2900×1207); var 1750×2000
+    hydro_soc_initial: 0.567  # = hydro_soc_start (EC ger bara LANDSNIVÅ, så SE-S delar SE-N:s
+                              # tal). VAR 0.55 (SE3+SE4 snitt) till 2026-08-23.
+    nuclear_p_nom_mw: 6900   # Forsmark 1-3 + Ringhals 3-4
+
+  NO-N:
+    mbas: [NO3, NO4]
+    hydro_p_nom_mw: 11000
+    hydro_max_hours: 2727   # 30.0 TWh reservoar (NVE NO3+NO4)
+    hydro_soc_initial: 0.630  # = hydro_soc_start (EC 2023-01-02, NO). VAR 0.70 till 2026-08-23.
+    nuclear_p_nom_mw: 0
+
+  NO-S:
+    mbas: [NO1, NO2, NO5]
+    hydro_p_nom_mw: 22000
+    hydro_max_hours: 2609   # 57.4 TWh reservoar (NVE NO1+NO2+NO5)
+    hydro_soc_initial: 0.630  # = hydro_soc_start (EC 2023-01-02, NO). VAR 0.70 till 2026-08-23.
+    nuclear_p_nom_mw: 0
+
+  DK:
+    mbas: [DK1, DK2]
+    hydro_p_nom_mw: 0
+    hydro_max_hours: 0
+    nuclear_p_nom_mw: 0
+
+  FI:
+    mbas: [FI]
+    hydro_p_nom_mw: 3200           # ~3.2 GW total installerad (Fingrid/Wikipedia 2022)
+    hydro_max_hours: 1719          # 5.5 TWh magasinsvolym (5.5e6/3200; Åbo Akademi-review); var 500 (1.6 TWh, okalibrerad placeholder från initial commit)
+    hydro_ror_fraction: 0.33       # ~1/3 av FI:s vattenkraftsENERGI är run-of-river (ej reglerbar); splittas till must-run (formad efter avrinning, glättad till CF~0.5), reservoaren får resten + hela lagervolymen
+    hydro_ror_regulated_frac: 0.80  # ⚠️ ANTAGANDE: finska verk körs dygns-/effektreglerat, inte fritt strömmande (Gemini, Montel-valideringen). Formen blandas (1-α)·inflöde + α·platt; α anpassad mot NO:s UPPMÄTTA B11 (0,75/0,87) — se scripts/synth_se_ror.SE_ROR_ALPHA. Höjer FI:s v/s 0,64 → 0,79 (mål 1,13)
+    hydro_soc_initial: 0.575  # = hydro_soc_start (EC 2023-01-02, FI). VAR 0.65 till 2026-08-23.
+    nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
+
+# Syntetisk kärnkrafts-tillgänglighet. Delade Monte-Carlo-parametrar för alla zoner;
+# antal reaktorer + seed anges per zon (befintlig: nuclear_synth_existing nedan;
+# ny: --add-nuclear ZON:N:SEED). Forcerad felrat lambda_fail härleds så att årlig
+# medel-CF ≈ target_cf.
+nuclear_synth:
+  target_cf: 0.85
+  mttr_hours: 120                    # medel reparationstid forcerat avbrott (~5 dygn)
+  maintenance_window_doy: [105, 273] # revisionsfönster, ~15 apr – 30 sep
+  maintenance_days: [25, 45]         # uniform min/max revisionslängd (dygn)
+  revision_frequency: annual         # annual | biennial
+  min_load_frac: 1.0                 # p_min_pu = min_load_frac × p_max_pu (1.0 = must-run)
+  mw_per_reactor: 1500               # --add-nuclear: tak p_nom_max = N × detta (MW/reaktor)
+
+# Befintlig kärnkraftsflotta → syntetisk profil i EXPANSIONSLÄGE (när --add-nuclear anges).
+# Kapaciteten tas från zones.nuclear_p_nom_mw; här anges bara antal reaktorer + seed per
+# zon för tillgänglighetskurvans form. Dispatchkörningar (utan --add-nuclear) använder
+# istället faktisk-data-profilen.
+nuclear_synth_existing:
+  SE-S: {n_reactors: 6, seed: 101}   # Forsmark 1-3, Ringhals 3-4, Oskarshamn 3 (≈6,9 GW)
+  FI:   {n_reactors: 5, seed: 103}   # Olkiluoto 1-3, Loviisa 1-2 (≈4,4 GW)
+
+# Continental market connections: [name, zone, p_nom_mw, price_bzn]
+# name format: "<Nord zone> <counterpart>" — becomes the PyPSA generator name
+# price_bzn: Energy Charts bidding zone code used as marginal cost signal
+# Positive flow = import (zone buys), negative flow = export (zone earns).
+# ⭐ LÅSTA 2026-08-22 (nutid OCH 2040) efter Gemini-granskning mot TYNDP 2024. Kabelnamnen
+# nedan är hans identifiering; talen är våra egna mätningar av schemalagt utbyte 2023-2025.
+market_connections:
+  - [FI EE,   FI,   1016, EE]      # EstLink 1+2. Uppmätt max 1059 (serien har luckor)
+  - [SE-S LT, SE-S,  700, LT]      # NordBalt. Inga utbyggnadsplaner (Gemini/TYNDP)
+  - [SE-S PL, SE-S,  600, PL]      # SwePol Link. Inga officiella planer
+  - [SE-S DE, SE-S,  615, DE-LU]   # Baltic Cable. ⭐ Hansa PowerBridge (700 MW) INSTÄLLD av SvK
+                                   # ⇒ ingen 2040-utbyggnad; annars vore 1300 rimligt
+  - [DK DE,   DK,   3400, DE-LU]   # FB-ekvivalent 2025: schemalagd q95 3293 (DK→DE) / 3441 (DE→DK). Var 3244
+  - [DK NL,   DK,    700, NL]      # COBRAcable, nominellt 700. Inga nya länkbeslut
+  - [DK GB,   DK,   1456, GB]      # Viking Link. ⭐ 1456 = uppmätt q95 OCH q99 (max 2120), 2023-2025.
+                                   # Gemini: märkeffekten är 1400 — den öppna frågan i 2040-blocket
+                                   # nedan är därmed BESVARAD: 1400 är nameplate, men marknaden
+                                   # klarerar 1456, och det klarerade är rätt storhet för en NTC
+  - [NO DE,   NO-S, 1400, DE-LU]   # NordLink. Norska regeringen har stoppat nya utlandskablar
+  - [NO NL,   NO-S,  640, NL]      # NorNed. Uppmätt q95 640 / q99 664; tekniskt nominellt 700 (se 2040)
+  - [NO GB,   NO-S, 1449, GB]      # North Sea Link. ⭐ q95 = q99 = MAX = 1449 i 26 304 timmar utan en
+                                   # enda överträdelse ⇒ hårt tak, samma fingeravtryck som NO-S↔DK 1680.
+                                   # Gemini föreslog 1400 (nameplate) — AVSLAGET på mätningen
+
+# Pris-elasticitet vid kontinentgränserna — UNDERLAG för pristrappa i expansion.
+# EJ INKOPPLAT ÄNNU (ingen kod läser detta; enabled=false).
+# S = prisspread (€/MWh) vid full NTC: hur mycket gränspriset rör sig när Norden
+# pressar flödet. Empiriskt förankrat i 2023-2025 prisspread per gräns (median av
+# |P_utland − P_nord| när gränsen binder, dvs spread öppnar). Asymmetriskt:
+# export ≫ import eftersom Norden är strukturellt billig (dumpar i dyr grannmarknad).
+# VARNING: 2023-2025 var gaskris-era → kontinenten strukturellt dyr; S_export i
+# överkant. Skala ner (t.ex. ×0.6) eller använd framtidsprisbana för framåtblickande
+# scenarier. Nyckel = market_connections-namn.
+# LMA2026:s TRE VÄTGASKATEGORIER (infört 2026-08-16). Andelarna är av zonens H2-last.
+#   typ 1  utan flexibilitet          → konstant EL-last, ingen H2-buss, noll LP-variabler
+#   typ 2  flexibilitet från lager    → H2-buss + Store + elektrolysör med överkapacitet
+#   typ 3  elektrobränslen            → EGEN buss + pristrappa (förbrukningsreduktion)
+#
+# ⚠️ Typ 3 MÅSTE ligga på egen buss utan lager. Delar den buss med typ 2 kan lagret
+#   laddas med "vätgas som inte producerades" och LP:t hittar arbitraget
+#   (shed 76 €/MWh → lagra → slipp H2-slacken 3000). Trappan sätter dessutom ett
+#   pristak på H2-bussen som dödar lagrets normala arbitrage.
+#
+# HÄRLEDNING av andelarna (2026-08-16): LMA anger LAGERkapacitet i EL (Figur 13, MM 2040):
+#   Sverige 60 · Norge 56 · Danmark 6 · Finland 0 GWh. Configens store_mwh är dessa
+#   × 0,66 och stämmer på MWh:en. Eftersom LMA:s regel är känd går andelarna att lösa ut:
+#     Sverige  hela lagret = LKAB etapp 2 med 4-dygnslager ⇒ typ2 = lager/(96 h)
+#              resten = pågående fossilfritt stål i SE1, ingen flexibilitet. Ingen typ 3.
+#     NO/DK    av det som INTE är elektrobränslen får 60 % 7-dygnslager
+#              ⇒ resterande = lager/(0,6×168), typ2 = 0,6·resterande, typ1 = 0,4·resterande
+#     Finland  ingen lagerflexibilitet (ej H2-ledning till kontinenten). Typ 3 från
+#              användaren (TYNDP saknades): 20 % typ 1 / 80 % typ 3.
+#   ⚠️ Förutsätter att Figur 13 producerats exakt av regeln. DK:s 6 GWh har EN värdesiffra
+#     ⇒ dess 47,6 % är osäker i ~40-55 %. NO:s 67,9 % elektrobränslen är hög och obekräftad.
+#   KONTROLL som sluter cirkeln: typ2 × lagerdygn ger 60,0 / 56,1 / 6,0 / 0 GWh_el.
+hydrogen_split:
+  SE-N: {type1: 0.7718, type2: 0.2282, type3: 0.0000}   # pågående stål SE1 / LKAB et.2 / –
+  SE-S: {type1: 0.7718, type2: 0.2282, type3: 0.0000}
+  NO-N: {type1: 0.1285, type2: 0.1929, type3: 0.6786}
+  NO-S: {type1: 0.1285, type2: 0.1929, type3: 0.6786}
+  DK:   {type1: 0.2095, type2: 0.3143, type3: 0.4762}
+  FI:   {type1: 0.2000, type2: 0.0000, type3: 0.8000}   # ANTAGANDE (användaren), TYNDP-tal saknas
+
+# Elektrobränslenas pristrappa: förbrukningsreduktion när ELPRISET passerar tröskeln.
+# Implementeras som shed-generatorer på typ 3-bussen med marginal_cost = tröskel/η,
+# eftersom elektrolysören levererar 1 MWh_H2 till kostnaden p_el/η. De ÄR slacken —
+# utan dem går H2-balansen inte att sluta när elektrolysören stängs av.
+# ⚠️ LMA anger 45/90/400. Här 50/100/440 (användaren) eftersom modellens prisnivå ligger
+#   ~10 % över LMA:s. Skillnaden är liten: elektrobränslenas kapacitetsfaktor 64-71 %
+#   (absolut) mot 68-75 % (skalad) — modellen har nästan inga timmar mellan 45 och 50.
+# ⚠️ Första steget är överskridet 78-99 % av året ⇒ verkar som NIVÅSÄNKNING, inte som
+#   prisrespons. Det intressanta är översta steget: 440 €/MWh blir ett efterfrågesvar i
+#   bristtimmar som konkurrerar med VOLL-slacken 3000.
+hydrogen_elastic:
+  enabled: true
+  price_steps_eur_per_mwh_el: [50, 100, 440]
+  shed_shares: [0.30, 0.30, 0.40]        # måste summera till 1,0 — annars kan balansen ej slutas
+
+# Elektrolysöröverkapacitet per kategori. LÅSTA (icke-extendable) sedan 2026-08-16 →
+# sex kapacitetsvariabler färre i LP:t. 1,5 = LMA:s 50 % överkapacitet, och den gäller
+# BARA typ 2: typ 1 är oflexibel per definition och typ 3:s last kan bara trappas NED,
+# så extra kapacitet där kan aldrig användas.
+electrolyser_overcapacity: {type1: 1.0, type2: 1.5, type3: 1.0}
+
+# INDUSTRIELL EFTERFRÅGEFLEXIBILITET (LMA2026, infört 2026-08-16).
+# Shed-generatorer direkt på ELBUSSEN: de "levererar" den last som kopplas bort när
+# priset passerar steget. Kvartilsmodell — volymen delas i fyra lika stora steg:
+#   steg 1  100 €/MWh  lågkostnadsflexibilitet, enkla avstängningar
+#   steg 2  250 €/MWh  måttlig processpåverkan (massa/papper, kvarnar, mellanlager)
+#   steg 3  500 €/MWh  hög processpåverkan (smältverk, termiska ugnar, gjuterier)
+#   steg 4  3000 €/MWh EXTREM nödflexibilitet — BYGGS INTE HÄR. Den ligger på VOLL-nivå
+#           och den befintliga slack-generatorn (MC_SLACK 3000) finns redan på varje buss
+#           och biter på ALL last, inte bara industrins. Att lägga en fjärde tranch där
+#           vore dubbelräkning och skulle dessutom vara degenererad med slacken.
+# ⇒ byggd volym = 75 % av totalen (3 × 25 %).
+#
+# VOLYMER (användaren): SE 2,5 · NO 3 · FI 2 · DK 1 GW. Zonsplit för SE och NO satt av
+# ANVÄNDAREN till 50/50 (1250+1250 respektive 1500+1500).
+# ⚠️ 50/50 är ett medvetet val, inte härlett ur lastdata. Mitt dataförslag var
+#   SE-N 21,7 / SE-S 78,3 % och NO-N 37,7 / NO-S 62,3 % (lastens flacka baskomponent
+#   P05 som industriproxy) — alltså BETYDLIGT mer vikt söderut. Skillnaden är stor för
+#   SE-N: 543 mot 1250 MW. 50/50 ger norra zonerna mer efterfrågeflexibilitet än deras
+#   lastandel motiverar, vilket är försvarbart om den tunga industrin (gruvor, stål,
+#   massa) väger tyngre där än totallasten antyder — men det bör sägas högt.
+#   ⚠️ Ingen av proxyerna isolerar industri: metered fångar industri PLUS stora
+#   kommersiella kunder (och är oanvändbar för NO/FI, som rapporterar 99,8 % timmätt
+#   av avräkningsskäl), P05 fångar all alltid-på-last. Landstotalerna är dock givna.
+#
+# ⚠️⚠️ DUBBELRÄKNING MOT POWER-TO-X: LMA beskriver steg 1 som "lågkostnadsflexibilitet,
+#   POWER-TO-X och enkla avstängningar". Men PtX-flexibiliteten ligger redan i
+#   hydrogen_elastic (elektrobränslenas trappa, 2334 MW_el = 20,4 TWh/år). Om de 8,5 GW
+#   inkluderar PtX räknas samma flexibilitet två gånger — och just kring 100 €/MWh där
+#   båda stegen ligger. Här ANTAS volymerna vara EXKLUSIVE PtX. Stämmer inte det ska
+#   ~2,3 GW dras av. OKONTROLLERAT.
+industrial_dsr:
+  enabled: true
+  # ⛔⛔ TRÖSKLARNA OCH ANDELARNA ÄR MODELLANTAGANDEN UTAN KÄLLA. LMA26 s.60 säger bara
+  #   "priser och volymer från TYNDP 2024, endast reduktion vid över 90 EUR/MWh medtagen"
+  #   och redovisar utfallet som en stapel (Fig. 15) utan nedbrytning på prisnivåer.
+  #   TYNDP 2024:s DSR-tabell är INTE PUBLICERAD: genomsökt 2026-09-09 (Scenarios Report,
+  #   Annex, Methodology Report, Implementation Guidelines, Final Supply Inputs, Scenario
+  #   Report Data Figures) — Annex V pekar ut "DSR → Electricity → ENTSO-E", dvs. en
+  #   TSO-insamling som inte ingår i det öppna paketet. Vi kan alltså inte verifiera dem.
+  # ⭐ Externt STÖD för steg 2-3 (Gemini, industrins smärtgränser, spotpris):
+  #     massa & papper       1,50-3,00 kr/kWh = 130-261 EUR/MWh  → vårt steg 2 (250) ✓
+  #     järn/stål/smältverk  3,00-5,00+       = 261-435+         → vårt steg 3 (500) ✓
+  #   Robust mot växelkursen (10,5-12,0 SEK/EUR). ⛔ Men steg 1 (100 = 1,15 kr/kWh) ligger
+  #   UNDER hans lägsta smärtgräns — ingen tung industri reagerar där. Trolig förklaring:
+  #   LMA flyttade all sub-90-flex till industriposten ("modelltekniskt ingen betydelse"),
+  #   så steg 1 är uppsamlad ÖVRIG flexibilitet, inte pappersbruk. ⚠️ Läs det inte som
+  #   industri. Steg 1 gör 96 % av allt uttag i modellen (run450: 2,880 av 3,013 TWh/år).
+  # ⛔ LMA nämner även "restriktioner på hur många timmar per dygn" — vi har INGET dygnstak.
+  price_steps_eur_per_mwh: [100, 250, 500]   # steg 4 = VOLL, se ovan
+  # ⭐ 2026-09-09: 25/25/25 → 20/40/25 (+15 % på VOLL-kvartilen). Tyngdpunkten flyttas till
+  #   250 = massa/pappers-nivån, som är den sektor Gemini kallar den mest flexibla. Byggd
+  #   andel går 75 → 85 %. Vid volym 6000: steg1 1200 (var 2125, −44 %) · steg2 2400 (+13 %)
+  #   · steg3 1500 (−29 %) · VOLL 900. ⚠️ Summan är 100 % — kontrollera det vid ändring,
+  #   koden validerar bara att listan är lika lång som price_steps.
+  step_shares: [0.20, 0.40, 0.25]            # av volymen; resterande 0,15 = VOLL-slacken
+  # ⭐ VOLYMERNA OMLAGDA 2026-09-09: 8500 → 6000 MW, i LMA26 Figur 15:s proportioner.
+  #   Var: SE 2500 · NO 3000 · FI 2000 · DK 1000 (användarens tal, utan källa).
+  #   LMA26 Fig. 15 (MM), kategori Industri: FI 2,61 · NO 2,27 · SE 1,74 · DK 0,26 GW
+  #   = 6,88 GW ⇒ andelar 0,3794 / 0,3299 / 0,2529 / 0,0378. Skalat till 6000.
+  #   ⚠️ Fig. 15 är för 2050; Fig. 10 visar att SE:s industripost är KONSTANT 1,7 GW i
+  #     alla år och scenarier, vilket stöder att använda den för 2040.
+  #   ⚠️ Rangordningen VÄNDER mot förr: FI är störst, inte NO. DK faller 1000 → 227.
+  # ⭐ N/S-splitten är nu HÄRLEDD, inte handsatt: lastens P05 (alltid-på-baskomponenten som
+  #   industriproxy) ger SE-N/SE-S 0,217/0,783 och NO-N/NO-S 0,377/0,623. Kontroll med
+  #   medellast ger 0,206/0,794 resp. 0,356/0,644 — ≤2,1 pp isär, alltså robust mot valet
+  #   av statistika. Ersätter den tidigare 50/50-splitten, som var uttryckligen handsatt.
+  #   ⚠️ P05 isolerar inte industri — den fångar all alltid-på-last, inkl. stora
+  #     kommersiella kunder. Men LMA:s volymer är aggregerad TYNDP-flex utan geografisk
+  #     upplösning, så det finns inget i källan som stöder en nordlig övervikt.
+  volume_mw:
+    SE-N:  329   # 0,2529 × 6000 × 0,217
+    SE-S: 1188   # 0,2529 × 6000 × 0,783
+    NO-N:  746   # 0,3299 × 6000 × 0,377
+    NO-S: 1233   # 0,3299 × 6000 × 0,623
+    DK:    227   # 0,0378 × 6000
+    FI:   2276   # 0,3794 × 6000
+
+market_elasticity:
+  enabled: false
+  n_tiers: 3                              # steg per riktning
+  offset_profile: [0.1667, 0.5, 0.8333]   # {1/6,1/2,5/6}·S (mittpunkts-approximation)
+  spread_eur_per_mwh:        # per gräns: export-spread / import-spread (€/MWh vid full NTC)
+    FI EE:   {export: 59, import: 15}
+    SE-S LT: {export: 44, import:  6}
+    SE-S PL: {export: 64, import: 10}
+    SE-S DE: {export: 50, import:  7}
+    DK DE:   {export: 16, import:  6}
+    DK NL:   {export: 21, import:  5}
+    DK GB:   {export: 28, import: 13}
+    NO DE:   {export: 38, import: 16}
+    NO NL:   {export: 38, import: 14}
+    NO GB:   {export: 44, import: 15}
+
+# Fjärrvärmesektor (v3 "1 buss + laster"): bara FJÄRRVÄRME får en optimeringsnod
+# (där flexibiliteten bor). Per zon: heat-Bus + Load(FV-värmebehov, termiskt, profil ur
+# heat_load.parquet skalad till dh_demand_twh) + Store(ackumulator) + Link el-panna (η≈1)
+# + Link stor-VP (COP) + Generator bio/KVV (konkurrerande MC) + slack.
+# DUBBELRÄKNING: el_input_twh = dagens el IN i FV (el-panna+VP) som redan ligger i eSett-
+# lasten → dras bort ur AC-lasten (proportionellt mot värmeprofilen), bussen återinför
+# elen endogent. Aktivera med --add-heat. SE-tal: demand=EM 45 TWh (SE-S 40/SE-N 5);
+# el_input ~3-4 TWh ANTAGANDE (förfinas mot EM-bränslemix). Byggnads-VP+industri = laster.
+heat:
+  enabled: false
+  cop: 3.0                          # stor-VP COP (konstant tills v. temp-beroende)
+  mustrun_share: 0.41               # avfall+avfallsgas+restvärme+rökgaskond (~0 MC, must-run);
+  mustrun_vom_eur_per_mwh: 0.0      #   EM-bränslemix 2024: 20.4+1.9+8.0+11.2 = 41.5% — avlastar AC
+  bio_vom_eur_per_mwh: 28.0         # bio/KVV (bio 45.9%) — dispatchbart mellanskikt, sätter el-tröskeln
+  el_tax_eur_per_mwh: 35.0   # GLOBAL default = svensk energiskatt på el till fjärrvärme.
+                             # ⚠️ ÖVERSTYRS PER ZON nedan. Skatten avgör helt om elpanna och
+                             # stor-VP kan konkurrera mot bio (28 €/MWh_värme):
+                             #   elpanna av över  (28 − 0,5) − skatt   → −7,5 vid 35, +27,5 vid 0
+                             #   VP av över      (28 − 0,5)·COP − skatt → 47,5 vid 35 (COP 3),
+                             #                                            82,5 vid 0, DK 110 vid 0
+                             # Vid 35 kör elpannan alltså ALDRIG opportunistiskt — den syns bara
+                             # som sista utväg för värme vid 109-127 €/MWh (mätt i run343), vilket
+                             # är raka motsatsen till LMA:s "producerar endast vid lågt elpris".
+                             # Utan skatt hamnar tröskeln 27,5 mitt i LMA:s intervall 15-50.          # energiskatt på el (~0.39 SEK/kWh) på FV-el (panna+VP) → per MWh el
+  elboiler_vom_eur_per_mwh: 0.5
+  hp_vom_eur_per_mwh: 0.5
+  store_hours: 6                    # ackumulator = store_hours × topplast (fast läge, om zonen saknar store_gwh)
+                                    # per-zon store_gwh (i heat.zones) överstyr → explicit fast lagervolym i GWh_th
+  slack_eur_per_mwh: 3000
+  zones:                            # SE: EM-bränslemix 2024; DK: Dansk Fjernvarme 2022 + DEA 2024 (NO≈0; FI senare)
+    # chp: bakpress-KVV, c=eta_el/eta_heat≈0.45 (svensk KVV värmefokuserad). SE-S CHP-el ~8.6 TWh
+    # (korrigerar thermal-under-rep 5→~8 ≈ verklig SE-S-KVV); SE-N ~1 ≈ thermal. share_of_thermal 1.0.
+    SE-N: {dh_demand_twh:  5.0, el_input_twh: 0.15, hp_el_mw:  40, elboiler_mw:  80, store_gwh:   5,
+           chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}   # HP/panna ~6.7%/0.8%
+    SE-S: {dh_demand_twh: 40.0, el_input_twh: 1.25, hp_el_mw: 300, elboiler_mw: 600, store_gwh:  20,
+           chp: {eta_el: 0.25, eta_heat: 0.55, fuel_vom: 22.0, share_of_thermal: 1.0}}
+    # DK: levererat ~30 TWh; el-panna-DOMINANT (4% panna / 1% VP), COP 4, must-run 0.25 (avfall 22%+sol 3%).
+    #     chp: bakpress-KVV (multi-output Link bränsle→el+värme). Ersätter heat-only-bio + DK must-run-termisk
+    #     (share_of_thermal 1.0 → all DK-termisk endogen via KVV; korrigerar under-rep. ~3 vs ~10 TWh).
+    #     c=eta_el/eta_heat≈0.48 (DK ~10 TWh el / ~21 TWh värme). Första version — kalibreras.
+    # ⚠️ el_tax 0 för DK och FI (2026-08-16): ingen elskatt på VP/elpanna i fjärrvärme där,
+    #    till skillnad från SE. Det är exakt varför LMA2026:s VP- och elpanne-flexibilitet
+    #    får genomslag i just DK och FI. ANTAGANDE: satt till 0, verkliga finska klass II
+    #    och danska reducerade satser är låga men inte noll.
+    DK:   {el_tax_eur_per_mwh: 0.0, dh_demand_twh: 30.0, el_input_twh: 1.3, hp_el_mw: 80, elboiler_mw: 400, cop: 3.0, mustrun_share: 0.25, store_gwh: 20,
+           chp: {eta_el: 0.26, eta_heat: 0.54, fuel_vom: 22.0, share_of_thermal: 1.0}}
+    # FI (Finsk Energi "District heating 2024", first version): konsumtion 32.7 TWh; VP/återvinning 7.8 TWh (~22%,
+    #   FI elektrifierar hårt); KVV-andel 37% (ner från 76%), DH-KVV-el 4.5 TWh. NYCKEL: FI-thermal (12.3 TWh i
+    #   modellen) domineras av INDUSTRI-KVV (skogsbruk) → share_of_thermal 0.37 (bara DH-KVV endogen, ~4.5 TWh;
+    #   industri-KVV ~7.8 stannar must-run). c aggregerat lågt (DH-KVV + värme-bara-pannor). KALIBRERAS.
+    FI:   {el_tax_eur_per_mwh: 0.0, dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15, store_gwh: 100,
+           chp: {eta_el: 0.16, eta_heat: 0.76, fuel_vom: 22.0, share_of_thermal: 0.37}}
+
+# Fordonsladdning (EV smart charging). Antal fordon per zon anges via CLI --add-ev.
+# Per-fordon-tal = PLATSHÅLLARE (nordiska medel) att trimma. Bara smart laddning (ingen V2G).
+ev:
+  enabled: false
+  mode: svk                         # svk = SvK-formulering (flex/oflex-split); fleet = gammal per-fordon-modell
+  flex_fraction: 0.5                # andel av förbrukningen som är flyttbar (SvK: hälften laddar flexibelt)
+  flex_battery_gwh_per_twh: 12      # LMA26 §4.5.1: 12 GWh per TWh, appliceras på flex-TWh → flex-batteri = 12 × flex-TWh (LMA26 MM: 31,2 flex-TWh × 12 = 375 GWh, Figur 11). Med modellens konservativa 44,2 TWh EV: 22,1 flex-TWh × 12 = 265 GWh, laddtak 265/10h = 26,5 GW (30 kWh/flexibelt fordon = halva 60 kWh-packet). (8.48 var dubbelfel: halverade redan-flex 375 OCH delade med för-låg flex-TWh)
+  charge_hours: 10                  # SvK: laddtid → flex-laddeffekt = flexbatteri / charge_hours
+  morning_soc_floor: 0.7            # SOC-golv (e_min_pu) kl morning_soc_hour → tvingar daglig laddning
+  morning_soc_hour: 6               # bryter perfekt-framsyn-flerdygnscoast (0 = inget golv)
+  slack_eur_per_mwh: 3000           # omött mobilitet (sista utväg)
+  classes:
+    # annual_mwh används i båda lägen (E_tot = antal × annual_mwh). battery_kwh/charger_kw
+    # används BARA i fleet-läget; charge_efficiency ignoreras i svk-läget (SvK räknar grid-side).
+    car:   {battery_kwh: 60,  annual_mwh: 2.5, charger_kw: 7,   charge_efficiency: 0.90}
+    heavy: {battery_kwh: 400, annual_mwh: 120, charger_kw: 150, charge_efficiency: 0.90}
+
+# Interconnections: [zone_from, zone_to, capacity_mw]
+# Capacity applies in both directions.
+# OMKALIBRERADE 2026-08-16. Metod: Ruhnau m.fl. (2024) q95 på scheduled commercial
+# exchanges, MEN i fönstret 2023-01-01 → 2024-10-30 (scripts/calibrate_ntc.py, default).
+# ⚠️ Fönstret slutar vid flow-based go-live: därefter finns ingen kapacitet per gräns.
+#   Bilateralt "schema" blir då en efterkonstruerad uppdelning av zonernas nettopositioner
+#   och kan överstiga varje fysisk gräns (mätt: SE2→NO3 6986 MW på en ~1000 MW-korridor).
+# ⚠️ q95 duger BARA där gränsen binder >~5 % av tiden — annars mäter den handelsefterfrågan,
+#   inte taket. Där q95 inte duger används PUBLICERAD day-ahead-kapacitet i stället
+#   (query_offered_capacity A01, hämtas av scripts/fetch_ntc.py → data/raw/capacity/).
+#   Den publiceringen upphör också exakt 2024-10-29, samtliga 24 riktningar.
+# ⚠️ Kapaciteterna är i verkligheten ASYMMETRISKA (Fenno-Skan 1200 söderut men ~300 i
+#   median norrut). PyPSA-länken här är symmetrisk, så värdet är den större riktningen.
+links:
+  - [NO-N, SE-N,  1150]   # FB-ekvivalent 2025: prisfiltrerad q95 av FYSISKT flöde 988 (N→S) / 1153 (S→N).
+                          # Var 1500 (publ. kap. 1400/1550, q95 1375 av schemalagt i FB-fria fönstret)
+  - [SE-N, SE-S,  7300]   # q95 7240 OCH publ. kap. max 7300 sammanfaller. Binder 6,7 %. Var 7600
+  - [SE-N, FI,    1550]   # q95 = publ. kap. i fönstret (pre-Aurora). Aurora live nov 2025 → 2000 nedan
+  - [NO-N, NO-S,   700]   # publ. kap. 250 median → 750 max (NO3↔NO1 350 + NO3↔NO5 400). q95 498 = efterfrågan.
+                          # Var 1773 = 2,4-7× för högt. Bekräftar att transiten NO-N→SE→NO-S inte finns fysiskt
+  - [NO-S, SE-S,  1900]   # FB-ekvivalent 2025: fysisk q95 1234 (NO→SE) / 1927 (SE→NO), starkt asymmetrisk.
+                          # Var 2100 (publ. kap. 2145/2095, schemalagd q95 1877)
+  - [NO-S, DK,    1681]   # q95 = q99 = max = publ. kap. 1680. Binder 15 % ⇒ hårt tak, avläst direkt
+  - [SE-S, DK,    2000]   # FB-ekvivalent 2025: fysisk q95 1991 (SE→DK) / 1066 (DK→SE); exporten kapas
+                          # exakt vid 2015 = publ. asymmetri 2015/2415. Var 2400
+  - [SE-S, FI,    1200]   # Fenno-Skan. q95 = max = 1200 i BÅDE 2023-24 och 2026 YtD. Hårt tak
+
+# Tidsdimension via körtyp: dispatch (--no-expansion) modellerar historiska 2023-2025
+# och använder NTC ovan; expansionskörningar modellerar framtida system och får
+# post-utbyggnads-NTC nedan (appliceras i run_model.py när expansion är på).
+# Aurora-linjen (SE-N–FI) togs i drift slutet 2025: 1200 (historisk) → 2000 (expansion).
+links_expansion_overrides:
+  - [SE-N, FI,    2000]   # Aurora post-go-live
+  - [NO-N, NO-S,  1000]   # post-utbyggnad NO3↔NO1 + NO3↔NO5. Nutid 700 är den FB-fria kalibreringen;
+                          # fysisk q95 2025 är 1018, men den innehåller svensk transit (SE2→NO3→NO1)
+                          # som modellen redan bär på SE-N↔SE-S — 1000 är alltså ett UTBYGGNADSantagande
+
+# Dagens (befintliga) batterier — laddas som FRIA (capital_cost=0, sunk) i dispatch/
+# dagens-värld-körningar (dvs när INGET --demand-scenario är aktivt). I demand-scenario-
+# körningar representeras batteriflottan i stället av scenariots egna 'battery:'-poster,
+# så baseline hoppas då över (undviker dubbelräkning). [zon, MW, timmar].
+baseline_batteries:
+  - [SE-S, 1500, 2]
+  - [FI,    500, 2]
+  - [DK,    400, 2]
+
+# Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
+# Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
+
+# Driftrestriktioner på RESERVOARvattenkraften (REN OPTION, default av).
+# Aktiveras med --hydro-restrictions. Hindrar LP:ns två orealistiska ytterligheter:
+# (a) att stänga av vattenkraften helt under långa lågprisperioder — små magasin i
+# älvsystemen skulle svämma över; (b) att köra maxeffekt vecka efter vecka, ett
+# vanligt utfall i ELLI-liknande modeller.
+# Alla andelar avser RESERVOARDELENS p_nom (efter ev. RoR-split), inte hela flottan.
+# FAKTISK fyllnadsgrad vid periodens start (2023-01-01), för --rolling-horizon.
+#
+# ⚠️ SKILJ FRÅN zones.*.hydro_soc_initial. Den är CYKLISKA körningars ankare för
+# start = slut ("normalnivå att återvända till") och ändras INTE här — en ändring där
+# skulle göra run260-baselinen oreproducerbar. Detta är något annat: ett äkta
+# BEGYNNELSEVILLKOR. I rullande horisont finns inget cykliskt villkor alls, nivån bärs
+# över från fönster till fönster i tre år, och startvärdet propagerar därför genom hela
+# körningen i stället för att tvättas bort.
+#
+# ⛔ ANVÄNDS INTE LÄNGRE SOM DEFAULT (2026-08-23). Rullande horisont startar numera på
+# hydro_soc_initial — samma nivå som expansionen — så att de två lägena blir jämförbara.
+# Mätt på run418 mot run418-dispatch: den gamla defaulten startade dispatchen 8 TWh lägre
+# (61,1 % mot 67,5 % av 125,4 TWh), vilket gjorde årsvisa prisjämförelser mellan lägena
+# missvisande.
+#
+# KÄLLA: Energy Charts, veckovis magasinenergi (TWh per land),
+# veckan 2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16 — dividerat med modellens
+# zonvolymer (SE 32,49 / NO 87,40 / FI 5,50 TWh).
+# ⚠️ ANTAGANDE: samma fyllnadsgrad i båda delzonerna inom ett land (EC ger bara
+# landsnivå). SE-N och SE-S kan i verkligheten skilja sig åt.
+hydro_soc_start:
+  SE-N: 0.567
+  SE-S: 0.567
+  NO-N: 0.630
+  NO-S: 0.630
+  FI:   0.575
+
+hydro_operation:
+  active: false
+  # ── LÅSTA 2026-08-14 efter run337/340/341/342. Ändra inte utan ny mätning. ──
+  # Kalibrerade mot hydrons BUDKURVA i faktiska data (produktion mot pris,
+  # adelsfors.se juni 2026, SE1+SE2) — en annan observabel än säsongskvoten.
+  #
+  # min_hourly 0,05 (var 0,10): styr golvet i de BILLIGASTE timmarna. Vid 0,10 körde
+  #   modellen 3,3 GW i SE-N vid nollpris mot verklighetens ~2,0; vid 0,05 blir det
+  #   2,78 och medelfelet under 10 EUR/MWh faller 1,40 -> 0,89 GW. Resten av
+  #   avvikelsen är STRÖMKRAFTEN (2,34 GW i juni), som inte styrs härifrån.
+  #   ⚠️ Kostar 0,09 i facit-poäng (0,338 -> 0,425): timgolvet och säsongsmåttet
+  #   drar åt olika håll, och valet föll på det observerade beteendet.
+  # min_daily 0,20 OFÖRÄNDRAT: run341 (0,10) och run342 (0,15) TESTADE och FÖRKASTADE.
+  #   Dygnsgolvet binder inte alls vid låga priser — produktionen under 40 EUR/MWh är
+  #   identisk (2,78 GW) för 0,10/0,15/0,20. Det binder i mellanregistret 40-70, där
+  #   verkligheten producerar ÄNNU MER än modellen, så att sänka det gjorde
+  #   anpassningen sämre (MAE 20-60 EUR/MWh: 1,96 -> 2,21 -> 2,28) och drev driften
+  #   positiv (-1,0 -> +2,6 -> +3,7 TWh, dvs hamstring).
+  # ⚠️ Varken 0,05 eller 0,20 kommer från Ek Fälth m.fl. — de är modelleringsräcken.
+  #   Bara max_weekly_frac_by_zone och bypass_spill har källa (docs/hydro_restrictions.pdf).
+  min_hourly_frac: 0.05    # min timproduktion / installerad reservoareffekt
+  min_daily_frac:  0.20    # min dygnsproduktion / maximal dygnsproduktion
+  max_weekly_frac: 0       # 0 = inget globalt tak; sätts per zon nedan (provenienser skiljer sig)
+  # Källa: Ek Fälth m.fl. (2025), supplementary material (docs/hydro_restrictions.pdf),
+  # Figur A.2 "Sustained capacity", scenariot Present regime, 1 vecka. Avläsning ur
+  # violinplottar → osäkerhet ca ±2–3 procentenheter. Studien täcker BARA Sverige.
+  # Per prisområde: SE1 0.77, SE2 0.87, SE3 0.77. Aggregeras till NordPSA-zoner viktat
+  # med installerad vattenkraft (SE1 5.2 / SE2 8.1 / SE3 2.6 / SE4 0.3 GW).
+  # Kontroll: samma viktning på hela Sverige ger 0.82 mot figurens ~0.84 → viktningen håller.
+  max_weekly_frac_by_zone:
+    SE-N: 0.83   # KÄLLA: SE1 0.77 + SE2 0.87, kapacitetsviktat
+    SE-S: 0.77   # KÄLLA: SE3 (SE4 saknar värde i studien, 0.3 GW → försumbart)
+    NO-N: 0.85   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 3148 h mot SE-N 2723 h
+    NO-S: 0.85   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 3131 h; högfallsverk med
+                 #   stora magasin direkt uppströms → bör hålla minst SE-N:s nivå
+    FI:   0.80   # ⚠️ ANTAGANDE: ej i studien. Reservoartimmar 2363 h, lågfallsverk med
+                 #   små magasin (1/3 av energin redan avskild som RoR) → närmare SE-S
+  # ⚠️ Alternativ tolkning: Figur A.3 "Sustained production" mäter veckoENERGI och är
+  # formellt närmare detta villkor än A.2 (som mäter uthållig EFFEKT). Den ger SE-N 0.85,
+  # SE-S 0.80. Värdena ovan följer A.2 eftersom referenstexten anger 0.77 för SE1, vilket
+  # är A.2-siffran. A.2 är den konservativa (hårdare) av de två.
+  # ⚠️ Stark säsongsvariation i Figur A.4 (SE1: ~72 % i mars, ~91 % i maj–juni) fångas INTE
+  # av ett årskonstant tak. Kräver månadsvis tak — ej implementerat.
+  # Spill förbi mindre stationer, som krävs för att hålla hög produktion länge.
+  # Linjärt gångjärn: Σ_vecka spill ≥ coefficient × (Σ_vecka prod − tröskel), där
+  # tröskel = (max_weekly_frac − threshold_below_max) × p_nom × veckans timmar.
+  # ⚠️ Default AV: PyPSA:s spill är uppåt begränsad av tillrinningen i samma snapshot,
+  # så en vecka med hög produktion men låg tillrinning kan bli INFEASIBLE. 'coefficient'
+  # (MWh spill per MWh produktion över tröskeln) anges inte i källan — måste kalibreras.
+  # κ kalibrerad mot Figur A.5 "Loss of total annual production" (Present regime, 1 vecka):
+  # SE1 0.12 %, SE2 0.13 %, SE3 0.22 % av årsproduktionen per uthållig högprisvecka.
+  # En vecka som ligger på taket överskrider tröskeln med threshold_below_max × p_nom × 168,
+  # så κ = förlust × tillrinningsandel × 8760 / (threshold_below_max × 168).
+  bypass_spill:
+    active: false
+    threshold_below_max: 0.10
+    coefficient: 0.34          # fallback = SE-N
+    coefficient_by_zone:
+      SE-N: 0.34   # KÄLLA: A.5 SE1 0.12 % / SE2 0.13 %, tillrinningsandel 0.510
+      SE-S: 0.59   # KÄLLA: A.5 SE3 0.22 %, tillrinningsandel 0.512
+      NO-N: 0.30   # ⚠️ ANTAGANDE: ej i studien; stora magasin → mindre förbiledning
+      NO-S: 0.30   # ⚠️ ANTAGANDE: som NO-N
+      FI:   0.55   # ⚠️ ANTAGANDE: ej i studien; små magasin → nära SE-S
+
+# Simulation period
+snapshots:
+  start: "2023-01-01"
+  end:   "2026-01-01"   # exclusive, i.e. up to and including 2025-12-31
+  resolution_hours: 2   # kanonisk expansions-baseline (run250-konfen); 1 = full timupplösning
+
+# Technology costs
+# discount_rate and fom_fraction apply to all technologies.
+# capital_cost = overnight_eur_per_w * 1e6 * (CRF + fom_fraction)  [EUR/MW/yr]
+costs:
+  discount_rate: 0.06
+  fom_fraction:  0.02   # fraction of overnight cost per year
+
+  nuclear:
+    overnight_eur_per_w: 7.0
+    lifetime_years: 60
+    vom_eur_per_mwh: 20.0
+    extendable: true
+    p_nom_max_mw: 20000    # max utbyggnad per zon
+
+  wind_onshore:
+    overnight_eur_per_w: 1.2      # DEA ~1.04-1.13 ✓
+    lifetime_years: 30            # DEA-kalib (var 25)
+    vom_eur_per_mwh: 1.6          # DEA
+    fom_fraction: 0.011           # DEA ~12.6 €/kW/år (global 2% = 24 var ~2× för högt → hindrade vind)
+    extendable: true
+    p_nom_max_mw: 50000
+
+  wind_offshore:
+    overnight_eur_per_w: 2.2      # DEA ~1.9-2.3 inkl nät (var 2.5)
+    lifetime_years: 30            # DEA-kalib (var 25)
+    vom_eur_per_mwh: 3.0
+    fom_fraction: 0.018           # DEA ~40 €/kW/år
+    extendable: true
+    p_nom_max_mw: 50000
+
+  solar:
+    overnight_eur_per_w: 0.40     # DEA ~0.40 utility (var 0.5, ~25% högt)
+    lifetime_years: 35            # DEA-kalib (var 30)
+    vom_eur_per_mwh: 1.0
+    fom_fraction: 0.019           # DEA ~7.5 €/kW/år
+    extendable: true
+    p_nom_max_mw: 50000
+
+  gas:
+    overnight_eur_per_w: 0.45     # OCGT (var 2.0, 2-4× för högt); peaker → VOM dominerar
+    lifetime_years: 30            # (var 40)
+    vom_eur_per_mwh: 100.0        # bränsle + CO2-proxy
+    fom_fraction: 0.04            # OCGT ~18 €/kW/år
+    extendable: true
+    p_nom_max_mw: 20000
+
+  hydro:
+    vom_eur_per_mwh: 0.6        # reservoarkraft (lagringsvärde)
+    vom_ror_eur_per_mwh: 0.5    # run-of-river (must-run, lägre än reservoar)
+    extendable: false   # hydro capacity fixed; no new reservoirs
+
+  # Värmeförsörjning (--add-heat). extendable=true → modellen dimensionerar mot
+  # dessa kostnader i expansion; --no-expansion låser dem (som alla costs.*).
+  # overnight anges per MW OUTPUT; koden konverterar till komponentens p_nom-enhet:
+  #   heat_pump   (€/W_th) ×COP   → per MW_el (Link-p_nom)
+  #   heat_elboiler (€/W_th) ×η   → per MW_el (Link-p_nom)
+  #   heat_chp    (€/W_el) ×η_el  → per MW_fuel (Link-p_nom)
+  #   heat_bio    (€/W_th) =      per MW_th (Generator-p_nom, bara icke-CHP-zoner)
+  heat_pump:
+    overnight_eur_per_w: 0.85   # DEA stor central VP (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 10000         # MW_el per zon
+  heat_elboiler:
+    overnight_eur_per_w: 0.12   # elektrodpanna (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 10000         # MW_el per zon
+  heat_chp:
+    overnight_eur_per_w: 4.0    # biobränsle-CHP per MW_el (DEA/Gemini 3-6)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 40000         # MW_fuel per zon
+  heat_bio:
+    overnight_eur_per_w: 0.6    # heat-only biopanna (per MW_värme)
+    lifetime_years: 25
+    fom_fraction: 0.03
+    extendable: true
+    p_nom_max_mw: 20000         # MW_th per zon
+
+  # Li-ion (LFP) utility-scale. Tvådelad kostnad: effektdel (€/kW på p_nom,
+  # växelriktare/BOP/nät) + energidel (€/kWh × max_hours, celler). Near-term,
+  # mellan DEA 2030 (142 €/kWh / 160 €/kW) och NREL ATB 2024. Kort livslängd.
+  # overnight €/MW = (power_eur_per_kw + max_hours × energy_eur_per_kwh) × 1000
+  battery:
+    energy_eur_per_kwh: 180
+    power_eur_per_kw:   150
+    lifetime_years:     15
+    fom_fraction:       0.025
+    p_nom_max_mw:       50000   # tak per zon för expanderbara batterier
+
+  # Vätgas (power-to-X). Elektrolys (el→H2), Store-lager (energi €/kWh, effekt via
+  # länkar), valfri turbin (H2→el). Allt i MWh LHV. overnight: el/turbin €/kW,
+  # lager €/kWh. efficiency = verkningsgrad (LHV). Kalibrerat mot DEA 2030
+  # (Technology Data, korsverifierat mot PyPSA technology-data), 2026-06-07.
+  hydrogen:
+    # Alkalisk elektrolysör, 100 MW-skala (DEA 2030: 575 €/kW, 66% LHV, FOM 4%)
+    electrolyser: {overnight_eur_per_kw: 575, lifetime_years: 25, fom_fraction: 0.04, efficiency: 0.66}
+    # Vätgas-OCGT som peaker (DEA OCGT 2030: 435 €/kW, 41% el-verkningsgrad)
+    turbine:      {overnight_eur_per_kw: 435, lifetime_years: 25, fom_fraction: 0.03, efficiency: 0.41}
+    # Lager per zon enligt geologi: default bergrum/ståltank (urberg, DEA ~5 €/kWh);
+    # zoner med saltdomer (DK) får billig saltkavern (DEA ~0.5 €/kWh).
+    store:
+      overnight_eur_per_kwh: 5          # default: bergrum/ståltank (SE/NO/FI urberg)
+      overnight_eur_per_kwh_by_zone:    # geologiska undantag
+        DK: 0.5                         # saltdomer → saltkavern
+      lifetime_years: 30
+      fom_fraction:   0.02
+      e_nom_max_mwh:  500000            # 500 GWh tak per zon för expanderbart lager
+    slack_eur_per_mwh:    3000     # omött H2 / dyr import — sista utväg
+    electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
+
+# Kostnadsscenarier för expansionskörningar (SvK Långsiktig marknadsanalys 2026,
+# 2024 års prisnivå). Väljs med --cost-scenario svk_2040 | svk_2050 → run_model
+# skriver över cfg['costs'] per teknik. Byggränta (IDC): overnight' = OC·(1 +
+# build_years/2·r); fom_fraction = fast_DoU/overnight' (bevarar absolut O&M).
+# Råvärden: oc_eur_per_kw (tab 30 OIC), fom_eur_per_kw (tab 31 fast DoU),
+# build_years (tab 29), lifetime_years (tab 29), vom_eur_per_mwh (SRMC = bränsle
+# tab 9 / η + rörlig DoU tab 32; η_kärn 0.33 → kärnkr 1.7/0.33 + 3.8 ≈ 9.0). I
+# dessa scenarier representerar tekniken 'gas' (carrier
+# 'gas') CCGT-CCS i st.f. OCGT — vom = full SRMC (bränsle + rest-CO2 + CTS + O&M;
+# antaganden η_CCS 0.50, fångst 90%, ef_gas 0.20, CTS 20 €/t). Hydro/heat/H2
+# behåller sina DEA-värden ovan; dispatch-basblockets gas (OCGT) är orört.
+cost_scenarios:
+  # Dagens (2025) kostnadsnivå, LMA26 Tabell 30 (OIC) / 31 (fast DoU) / 32 (rörlig DoU),
+  # 2025-kolumnen, 2024 års prisnivå. Batteri-split (power/energy) anpassad så alla tre
+  # varaktigheter reproduceras: 2h≈1013, 4h=1670, 8h≈2984 EUR/kW (Tab30). Gas=CCGT-CCS,
+  # vom = SRMC med 2030 bränslepriser (Tab9: naturgas 23.5, CO2 136.9 → 63.7 €/MWh).
+  svk_2025:
+    wind_onshore:  {oc_eur_per_kw: 1410, fom_eur_per_kw:  30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 3350, fom_eur_per_kw: 102.5, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  873, fom_eur_per_kw:   9.2, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 8000, fom_eur_per_kw:  95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}   # LMA26 6500 → höjt till 8000 (2025-nivån bedöms låg); FOM oförändrad
+    gas:           {oc_eur_per_kw: 3000, fom_eur_per_kw:  65.0, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 63.7}   # CCGT-CCS, 2030 bränsle
+    battery:       {power_eur_per_kw: 356, energy_eur_per_kwh: 328.5, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
+  svk_2040:
+    wind_onshore:  {oc_eur_per_kw: 1320, fom_eur_per_kw: 30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 2400, fom_eur_per_kw: 97.5, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  495, fom_eur_per_kw:  7.3, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 6250, fom_eur_per_kw: 95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}
+    gas:           {oc_eur_per_kw: 2300, fom_eur_per_kw: 52.5, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 72.0}   # CCGT-CCS
+    battery:       {power_eur_per_kw: 317, energy_eur_per_kwh: 217, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
+  svk_2050:
+    wind_onshore:  {oc_eur_per_kw: 1295, fom_eur_per_kw: 30.0, build_years: 1, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    wind_offshore: {oc_eur_per_kw: 2250, fom_eur_per_kw: 95.0, build_years: 3, lifetime_years: 25, vom_eur_per_mwh: 0.1}
+    solar:         {oc_eur_per_kw:  434, fom_eur_per_kw:  7.0, build_years: 1, lifetime_years: 30, vom_eur_per_mwh: 0.1}
+    nuclear:       {oc_eur_per_kw: 6000, fom_eur_per_kw: 95.3, build_years: 7, lifetime_years: 60, vom_eur_per_mwh: 9.0}
+    gas:           {oc_eur_per_kw: 2180, fom_eur_per_kw: 45.0, build_years: 4, lifetime_years: 40, vom_eur_per_mwh: 73.0}   # CCGT-CCS
+    battery:       {power_eur_per_kw: 292, energy_eur_per_kwh: 169, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
+
+# Efterfrågescenarier för expansionskörningar (SvK LMA2026). Väljs med
+# --demand-scenario svk_2040_mm → run_model adderar SvK:s 2026→2040-tillskott
+# ovanpå dagens eSett-bas, fördelat på zoner och dekomponerat i:
+#   extra_load_mw  — inflexibel platålast (datacenter + ny industri + H&S/förluster-tillväxt)
+#   h2{...}        — vätgas: demand_mw (H2 LHV), electrolyser_mw (MW_el, fast), store_mwh (H2 LHV)
+#   ev_cars        — EV-el som PERSONBILS-EKVIVALENTER (= total EV-el ÷ 2.5 MWh/bil); buntar
+#                    in tung trafik → EJ fysisk flotta. KONSERVATIV nivå: Norden 44.2 TWh
+#                    (17.68M bil-ekv ≈ ~13M personbils-EV + ~130k tunga), ~71% av LMA26 MM
+#                    Figur 11 (62.5 TWh). Vald så landstotalerna håller MM-envelopen (SE 243 /
+#                    NO 194 / FI 145 / DK 81 ≈ 663) — full MM-EV (62.5) skulle överskjuta med
+#                    ~18 TWh (se run180 vs run170). Flexkvoten (ev.flex_battery_gwh_per_twh: 12)
+#                    är LMA26-korrekt oberoende av totalen → 265 GWh flex / 26.5 GW laddtak.
+#                    60 kWh batteriantagandet används EJ i svk-läget.
+#   pnom_max_mw    — utbyggnadspotential (Bilaga B, TWh→MW via modell-CF) som p_nom_max-tak
+# ntc_overrides    — NTC-höjningar till 2040 (Tabell 10), appliceras på cfg['links']
+# ⚠️ Princip: ADDITIV (eSett-bas bevaras) → modell-2040 ≈ 8–13 TWh/land UNDER SvK absolut
+#   (eSett-bas under SvK 2026; tillväxten är SvK-konsistent).
+# ⚠️ ANTAGANDEN (flaggade): zon-split inom land, H2/EV-TWh (utom SE H2=24, firm p12),
+#   potential-zonandelar. Endast landstotaler + SE H2 är hårda SvK-tal.
+demand_scenarios:
+  svk_2040_mm:
+    ntc_overrides:
+      - [SE-N, SE-S,  9000]   # Snitt 2 / NordSyd 2040. ⭐ SÄNKT 2026-09-09 från Tabell 10:s
+                              #   10700, som är ett MAXTAL. Uppmätt tilldelad day-ahead-kapacitet
+                              #   (query_offered_capacity A01, FB-fria fönstret 2023-01→2024-10-29,
+                              #   n=16032 h) ger SE2→SE3 medel 6195 av max 7300 ⇒ medel/max = 0,849
+                              #   i den BEGRÄNSANDE riktningen. 0,849 × 10700 = 9084 → 9000.
+                              # ⚠️ Tvåriktningsmedlet är 0,92 (SE3→SE2 ligger på 0,995 av max) och
+                              #   hade gett 9900. Den begränsande riktningen vald medvetet — snittet
+                              #   används mest norr→söder. Se project_ntc_offered_capacity_derate.
+                              # ⚠️ Överföringen av en NUTIDS-derate till 2040 är OPRÖVAD. Stöd finns
+                              #   i dagens värld (run458 7300 mot run459 5000: Σ|prisbias| 37,1→14,0,
+                              #   trängsel 29,4→65,8 % mot uppmätta 58,2), men där drar driften åt
+                              #   ANDRA hållet (+1,70 mot +11,05 TWh, EC +3,13) ⇒ avvägning, ej dom.
+                              # ⏳ Direkt test saknas: 2040-A/B 9000 mot 10700 är EJ körd.
+      - [NO-S, SE-S,  2000]   # NO1↔SE3 2040 = TSO-talet (Hasle-snittet). ⭐ LÅST 2026-08-22 efter att
+                              # Gemini oberoende angav exakt 2000 som officiell TSO-prognos — samma tal som
+                              # configens egen kommentar bärde. Var 2300 = ett osourcat påslag utöver TSO-talet;
+                              # 2300 är nu KÄNSLIGHETSFALL, ej baseline. 1,05× nutidens 1900 (FB-ekv. 2025)
+      - [SE-S, DK,    2300]   # SE4↔DK2 + Konti-Skan 2040 (TSO-tal). Var tillfälligt 2400, samma skäl;
+                              # nutid är nu 2000, så golvet binder ej
+      - [NO-N, NO-S,  1500]   # NO3↔NO1/NO5 2040. ⭐ LÅST 2026-08-22, sänkt från 3000. Tre skäl, två ur repot:
+                              # (a) publ. day-ahead-kap. idag 250 median / 750 max ⇒ 3000 är 4× allt som
+                              #     någonsin publicerats; (b) fysisk q95 2025 (1018) INNEHÅLLER svensk transit
+                              #     SE2→NO3→NO1 som modellen redan bär på SE-N↔SE-S ⇒ 3000 dubbelräknar samma
+                              #     fysiska väg, särskilt ihop med snitt 2 på 10700; (c) Gemini: Statnetts NUP
+                              #     saknar HVDC/400kV-korridor genom fjällkedjan, tak 1200-1500 till 2040.
+                              # ⚠️ run392 mätte 60,9 % mättnad ÄVEN vid 3000 ⇒ modellen VILL ha mer. Det är en
+                              #   ekonomisk signal (NO-N:s 2040-överskott), inte ett fysiskt byggbarhetsbevis.
+                              #   Avgörs endogent med --expand-link NO-N:NO-S:2.5:700:4000 — EJ KÖRD ÄNNU
+      - [NO-N, SE-N,  1800]   # NO4↔SE1/SE2 + NO3↔SE2 2040. ⭐ LÅST 2026-08-22, sänkt från 2000.
+                              # Geminis intervall 1500-1800 (TYNDP 2024: ingen beslutad utbyggnad på
+                              # Ofoten/Luleå-snittet) OMSLUTER vår egen publ. day-ahead-kap. max 1400/1550
+                              # — oberoende korroborering. 1800 behåller viss utbyggnad över publ. kap.
+                              # 1,57× nutidens 1150 (FB-ekvivalent 2025). Ingen exp-ov: gäller
+                              # bara i demand-scenariot, expansion utan scenario behåller 1150
+    # Kontinentkablar (market_connections) — matchas på namn, ej zonpar
+    # ⭐ LÅSTA 2026-08-22. Gemini-granskningen ändrade INGEN siffra men gav källor åt två
+    # tal som tidigare var flaggade som antaganden (FI EE, NO NL).
+    market_ntc_overrides:
+      - [FI EE, 1700]         # FI↔EE 2040 = 1016 nutid + ⭐ ESTLINK 3 (700 MW), formellt beviljat
+                              # projekt i ENTSO-E TYNDP 2024, idrifttagning ~2035 ⇒ 1716 ≈ 1700.
+                              # KÄLLA FUNNEN 2026-08-22 (var: "höjning utan angiven källa").
+                              # 2000 = full projektkapacitet OM EstLink 1/2 uppgraderas — ej antaget
+      - [DK DE, 4500]         # DK↔DE 2040 (Tabell 10; nutid 3400). Gemini: 4500-5000 stämmer med
+                              # Energinet/50Hertz inkl. Bornholm Energy Island ⇒ vi ligger i underkant
+      - [NO NL, 700]          # NO-S↔NL 2040 = ⭐ NorNeds TEKNISKA NOMINELLA kapacitet. Nutidens 640
+                              # (uppmätt q95) är flaskhalsbegränsad; 700 = flaskhalsen borta.
+                              # KÄLLA FUNNEN 2026-08-22 (var: "höjning utan angiven källa")
+      - [DK GB, 1456]         # DK↔GB 2040 = nutidens uppmätta q95/q99. ⛔ Geminis 1400 AVSLAGET:
+                              # det är märkeffekten, men schemalagt utbyte klipper vid 1456
+      - [NO GB, 1449]         # NO-S↔GB 2040 = nutidens hårda tak (q95=q99=max i 26 304 h).
+                              # ⛔ Geminis 1400 AVSLAGET på samma grund
+    # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
+    # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
+    # extendable). I expansionsläge går befintlig flotta över till syntetisk profil
+    # (nuclear_synth_existing). Ingen exogen låsning längre.
+    # Kontinentpriser skiftade till SvK 2040 MM-nivå: multiplikativ omskalning av
+    # 2023-25-serien per bzn (behåller timform/väderkorrelation, byter nivå).
+    # DE-LU/LT/PL = SvK p79; NL/GB/EE = ANTAGANDEN (NL≈DE, GB lägre, EE≈Baltikum).
+    # ⚠️ Underplays 2040:s ökade volatilitet (metod 3 = äkta 2040-profil krävs för det).
+    # ⭐ UPPDATERAD 2026-09-09 mot LMA26 Figur 31 (simulerat årsmedelpris, 2040 MM) och
+    # för GB mot en extern 2040-prognos. NIVÅ-metoden: skala vår uppmätta 2023-25-serie så
+    # att dess snitt träffar målet. (Alternativet KVOT — applicera LMA:s egen 2026→2040-
+    # förändring på vår serie — ger samma svar för DE/PL men 9-10 % lägre för LT/EE, där
+    # LMA:s 2026-tal ligger 10 % över vår mätning. NIVÅ vald av användaren.)
+    #   DE-LU 79,6 · PL 83,1 · LT 90,1  = LMA26 Fig. 31, 2040 MM (hårda tal)
+    #   NL 78,7 = lånad DE-LU-faktor (NL och DE-LU är i praktiken samma marknad i vår data:
+    #             86,6 mot 87,7 i snitt, båda med −500-golv och ~450 negativa h/år)
+    #   EE 87,2 = lånad LT-faktor (samma marknadsområde; LT är enda ankaret som finns)
+    #   GB 84   = extern 2040-prognos ~70 GBP (dec 2024) × 1,20. ⚠️ Var 75, ett rent
+    #             ANTAGANDE ("GB lägre"); nu enda talet med källa utanför LMA. Höjningen går
+    #             åt MOTSATT håll mot övriga och ökar Nordens exportintäkt över Viking Link
+    #             och North Sea Link (10,1 TWh import + 7,0 TWh export/år i run450).
+    # ⚠️ LMA26 Fig. 31 saknar NL, GB och EE — därav lånen/den externa källan.
+    continent_price_eur_mwh: {DE-LU: 79.6, LT: 90.1, PL: 83.1, NL: 78.7, GB: 84, EE: 87.2}
+    # Batterier EXOGENT (storskaliga, stödtjänst-drivna). SvK:s egen modell bygger 0
+    # endogena batterier (Bilaga C: dagen-före-intäkter fångar ej stödtjänstvärdet) —
+    # samma i vår modell. Storskalig MM 2040 (GW): SE 5.5 / DK 3.8 / FI 2.7 / NO 0.
+    # ⚠️ Varaktighet 2h = ANTAGANDE (SvK anger bara effekt). Småskaliga sol-kopplade
+    # batterier (SE 2.0/DK 0.9/FI 1.1/NO 1.5 GW) UTELÄMNADE (kräver tak-PV-koppling).
+    zones:
+      # SE +8 TWh allmän förbrukning (basgap: eSett-bas 127,3 < SvK 2026 ~136) → SE 2040
+      # ≈ 243 TWh (= SvK MM SE). Split per eSett-andel SE-N 0,206 / SE-S 0,794 (⚠️ antagande).
+      # VRE-potentialer (LMA2026, TWh→MW vid CF onshore ×1,30 / offshore ×1,10):
+      # SE land: golv 50 / tak 100 TWh; hav: golv 0 / tak 63 (allt→SE-S); sol: golv 7,4 / tak 25.
+      # Split SE→SE-N/SE-S efter install-andel (onshore 59/41, sol 5/95; ⚠️ antagande).
+      # ⚠️ Tak/golv-MW förutsätter --onwind-capfac-increase 0.30 + --offwind-capfac-increase 0.10.
+      SE-N:
+        extra_load_mw: 4298   # 4110 + 188 (1,6 TWh basgap)
+        h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
+        ev_cars: 1200000   # konservativ: SE EV 15 TWh × split 0.20 (~71% av LMA26 MM 21.1)
+        pnom_max_mw: {wind_onshore: 20394, wind_offshore:     0, solar:  1282}
+        pnom_min_mw: {wind_onshore: 10197, solar:   380}   # SE-golv (install on 10050/sol 134)
+        battery: {p_nom_mw: 1000, hours: 2}
+      SE-S:
+        extra_load_mw: 4378   # 3653 + 725 (6,4 TWh basgap)
+        h2: {demand_mw:  452, electrolyser_mw:  850, store_mwh:  9900}
+        ev_cars: 4800000   # konservativ: SE EV 15 TWh × split 0.80 (~71% av LMA26 MM 21.1)
+        pnom_max_mw: {wind_onshore: 14376, wind_offshore: 16283, solar: 24000}
+        pnom_min_mw: {wind_onshore:  7188, solar:  7104}   # SE-golv (install on 7092/sol 2778 → +~4,3 GW sol)
+        battery: {p_nom_mw: 4500, hours: 2}
+        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny endogen via --add-nuclear,
+        # ny EXOGEN (SvK MM 1,5 GW) via --add-nuclear-fixed SE-S:3:500.
+      # NO-N/NO-S kalibrerade mot Statnett "Medium forbruksutvikling" 2040 (ej SvK-split):
+      # NO total 195 TWh = eSett-bas 138 + Δ56. Δ flat 28 (alm −5, kraftint +15, petrol +6,
+      # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel
+      # (⚠️ ANTAGANDE — geografisk sektor-split ej upplöst; petroleum/datac/grön industri
+      # har egen geografi). EV = konservativ NO 16.2 TWh (~74% av LMA26 MM 21.8); split som ovan. H2 10 TWh.
+      # NO (LMA2026): land 30, hav 21 (allt→NO-S), sol 20 TWh. Split NO→NO-N/NO-S install-andel
+      # (onshore 61/39, sol 6/94; ⚠️ antagande). Inga golv för NO/DK/FI (bara tak).
+      NO-N:
+        extra_load_mw: 1138
+        h2: {demand_mw:  406, electrolyser_mw:  494, store_mwh: 14045}
+        ev_cars: 2300000   # konservativ: NO EV 16.2 TWh × split 0.356 (~74% av LMA26 MM 21.8)
+        pnom_max_mw: {wind_onshore:  5537, wind_offshore:     0, solar:  1672}
+      NO-S:
+        extra_load_mw: 2058
+        h2: {demand_mw:  735, electrolyser_mw:  806, store_mwh: 22915}
+        ev_cars: 4180000   # konservativ: NO EV 16.2 TWh × split 0.644 (~74% av LMA26 MM 21.8)
+        pnom_max_mw: {wind_onshore:  3730, wind_offshore:  4866, solar: 21560}
+      DK:
+        # +913 MW (8 TWh) allmän förbrukning ovanpå tidigare 2968 → stänger basgapet:
+        # eSett-bas 36,5 < SvK 2026 ~45. DK total 2040 ≈ 81 TWh (= SvK MM DK).
+        extra_load_mw: 3881
+        h2: {demand_mw:   75, electrolyser_mw:  200, store_mwh:  3960}
+        ev_cars: 3600000   # konservativ: DK EV 9.0 TWh (~72% av LMA26 MM 12.45)
+        pnom_max_mw: {wind_onshore:  6757, wind_offshore: 27127, solar: 32843}   # DK LMA2026: land 17/hav 107/sol 41 TWh
+        battery: {p_nom_mw: 3800, hours: 2}
+      FI:
+        # +1370 MW (12 TWh) allmän förbrukning ovanpå tidigare 4452 → stänger basgapet:
+        # eSett-bas 80,4 < SvK 2026 ~93. FI total 2040 ≈ 145 TWh (= SvK MM FI).
+        extra_load_mw: 5822
+        h2: {demand_mw:  913, electrolyser_mw: 1400, store_mwh:     0}   # 8,0 TWh/år (höjt från 678=5,9)
+        ev_cars: 1600000   # konservativ: FI EV 4.0 TWh (~56% av LMA26 MM 7.13)
+        pnom_max_mw: {wind_onshore: 28219, wind_offshore:  6686, solar: 33417}   # FI LMA2026: land 77/hav 21/sol 29 TWh
+        battery: {p_nom_mw: 2700, hours: 2}
+        # FI kärnkraft = befintlig 4400 MW (Olkiluoto 1-3 + Loviisa 1-2), must-run historisk
+        # profil, ingen ny (SvK MM ny FI-kärnkraft ej medtagen — flaggat). Lägg ev. block här.
+
+# Vätgassystem per zon (opt-in). Utelämna = ingen H2. CLI-motsvarighet: --add-h2.
+# Exempel (avkommentera för att aktivera):
+# hydrogen:
+#   SE-S:
+#     demand_mw: 500
+#     electrolyser: {p_nom_mw: 1000, extendable: true}
+#     store:        {e_nom_mwh: 50000, extendable: false}
+#     turbine:      {p_nom_mw: 300, extendable: false}   # utelämna = ingen turbin
+
+# Solver
+solver:
+  name: highs
+  threads: 16
+  solver: ipm          # interior point method — skalbar för stora LP
+  run_crossover: "on"  # krävs för korrekt kapacitetsexpansion (vertex-lösning)
+  ipm_optimality_tolerance: 1e-6   # ÅTER till 1e-6: lös IPM (1e-4) gav crossover en slarvig startpunkt
+                                   # → "imprecise crossover" → dyr enkeltrådad simplex-städning (run145: ~3h).
+                                   # Snävare IPM = ren crossover utan simplex-fallback = snabbare totalt (testas nästa run).

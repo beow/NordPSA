@@ -1,0 +1,12 @@
+# Värld: dagens system (2023-2025) — dagens last, flotta, kostnader och nät.
+# Default för `nordpsa today`. Bara dispatch: kapaciteterna är config-värdena.
+
+modes: [dispatch]
+
+nuclear:
+  new_min_load: 1.0
+
+dispatch:
+  # Ankare per zon för DAGENS flotta (run458). 2040-kurvans egna ankare är kalibrerade
+  # mot 2040-systemet och ger fel magasindrift här.
+  terminal_anchor: {SE-N: 27.1, SE-S: 47.5, NO-N: 25.8, NO-S: 58.1, FI: 47.5}

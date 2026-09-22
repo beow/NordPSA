@@ -1,0 +1,7 @@
+# +1,5 GW exogen kärnkraft i SE-S i stället för endogen ny SE-S-kärnkraft.
+nuclear:
+  add:
+    - [SE-N, 10, 202]
+    - [FI,   10, 203]
+  add_fixed:
+    - [SE-S, 3, 500]

@@ -1,0 +1,23 @@
+# Värld: 2040 enligt SvK:s långsiktiga marknadsanalys, scenario MM.
+# Default för `nordpsa expand`.
+
+modes: [expansion, dispatch]
+
+scenario:
+  cost: svk_2040
+  demand: svk_2040_mm
+  post_expansion_ntc: true  # Aurora SE-N–FI 2000, NO-N↔NO-S 1000
+
+nuclear:
+  add:                      # tio nya reaktorer per zon, eget frö per zon
+    - [SE-S, 10, 201]
+    - [SE-N, 10, 202]
+    - [FI,   10, 203]
+  new_min_load: 0.6         # ny kärnkraft lastföljer ned till 60 %; befintlig flotta must-run
+
+vre:
+  onwind_capfac_increase: 0.30  # 2040:s nybyggnadsflotta
+  offwind_capfac_increase: 0.10
+
+heat:
+  enabled: true

@@ -1,0 +1,39 @@
+note: 'Startpunkt: b_mean kodar run268-mätningen (inlåsta zoner brantare); faser är
+  hydrologiska priorer. EJ kalibrerad än.'
+anchor_eur_per_mwh:
+  FI: 84.42
+  NO-N: 78.14
+  NO-S: 75.99
+  SE-N: 76.72
+  SE-S: 79.52
+zones:
+  FI:
+    a_amp: 0.35
+    a_peak: 5.0
+    b_mean: 1.5
+    b_amp: 0.6
+    b_peak: 22.0
+  NO-N:
+    a_amp: 0.35
+    a_peak: 5.0
+    b_mean: 4.0
+    b_amp: 0.6
+    b_peak: 22.0
+  NO-S:
+    a_amp: 0.35
+    a_peak: 5.0
+    b_mean: 1.5
+    b_amp: 0.6
+    b_peak: 22.0
+  SE-N:
+    a_amp: 0.35
+    a_peak: 5.0
+    b_mean: 4.0
+    b_amp: 0.6
+    b_peak: 22.0
+  SE-S:
+    a_amp: 0.35
+    a_peak: 5.0
+    b_mean: 1.5
+    b_amp: 0.6
+    b_peak: 22.0

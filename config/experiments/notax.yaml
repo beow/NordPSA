@@ -1,0 +1,3 @@
+# ingen energiskatt på fjärrvärmens elektrifiering (VP + el-panna).
+heat:
+  el_tax_zero: true

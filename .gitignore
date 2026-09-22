@@ -1,0 +1,32 @@
+# Data and results — fetched or generated, never committed
+data/raw/
+data/processed/
+results/
+temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Secrets and logs
+.env
+*.log
+
+# Local tool state
+.claude/

@@ -1,0 +1,220 @@
+a_scale: 0.3
+anchor_eur_per_mwh:
+  FI: 72.5
+  NO-N: 70.2
+  NO-S: 69.6
+  SE-N: 66.0
+  SE-S: 64.5
+note: "PRODUKTIONSKURVA v9, 2026-08-29. = v8 med b_amp 0 (var 0,27). ENDA faltet som\
+  \ skiljer.\n\nGRUND: b_amp 0,27 var ett ENKELT MEDELVARDE av externa tabellers zonvarden\
+  \ (0,10-0,48) och\nhade aldrig provats mot en oberoende observabel. Elasticitetsregressionen\
+  \ med sasongs-\ninteraktion (dev x cos/sin(vecka)) ger uppmatt B_amp 0,26-0,36 i\
+  \ fyra zoner MEN med\nt = 0,4-1,0, alltsa inte skiljbart fran noll. Bara NO-S ar\
+  \ signifikant (0,78, t = 3,7).\nDen uppmatta FASEN pekar dessutom pa v34-37, inte\
+  \ kurvans v20-27.\n\nMATT I EN 2x2 (1h-dispatch av run420_baseline_2h, b_mean {2,4}\
+  \ x b_amp {0,27, 0}):\n  huvudeffekt b_mean 2->4   vs   huvudeffekt b_amp 0,27->0\n\
+  \  Sum|fel| B      -1,93            +0,05     (43x)\n  budkurva 20-60  -0,858  \
+  \         -0,069    (12x)\n  Sum|fel| v/s    +0,152           +0,032    (4,8x)\n\
+  \  drift           +0,90            +0,20     (4,5x)\nIngen namnvard vaxelverkan:\
+  \ b_amp-effekten ar lika stor vid bada nivaerna, trots att\namplituden i ABSOLUTA\
+  \ tal fordubblas. Orsak: b toppar i maj medan A(v) bottnar dar, sa de\ntar delvis\
+  \ ut varandra i produkten, och den utjamningen skalar med nivan.\nBONUS: budkurvan\
+  \ blir BATTRE utan sasongsvariation, och mer sa ju brantare kurvan ar\n(-0,040 vid\
+  \ b_mean 2, -0,098 vid 4). Rimligen for att en b som varierar over aret later\n\
+  samma pris motsvara olika vattenvarde i olika manader, vilket smetar ut relationen.\n\
+  \n⚠️ b_peak (20,2-26,7) ar nu INERT och lamnas kvar enbart som historik. Den var\
+  \ kurvans\nSISTA zonskillnad i b. Den som nagonsin satter b_amp > 0 igen ska INTE\
+  \ lita pa de lagrade\nfaserna: mattet pekar pa v34-37 (sensommar, nar vinterns tillracklighet\
+  \ avgors), inte pa\nv20-27 (vartfloden, spillrisk) som var den ursprungliga hydrologiska\
+  \ gissningen.\n\n--- v8:s not, bevarad ---\nPRODUKTIONSKURVA v8, 2026-08-25. = v7\
+  \ med b_mean 2,0 likformigt (var 0,80).\nENDA fältet som skiljer mot v7; alla ankare,\
+  \ faser, x_ref och a_scale ar ororda.\n\nGRUND: B - vattenvardets svar pa magasinets\
+  \ AVVIKELSE fran normalbanan - mattes\nicke-cirkulart mot EC:s magasindata och ENTSO-E-priser\
+  \ 2015-2025 (11 ar, n=573/zon):\n\n    ln P(v) = ar_FE + sasong(2 harmoniska) -\
+  \ B*dev(v),\n    dev(v)  = fyllnadsgrad(v) - EC:s medianfyllnad for samma ISO-vecka\n\
+  \nArsdummyn absorberar NIVAN (gaspris, torrar, krisar), sasongstermerna arsgangen;\
+  \ B\nidentifieras ur variationen INOM aret. Samma regression pa modellens prices.csv\
+  \ +\nhydro_soc.csv med EC:s median som referens ger direkt jamforbara koefficienter.\n\
+  \n  UPPMATT 2015-2025   SE-N 3,27  SE-S 1,53  NO-N 2,74  NO-S 2,85  FI 1,71\n  MODELL\
+  \ vid b_mean 0,80 (run428)  0,71  0,68  0,46  0,24  3,11\n  MODELL vid b_mean 2,00\
+  \ (run429)  1,17  1,08  1,16  0,77  3,56\n\nSVEPET (run428/429/430 = b_mean 0,80/2,0/4,0,\
+  \ 3h-dispatch av run420_baseline_2h,\nidentiska utom kurvfilen):\n\n  kriterium\
+  \              0,80        2,0        4,0     mal\n  Sum|fel| B             9,70\
+  \       8,06       6,14     0\n  budkurva 20-60        3,411      3,012      2,202\
+  \     min   <- kalibreringsmalet\n  budkurva hela         2,199      1,961     \
+  \ 1,928     min\n  i EC-band SE          1,9 %     94,2 %     100 %     max\n  i\
+  \ EC-band NO         61,5 %     88,5 %    94,2 %     max\n  i EC-band FI       \
+  \  40,4 %     63,5 %    69,2 %     max\n  v/s SE/NO/FI    1,358/1,313/0,809  1,418/1,258/0,738\
+  \  1,486/1,197/0,708\n  Sum|fel| v/s          0,356      0,471      0,631     0\n\
+  \  drift TWh             -0,48      +3,06      +4,09    +3,13  <- se nedan\n  poang\
+  \ score()         0,577      0,522      0,660     min\n\nVARFOR 2,0 OCH INTE 4,0:\
+  \ 2,0 ar minimum pa score(), tar 94 % av SE:s bandvinst och\nforbattrar bade budkurvan\
+  \ och B, till en mattlig v/s-kostnad. 4,0 koper mer av de tva\nsom pekar uppat men\
+  \ kostar v/s hart och overskjuter nordens prissvans mot uppmatt\n(h>100: SE-N 3246\
+  \ mot uppmatta 828, NO-N 3027 mot 320).\n\nDRIFTMALET AR INTE NOLL. EC:s uppmatta\
+  \ lager vaxte +3,13 TWh over korfonstret\n(2023-01-02 -> 2025-12-31; SE +2,24, NO\
+  \ +0,70, FI +0,19). Perioden ar alltsa inte\nlagerneutral i verkligheten - den borjar\
+  \ pa ett lagt 2023 och slutar hogt. run429\nmissar med 0,07 TWh, run428 med 3,61.\
+  \ Noll galler bara CYKLISKA korningar.\nVARNING: totalen traffar delvis genom utjamning\
+  \ - SE 1,86 mot 2,24, NO 1,70 mot 0,70,\nFI -0,49 mot +0,19 (fel tecken). Landvis\
+  \ ar driften inte lost.\n\nFORKASTAT (run431/432): ankarna driftkorrigerade med\
+  \ -drift/1,9 per zon. Kansligheten\ni brant regim ar 0,37 TWh/enhet i SE-N och NO-S\
+  \ och ~0 i ovriga, alltsa 5x lagre an de\n1,9 som mattes vid b_mean 0,80 - en brant\
+  \ kurva pinnar SOC mot x_ref och nivaspaken\ntappar greppet. Skiftet rorde inte\
+  \ heller v/s (0,4714 -> 0,4686), sa v/s-forlusten ar\nAKTA och inte hamstringens\
+  \ skugga.\n\nOPPET: FI gar AT FEL HALL. Modellens FI-B ar redan 3,11 mot uppmatta\
+  \ 1,71 och stiger\ntill 3,56 vid b_mean 2,0; linjar extrapolation kraver b_mean\
+  \ -3,0. FI ar for KANSLIGT,\ninte for trogt. Ett zonvist FI-varde ar naturlig nasta\
+  \ fraga.\nOPPET: B ar kraftigt SUBLINJART - 5x b_mean ger bara 2,5-6x B. Att na\
+  \ uppmatt niva\nskulle krava b_mean 3,7 (SE-S) till 8,3 (SE-N). Systemet dampar;\
+  \ kurvan ensam racker\ninte.\nOPPET: v/s-forlusten. run428:s v/s ar dock \"ratt\"\
+  \ pa en SOC-bana som ligger UTANFOR\nEC-bandet 98 % av veckorna, och v/s-malet ar\
+  \ eSett i DAGENS system medan modellen kor\n2040 - samma varldsinvandning som budkurvan\
+  \ bar.\n\nMATVERKTYG: temp/measure_b.py (B-regressionen), temp/fetch_hist_prices.py\n\
+  (ENTSO-E 2015-2025 -> temp/zone_prices_hist.parquet), temp/eval_bmean_sweep.py.\n\
+  v7 ligger kvar for att reproducera run316-run432 - namnge den da explicit.\n\n---\
+  \ v7:s not, bevarad ---\nLÅST 2026-08-20 (run391_v7_anchors_3h). Produktionskurva.\n\
+  \nPRODUKTIONSKANDIDAT v7, 2026-08-20. = v6 med b_amp LIKFORMIGT 0,27 (var 0,10-0,48).\n\
+  \nMOTIV: samma som for b_mean och lambda_bas. Facit (run386, run320) ger lambda\
+  \ konstant i\nBADE tid och fyllnadsgrad, sa vid optimum ar hela kurvformen noll\
+  \ -- det finns ingen\nUPPMATT zonskillnad att bevara, bara en gemensam avvikelse\
+  \ fran optimum som beror pa hur\nkort det rullande fonstret ser. Zonskillnaderna\
+  \ kom ur Geminis lambda-tabeller och har\naldrig provats mot nagon oberoende observabel.\n\
+  \nPROVAT OCH FORKASTAT: b_amp som funktion av magasinstorleken. Fysiskt rimligt\
+  \ (ett litet\nmagasin MASTE fyllas under floden, ett stort kan vanta) men data bar\
+  \ det inte: r = -0,60\npa fem punkter, och SE-S faller helt ur monstret -- minsta\
+  \ magasinet av alla (3,5 TWh,\nfyra manaders produktion) men b_amp 0,190, alltsa\
+  \ nast lagst. Log-log-lutningen blir\n-0,22, langt fran de -1 som b_amp ~ 1/volym\
+  \ kraver.\n\nNIVAN 0,27 = ENKELT medelvarde. Volym- och produktionsviktat ger 0,21,\
+  \ men de dras ned av\nNO-S (stort och lagst varde, 0,100) -- alltsa av just den\
+  \ zon vars varde vi beslutat att\ninte tro pa. Nar premissen ar att zonskillnaderna\
+  \ INTE ar verkliga ar varje zons tal en\nlika otillforlitlig observation av samma\
+  \ storhet, och da ar det enkla medlet ratt.\n\nVARNING: NO-S andras mest, 0,100\
+  \ -> 0,27 (+170 %). Det ar den zon som enligt 2040-facit\nska bara HELA Nordens\
+  \ sasongsbalansering (v/s 1,59 mot eSetts 1,30). Mat NO sarskilt.\n\nFRIHETSGRADER:\
+  \ a_scale (1) + b_amp (1) + lambda_bas (1) = TRE, alla globala.\nLasta: b_mean 0,80\
+  \ · alla sasongsfaser · hela x_ref · kvoten a_amp2/a_amp ·\nb_low_frac 1,0 · p_norm\
+  \ 'mid'.\nAnkaret likformigt 73. Dispatch med\n--terminal-anchor SE-N:66.5 SE-S:66.5\
+  \ NO-N:69.1 NO-S:69.6 FI:70.5.\n\nANKARE: de per-zons vardena ovan ar DRIFTKORRIGERINGEN\
+  \ for begransad framsyn,\nharledd ur run390:s drift. Spridningen 64,5-72,5 (1,12x)\
+  \ ar INTE ett pastaende om att\nvatten ar olika mycket vart i olika zoner -- facit\
+  \ (run386) ger 72,87 likformigt OCH\nnoll drift, men en rullande horisont kan bara\
+  \ fa det ena av tva med ett enda tal.\n⚠️ EXPANSION ska koras med 73 LIKFORMIGT\
+  \ (--terminal-anchor 73 eller --hydro-mc-curve\nmot en fil med 73): cykliskt SOC\
+  \ ger noll drift per konstruktion, sa korrigeringen\nsaknar mening dar och skulle\
+  \ bli en artificiell zonskillnad i hydrons marginalkostnad.\n⚠️ Kanslighetens tvapunktsskattning\
+  \ (run378 vs run379) visade sig 4x for LAG for SE-N\n(1,36 TWh per enhet, ej 0,343).\
+  \ Damp och taka alltid vid omkalibrering.\n⚠️ SE ligger HELT utanfor EC-bandet (0\
+  \ %) -- Sveriges magasin sitter ~5 pp under tionde\npercentilen. Kand oppen trad,\
+  \ forsamrad har mot run388:s 15 %.\n⚠️ FI:s drift (-0,51) gar INTE att nolla med\
+  \ lambda_bas: kansligheten 0,069 kraver +9,0\nenheter, vilket vore 12 % avvikelse.\
+  \ Takat vid +2,0. Accepterad brist."
+note_aform: 'HELT GLOBAL A(v). = v9 sa nar som pa A(v):s form.
+
+  a_peak 4.17 (cirkulart medel, var 1,1-5,3) · a_peak2 47.88 (var 47,5-48,2) · kvot
+  a_amp2/a_amp -0.4053 (var -0,27..-0,54) · a_amp 0.4313 likformigt (var 0,305-0,535)
+
+
+  MOTIV: de 20 formtalen kommer alla ur SAMMA externa tabellkalla och har aldrig provats
+  mot en oberoende observabel. Samma kategori som b_amp/b_peak, som mattes nara inerta
+  och togs bort i v9. Max |delta| i lambda_bas*A(v) ar 1,3-4,6 (aform) resp. 1,3-5,6
+  (aglobal) EUR/MWh, mot ett totalt sasongsutslag pa 14,9-28,7.
+
+  Formtal: 20 -> 4.'
+note_xrefzon: "ZONVISA NORMALBANOR (2026-08-30). Identisk med v9_aglobal sa nar som\
+  \ pa c_mid/c_amp/c_peak/c_amp2/c_peak2, som nu ar anpassade PER ZON i stallet for\
+  \ per LAND.\nKALLA: SE ur ENTSO-E A72 per budzon (SE1+SE2 / SE3+SE4), NO ur NVE\
+  \ Magasinstatistikk per prisomrade (omrnr 3,4 / 1,2,5), bada 2015-2025, veckomedian\
+  \ av fyllnadsgrad. FI ororad (landet ar en zon).\nMOTIV: EC:s median finns bara\
+  \ per land, sa SE-N/SE-S och NO-N/NO-S delade bana. Det ar billigt i Norge men dyrt\
+  \ i Sverige, eftersom SE-N och SE-S ar hydrologiskt vasensskilda: SE-S ar REGNMATAT\
+  \ med v/s pa tillrinningen 1,10 (uppmatt 1,13) medan SE-N ar snosmaltnings-matat\
+  \ med 0,20 (uppmatt 0,21) - faktor 5,6. NO-N och NO-S ligger pa 0,084 och 0,100,\
+  \ alltsa nastan lika.\nRMS-FEL mot uppmatt veckomedian om zonen tvingas folja LANDETS\
+  \ bana:\n  SE-N  3,86 -> 3,56 pp (egen bana vinner 8 %)\n  SE-S 14,57 -> 3,33 pp\
+  \ (77 %)   <- HELA vinsten sitter har\n  NO-N  3,04 -> 2,72 pp (11 %)\n  NO-S  3,40\
+  \ -> 2,80 pp (18 %)\nSE-S:s egen bana har BARA 41 % av SE-N:s sasongsspann (c_amp\
+  \ 0,123 mot 0,304), bottnar v12 i stallet for v16 och toppar v45 i stallet for v41.\n\
+  ⚠️ NIVAN AR BEVARAD: den kapacitetsviktade landsnivan ar satt till exakt den lasta\
+  \ EC-nivan, sa andringen ar en REN FORMANDRING. Utan det hade byte av datakalla\
+  \ (EC -> ENTSO-E/NVE) blandats in: ENTSO-E ger SE c_mid 0,6483 mot EC:s 0,6143.\n\
+  ⚠️ VALIDERING: den ENTSO-E-harledda LANDSbanan korrelerar 0,988 med den lasta EC-kurvan\
+  \ (RMS 4,8 pp), och NVE-fittet for NO ger 0,6205/0,2363/39,9 mot lasta 0,6061/0,2379/40,1.\n\
+  ⚠️ Modellens SE-S-magasin ar 3,50 TWh men ENTSO-E:s hogsta uppmatta ar 2,73 - 28\
+  \ % storre. Separat fraga, ej atgardad har."
+zones:
+  FI:
+    a_amp: 0.4313
+    a_amp2: -0.1748
+    a_peak: 4.17
+    a_peak2: 47.88
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 2.0
+    b_peak: 21.3
+    c_amp: 0.1319
+    c_amp2: 0.0867
+    c_mid: 0.6032
+    c_peak: 36.3
+    c_peak2: 25.6
+    p_norm: mid
+  NO-N:
+    a_amp: 0.4313
+    a_amp2: -0.1748
+    a_peak: 4.17
+    a_peak2: 47.88
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 2.0
+    b_peak: 21.5
+    c_amp: 0.2394
+    c_amp2: 0.0436
+    c_mid: 0.5917
+    c_peak: 40.1
+    c_peak2: 3.3
+    p_norm: mid
+  NO-S:
+    a_amp: 0.4313
+    a_amp2: -0.1748
+    a_peak: 4.17
+    a_peak2: 47.88
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 2.0
+    b_peak: 26.7
+    c_amp: 0.244
+    c_amp2: 0.0575
+    c_mid: 0.6137
+    c_peak: 40.3
+    c_peak2: 2.6
+    p_norm: mid
+  SE-N:
+    a_amp: 0.4313
+    a_amp2: -0.1748
+    a_peak: 4.17
+    a_peak2: 47.88
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 2.0
+    b_peak: 20.2
+    c_amp: 0.3039
+    c_amp2: 0.0772
+    c_mid: 0.6075
+    c_peak: 39.2
+    c_peak2: 2.0
+    p_norm: mid
+  SE-S:
+    a_amp: 0.4313
+    a_amp2: -0.1748
+    a_peak: 4.17
+    a_peak2: 47.88
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 2.0
+    b_peak: 25.8
+    c_amp: 0.1228
+    c_amp2: 0.0828
+    c_mid: 0.6705
+    c_peak: 37.4
+    c_peak2: 23.8
+    p_norm: mid

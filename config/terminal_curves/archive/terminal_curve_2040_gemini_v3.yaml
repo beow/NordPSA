@@ -1,0 +1,407 @@
+note: '⛔ FORKASTAD 2026-08-20 (run389). x_ref_weekly, 52 fria varden ur EC-medianen.
+  EXAKT som beskrivning (RMS 0) men forbattrade INGENTING: v/s +-0,02, poang 0,625->0,664,
+  prisform 7,26->8,52. Sankte dessutom lambda langs HELA banan ~3 %, sa testet konfunderades
+  av ett nivaskifte. Ersatt av v4 (tva harmoniska), som tar 92-98 % av anpassningen
+  med fem parametrar i stallet for 52. Behalls for att reproducera run389.
+
+
+  --- ursprunglig anteckning ---
+
+  PRODUKTIONSKANDIDAT v3, 2026-08-20. = v2 (a_amp x0,3, FI b_mean 0,75) PLUS empirisk
+
+  referensbana x_ref_weekly: 52 uppmatta veckovarden ur EC:s magasinmedian 2014-2026,
+
+  som ERSATTER kosinusen c_mid/c_amp/c_peak (de star kvar i filen men anvands inte).
+
+
+  MOTIV, matt 2026-08-20: kosinusanpassningen har R2 0,92 (SE) / 0,95 (NO) / 0,64
+  (FI)
+
+  och en SYSTEMATISK residual med samma teckenmonster i alla tre landerna -- jan-feb
+
+  +3..+4,5 pp, mars-apr -3..-9,7, sep-okt -3..-5,3. Orsaken ar att den verkliga banan
+  ar
+
+  ASYMMETRISK (langsam vinteravtappning, brant fall i mars-april, snabb flodfyllning,
+
+  sen hostplata) medan en kosinus per definition ar symmetrisk. Fel funktionsfamilj
+  --
+
+  ingen amplitud eller fas kan laga det.
+
+
+  KONSEKVENSEN ar riktad: i mars-april ligger uppmatt fyllnad UNDER kosinusen, sa
+  kurvan
+
+  tror att normallaget ar hogre an det ar, (x - x_ref) blir for negativt och
+
+  exp(-b(x-x_ref)) FOR STORT. Kurvan blaser alltsa upp lambda ~5 % i SE (4 EUR/MWh)
+  och
+
+  7,5 % i FI (5,5 EUR/MWh) just den arstid marspuckeln bor i. Hypotes att prova: restfelet
+
+  i marspuckeln (run388 SE-N -11,4 mot uppmatta -4,9) ar kosinusens egen skevhet.
+
+
+  FI ar dar argumentet ar starkast: R2 0,64 ar ingen anpassning vard namnet, max|fel|
+
+  13,6 pp, och FI ar den zon som varit okanslig for allt vi provat (fyra spakar).
+  Ligger
+
+  x_ref 10 pp fel i april far b fel avvikelse att reagera pa, och da hjalper ingen
+  b_mean.
+
+
+  VARNING: banan ar EC:s median per LAND, sa SE-N/SE-S delar bana och NO-N/NO-S delar
+
+  bana -- exakt som kosinusen gjorde (c_amp/c_mid/c_peak var ocksa landsvisa). Zonvis
+
+  uppdelning finns inte i EC-datan.
+
+  VARNING: 52 fria varden riskerar att lasa modellen vid just dessa tolv ars klimatologi.
+
+  Det ar dock SAMMA data som kosinusen anpassades mot -- friheten okar inte, den slutar
+
+  bara kasta bort information genom en form som matbart inte passar.
+
+
+  Ankaret ar likformigt 73 av samma skal som i v2 (facit run386 ger 72,87 i alla zoner).
+
+  Dispatch kors med --terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5.'
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.1605
+    a_peak: 1.1
+    b_mean: 0.75
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.0675
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.132
+    c_mid: 0.603
+    c_peak: 36.3
+    p_norm: mid
+    x_ref_weekly:
+    - 0.6205
+    - 0.6004
+    - 0.5886
+    - 0.563
+    - 0.5357
+    - 0.5069
+    - 0.4842
+    - 0.4607
+    - 0.4388
+    - 0.4261
+    - 0.4073
+    - 0.3956
+    - 0.379
+    - 0.3688
+    - 0.3666
+    - 0.3799
+    - 0.3848
+    - 0.4488
+    - 0.5347
+    - 0.6516
+    - 0.7027
+    - 0.7141
+    - 0.7143
+    - 0.7203
+    - 0.7174
+    - 0.7134
+    - 0.7181
+    - 0.7187
+    - 0.708
+    - 0.7097
+    - 0.7104
+    - 0.7077
+    - 0.7055
+    - 0.7014
+    - 0.6788
+    - 0.6628
+    - 0.6632
+    - 0.6515
+    - 0.6432
+    - 0.6477
+    - 0.6637
+    - 0.6797
+    - 0.6855
+    - 0.6755
+    - 0.6572
+    - 0.6528
+    - 0.6635
+    - 0.6634
+    - 0.657
+    - 0.6392
+    - 0.6368
+    - 0.6428
+  NO-N:
+    a_amp: 0.1295
+    a_peak: 4.2
+    b_mean: 0.998
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.0695
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+    x_ref_weekly:
+    - 0.6366
+    - 0.6204
+    - 0.5933
+    - 0.5639
+    - 0.5364
+    - 0.5085
+    - 0.4796
+    - 0.4549
+    - 0.433
+    - 0.4038
+    - 0.3829
+    - 0.3663
+    - 0.3487
+    - 0.3387
+    - 0.3212
+    - 0.3071
+    - 0.3117
+    - 0.3078
+    - 0.3273
+    - 0.3629
+    - 0.4241
+    - 0.4824
+    - 0.5266
+    - 0.5749
+    - 0.6179
+    - 0.6551
+    - 0.6752
+    - 0.6899
+    - 0.6989
+    - 0.7145
+    - 0.7304
+    - 0.7585
+    - 0.7657
+    - 0.7689
+    - 0.7805
+    - 0.7856
+    - 0.7875
+    - 0.805
+    - 0.8103
+    - 0.8055
+    - 0.8064
+    - 0.8087
+    - 0.8098
+    - 0.8021
+    - 0.7994
+    - 0.7817
+    - 0.7675
+    - 0.741
+    - 0.7176
+    - 0.6808
+    - 0.6588
+    - 0.6802
+  NO-S:
+    a_amp: 0.0915
+    a_peak: 5.1
+    b_mean: 0.641
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.0275
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.238
+    c_mid: 0.606
+    c_peak: 40.1
+    p_norm: mid
+    x_ref_weekly:
+    - 0.6366
+    - 0.6204
+    - 0.5933
+    - 0.5639
+    - 0.5364
+    - 0.5085
+    - 0.4796
+    - 0.4549
+    - 0.433
+    - 0.4038
+    - 0.3829
+    - 0.3663
+    - 0.3487
+    - 0.3387
+    - 0.3212
+    - 0.3071
+    - 0.3117
+    - 0.3078
+    - 0.3273
+    - 0.3629
+    - 0.4241
+    - 0.4824
+    - 0.5266
+    - 0.5749
+    - 0.6179
+    - 0.6551
+    - 0.6752
+    - 0.6899
+    - 0.6989
+    - 0.7145
+    - 0.7304
+    - 0.7585
+    - 0.7657
+    - 0.7689
+    - 0.7805
+    - 0.7856
+    - 0.7875
+    - 0.805
+    - 0.8103
+    - 0.8055
+    - 0.8064
+    - 0.8087
+    - 0.8098
+    - 0.8021
+    - 0.7994
+    - 0.7817
+    - 0.7675
+    - 0.741
+    - 0.7176
+    - 0.6808
+    - 0.6588
+    - 0.6802
+  SE-N:
+    a_amp: 0.128
+    a_peak: 5.1
+    b_mean: 0.934
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.0635
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid
+    x_ref_weekly:
+    - 0.6244
+    - 0.6078
+    - 0.5828
+    - 0.5595
+    - 0.5271
+    - 0.4893
+    - 0.4512
+    - 0.418
+    - 0.38
+    - 0.3452
+    - 0.3212
+    - 0.3033
+    - 0.2844
+    - 0.2609
+    - 0.2462
+    - 0.2352
+    - 0.2488
+    - 0.2743
+    - 0.3085
+    - 0.3765
+    - 0.4725
+    - 0.5375
+    - 0.594
+    - 0.6288
+    - 0.6594
+    - 0.6888
+    - 0.7259
+    - 0.7578
+    - 0.7732
+    - 0.7775
+    - 0.7755
+    - 0.79
+    - 0.796
+    - 0.8047
+    - 0.8217
+    - 0.8216
+    - 0.8264
+    - 0.8365
+    - 0.8373
+    - 0.8323
+    - 0.8392
+    - 0.8454
+    - 0.8431
+    - 0.8384
+    - 0.8278
+    - 0.8094
+    - 0.7894
+    - 0.7631
+    - 0.723
+    - 0.707
+    - 0.675
+    - 0.6828
+  SE-S:
+    a_amp: 0.1375
+    a_peak: 5.3
+    b_mean: 0.767
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.0375
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.614
+    c_peak: 39.3
+    p_norm: mid
+    x_ref_weekly:
+    - 0.6244
+    - 0.6078
+    - 0.5828
+    - 0.5595
+    - 0.5271
+    - 0.4893
+    - 0.4512
+    - 0.418
+    - 0.38
+    - 0.3452
+    - 0.3212
+    - 0.3033
+    - 0.2844
+    - 0.2609
+    - 0.2462
+    - 0.2352
+    - 0.2488
+    - 0.2743
+    - 0.3085
+    - 0.3765
+    - 0.4725
+    - 0.5375
+    - 0.594
+    - 0.6288
+    - 0.6594
+    - 0.6888
+    - 0.7259
+    - 0.7578
+    - 0.7732
+    - 0.7775
+    - 0.7755
+    - 0.79
+    - 0.796
+    - 0.8047
+    - 0.8217
+    - 0.8216
+    - 0.8264
+    - 0.8365
+    - 0.8373
+    - 0.8323
+    - 0.8392
+    - 0.8454
+    - 0.8431
+    - 0.8384
+    - 0.8278
+    - 0.8094
+    - 0.7894
+    - 0.7631
+    - 0.723
+    - 0.707
+    - 0.675
+    - 0.6828

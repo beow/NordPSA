@@ -1,0 +1,67 @@
+note: "KALIBRERAD 2040-TERMINALKURVA (2026-08-14) — korningen run334_no07_lam80_2h.\n\
+  Kalibrerad mot run320_pf_ref_dispatch_2h (FACIT: fullframsynt cyklisk dispatch av\n\
+  run260:s frysta flotta utan prisproxy). Facit-poang 0,338, dar proxyn ger 1,685\
+  \ och\nden gamla kalenderkurvan (run319) 2,428.\n\n  v/s     SE 1,48 (facit 1,43)\
+  \ | NO 1,96 (2,08) | FI 1,06 (1,06) | Norden 1,75 (1,77)\n  drift   -2,0 TWh over\
+  \ tre ar | spill 0 | magasinbana 8,4 pp fran facit i snitt\n  priser  inom 0,6-2,0\
+  \ EUR/MWh fran facit i alla sex zoner\n\nParametrarnas harledning:\n  a_peak=27\
+  \  HARLEDD, ej svept: facits veckoproduktion har sin forsta harmoniska topp\n  \
+  \           vecka 0,6, och som reservationspris ska lambda ha sin BOTTEN dar\n \
+  \            => topp ett halvar senare. Tidigare svep (5/36/40/44/48) missade detta\n\
+  \             helt; intervallet 6-35 var aldrig samplat.\n  a_amp=0,20 storre varden\
+  \ lyfter Norden-v/s men forsamrar per land (SE skjuter over).\n  b_mean=0,9 satter\
+  \ magasinets SVANGNING. 1,5 gav 155 EUR/MWh vid nastan tomt magasin,\n         \
+  \    sa modellen tappade aldrig ner (NO-S bottnade pa 12 % mot facits 4,4 %).\n\
+  \  NO 0,7     Norge behover storre svangning an ovriga — enda zonala parametern\
+  \ som\n             behovdes. NO fick facit-poangen fran 0,709 till 0,400 i ett\
+  \ steg.\n  lambda=80  Fullframsyntens egna vattenvarde 73,02 ar ratt ANKARE men\
+  \ for lagt\n             DRIFTvarde: vid 73 driver magasinet -19,5 TWh. UNDRE GRANS\
+  \ ~76-80 —\n             run335 med lambda 76 blev INFEASIBLE (fonster 66, april\
+  \ 2024: magasinen\n             nere pa 3-5 % och dygnsgolvet 0,20 x p_nom gick\
+  \ inte att uppfylla).\n  p_norm=mid kravs for att lambda_bas ska betyda vattenvardet\
+  \ vid halvfullt magasin.\n\nKVARSTAENDE FEL: produktionens sasongsfas ligger vecka\
+  \ 49 mot facits 0,6, dvs ~5 veckor\nfor tidigt. Den rorde sig INTE i nagon av de\
+  \ 12 korningarna och ar sannolikt\nframsynsgapet sjalvt (4 veckors fonster), inte\
+  \ en felstalld parameter."
+anchor_eur_per_mwh:
+  FI: 80.0
+  NO-N: 80.0
+  NO-S: 80.0
+  SE-N: 80.0
+  SE-S: 80.0
+zones:
+  FI:
+    a_amp: 0.2
+    a_peak: 27.0
+    b_mean: 0.9
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  NO-N:
+    a_amp: 0.2
+    a_peak: 27.0
+    b_mean: 0.7
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  NO-S:
+    a_amp: 0.2
+    a_peak: 27.0
+    b_mean: 0.7
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  SE-N:
+    a_amp: 0.2
+    a_peak: 27.0
+    b_mean: 0.9
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid
+  SE-S:
+    a_amp: 0.2
+    a_peak: 27.0
+    b_mean: 0.9
+    b_amp: 0.0
+    b_peak: 0.0
+    p_norm: mid

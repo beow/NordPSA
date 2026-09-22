@@ -1,0 +1,104 @@
+note: "PRODUKTIONSKANDIDAT v4, 2026-08-20. = v2 (a_amp x0,3, FI b_mean 0,75) med en\
+  \ ANDRA\nHARMONISK pa referensbanan: x_ref(v) = c_mid + c_amp*cos(2pi(v-c_peak)/52)\n\
+  \                                              + c_amp2*cos(4pi(v-c_peak2)/52).\n\
+  \nMOTIV: den rena kosinusen ar SYMMETRISK medan den verkliga magasinbanan har ett\
+  \ KNA --\nfyllningen startar abrupt (FI v17, SE v19) och gar nastan rakt upp i fem-sex\
+  \ veckor,\noch hostplatan ar bred och sen. Residualen mot EC:s median 2014-2026\
+  \ var systematisk,\n+-8-12 pp med teckenbyte vid knaet. Andra harmoniskan halverar\
+  \ felet:\n    R2 / RMS   SE 0,923->0,980 (5,7->2,9 pp) · NO 0,948->0,984 (3,9->2,2\
+  \ pp) ·\n               FI 0,642->0,919 (7,0->3,3 pp)   <- storst dar den behovs\
+  \ mest\n\nVARFOR INTE x_ref_weekly (v3, 52 fria varden): v3 var EXAKT men forbattrade\
+  \ ingenting\n(run389 mot run388: v/s +-0,02, poang 0,625->0,664, prisform 7,26->8,52).\
+  \ Den sankte\ndessutom lambda langs HELA banan ~3 %, sa testet konfunderades av\
+  \ ett nivaskifte.\nTva harmoniska tar 92-98 % av forbattringen med fem parametrar\
+  \ i stallet for 52, later\nkurvan forbli en slat funktion, och undviker att lasa\
+  \ modellen vid tolv ars brus.\nTredje harmoniska ger ytterligare ~1,5 pp men borjar\
+  \ anpassa sig till bruset.\n\nBasen ar ORTOGONAL pa 52-punktsrutnatet: de anpassade\
+  \ forsta-harmoniska vardena blir\nexakt dagens (SE c_mid 0,6143 / c_amp 0,2800 /\
+  \ c_peak 39,3), och c_amp2 = 0 ger\nbit-identiskt med v1/v2. Samma egenskap som\
+  \ a_amp2 har for nivafaktorn.\n\nVARNING: EC:s median finns bara PER LAND, sa SE-N/SE-S\
+  \ delar bana och NO-N/NO-S delar\nbana -- samma begransning som den enkla kosinusen\
+  \ hade.\nAnkaret likformigt 73 (facit run386: 72,87 i alla zoner). Dispatch med\n\
+  --terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5."
+anchor_eur_per_mwh:
+  FI: 73.0
+  NO-N: 73.0
+  NO-S: 73.0
+  SE-N: 73.0
+  SE-S: 73.0
+zones:
+  FI:
+    a_amp: 0.1605
+    a_peak: 1.1
+    b_mean: 0.75
+    b_amp: 0.48
+    b_peak: 21.3
+    a_amp2: -0.0675
+    a_peak2: 47.7
+    b_low_frac: 1.0
+    c_amp: 0.1319
+    c_mid: 0.6032
+    c_peak: 36.3
+    p_norm: mid
+    c_amp2: 0.0867
+    c_peak2: 25.6
+  NO-N:
+    a_amp: 0.1295
+    a_peak: 4.2
+    b_mean: 0.998
+    b_amp: 0.333
+    b_peak: 21.5
+    a_amp2: -0.0695
+    a_peak2: 48.2
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  NO-S:
+    a_amp: 0.0915
+    a_peak: 5.1
+    b_mean: 0.641
+    b_amp: 0.1
+    b_peak: 26.7
+    a_amp2: -0.0275
+    a_peak2: 48.1
+    b_low_frac: 1.0
+    c_amp: 0.2379
+    c_mid: 0.6061
+    c_peak: 40.1
+    p_norm: mid
+    c_amp2: 0.0463
+    c_peak2: 2.5
+  SE-N:
+    a_amp: 0.128
+    a_peak: 5.1
+    b_mean: 0.934
+    b_amp: 0.242
+    b_peak: 20.2
+    a_amp2: -0.0635
+    a_peak2: 47.9
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4
+  SE-S:
+    a_amp: 0.1375
+    a_peak: 5.3
+    b_mean: 0.767
+    b_amp: 0.19
+    b_peak: 25.8
+    a_amp2: -0.0375
+    a_peak2: 47.5
+    b_low_frac: 1.0
+    c_amp: 0.28
+    c_mid: 0.6143
+    c_peak: 39.3
+    p_norm: mid
+    c_amp2: 0.0697
+    c_peak2: 1.4

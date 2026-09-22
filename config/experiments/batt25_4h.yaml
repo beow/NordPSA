@@ -1,0 +1,3 @@
+# demand-scenariots batterier omskalade till 25 GW à 4 h.
+scenario:
+  battery_total: [25, 4]

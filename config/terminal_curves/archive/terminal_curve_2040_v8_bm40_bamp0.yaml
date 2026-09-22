@@ -1,0 +1,192 @@
+a_scale: 0.3
+anchor_eur_per_mwh:
+  FI: 72.5
+  NO-N: 70.2
+  NO-S: 69.6
+  SE-N: 66.0
+  SE-S: 64.5
+note: 'LÅST 2026-08-20 (run391_v7_anchors_3h). Produktionskurva.
+
+
+  PRODUKTIONSKANDIDAT v7, 2026-08-20. = v6 med b_amp LIKFORMIGT 0,27 (var 0,10-0,48).
+
+
+  MOTIV: samma som for b_mean och lambda_bas. Facit (run386, run320) ger lambda konstant
+  i
+
+  BADE tid och fyllnadsgrad, sa vid optimum ar hela kurvformen noll -- det finns ingen
+
+  UPPMATT zonskillnad att bevara, bara en gemensam avvikelse fran optimum som beror
+  pa hur
+
+  kort det rullande fonstret ser. Zonskillnaderna kom ur Geminis lambda-tabeller och
+  har
+
+  aldrig provats mot nagon oberoende observabel.
+
+
+  PROVAT OCH FORKASTAT: b_amp som funktion av magasinstorleken. Fysiskt rimligt (ett
+  litet
+
+  magasin MASTE fyllas under floden, ett stort kan vanta) men data bar det inte: r
+  = -0,60
+
+  pa fem punkter, och SE-S faller helt ur monstret -- minsta magasinet av alla (3,5
+  TWh,
+
+  fyra manaders produktion) men b_amp 0,190, alltsa nast lagst. Log-log-lutningen
+  blir
+
+  -0,22, langt fran de -1 som b_amp ~ 1/volym kraver.
+
+
+  NIVAN 0,27 = ENKELT medelvarde. Volym- och produktionsviktat ger 0,21, men de dras
+  ned av
+
+  NO-S (stort och lagst varde, 0,100) -- alltsa av just den zon vars varde vi beslutat
+  att
+
+  inte tro pa. Nar premissen ar att zonskillnaderna INTE ar verkliga ar varje zons
+  tal en
+
+  lika otillforlitlig observation av samma storhet, och da ar det enkla medlet ratt.
+
+
+  VARNING: NO-S andras mest, 0,100 -> 0,27 (+170 %). Det ar den zon som enligt 2040-facit
+
+  ska bara HELA Nordens sasongsbalansering (v/s 1,59 mot eSetts 1,30). Mat NO sarskilt.
+
+
+  FRIHETSGRADER: a_scale (1) + b_amp (1) + lambda_bas (1) = TRE, alla globala.
+
+  Lasta: b_mean 0,80 · alla sasongsfaser · hela x_ref · kvoten a_amp2/a_amp ·
+
+  b_low_frac 1,0 · p_norm ''mid''.
+
+  Ankaret likformigt 73. Dispatch med
+
+  --terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5.
+
+
+  ANKARE: de per-zons vardena ovan ar DRIFTKORRIGERINGEN for begransad framsyn,
+
+  harledd ur run390:s drift. Spridningen 64,5-72,5 (1,12x) ar INTE ett pastaende om
+  att
+
+  vatten ar olika mycket vart i olika zoner -- facit (run386) ger 72,87 likformigt
+  OCH
+
+  noll drift, men en rullande horisont kan bara fa det ena av tva med ett enda tal.
+
+  ⚠️ EXPANSION ska koras med 73 LIKFORMIGT (--terminal-anchor 73 eller --hydro-mc-curve
+
+  mot en fil med 73): cykliskt SOC ger noll drift per konstruktion, sa korrigeringen
+
+  saknar mening dar och skulle bli en artificiell zonskillnad i hydrons marginalkostnad.
+
+  ⚠️ Kanslighetens tvapunktsskattning (run378 vs run379) visade sig 4x for LAG for
+  SE-N
+
+  (1,36 TWh per enhet, ej 0,343). Damp och taka alltid vid omkalibrering.
+
+  ⚠️ SE ligger HELT utanfor EC-bandet (0 %) -- Sveriges magasin sitter ~5 pp under
+  tionde
+
+  percentilen. Kand oppen trad, forsamrad har mot run388:s 15 %.
+
+  ⚠️ FI:s drift (-0,51) gar INTE att nolla med lambda_bas: kansligheten 0,069 kraver
+  +9,0
+
+  enheter, vilket vore 12 % avvikelse. Takat vid +2,0. Accepterad brist.'
+note_bamp0: 'b_mean 4,0 OCH b_amp 0,0. Fjarde hornet i 2x2-designen b_mean {2,4} x
+  b_amp {0,27, 0}: v8 (2/0,27) · bm40 (4/0,27) · bamp0 (2/0) · denna (4/0).'
+note_bmean: "b_mean 4,0 (v7 har 0,80). ENDA skillnaden mot terminal_curve_2040_gemini_v7.yaml\
+  \ - b_low_frac star kvar pa 1,0, alltsa SYMMETRISKT brantare kurva.\n\nMOTIV (2026-08-25):\
+  \ B mattes icke-cirkulart mot EC-magasin + ENTSO-E-priser 2015-2025,\n  ln P(v)\
+  \ = ar_FE + sasong(2 harm.) - B*dev(v),  dev = fyllnad - EC:s median for veckan.\n\
+  Arsdummyn absorberar nivan (gaspris, torrar), sasongstermerna arsgangen; B identifieras\n\
+  ur variationen INOM aret. Uppmatt 2015-2025: SE-N 3,27 SE-S 1,53 NO-N 2,74 NO-S\
+  \ 2,85\nFI 1,71 (n=573/zon). Modellen (run420_baseline_dispatch_1h) ger 0,24-0,71\
+  \ utom FI 2,97.\n\nB ar REGIMBEROENDE: 2015-2020 ger 0,9-2,0, 2021-2025 ger 2,0-5,3.\
+  \ Svepets tva steg\nmotsvarar de tva regimtolkningarna av 2040: 2,0 = overskottsregim,\
+  \ 4,0 = knapphetsregim.\n\nGLOBALT, inte zonvis: pa 3-arsfonstret sag inlasta zoner\
+  \ ut att svara 2-3x starkare\n(run268/LOCKED_ZONES), men pa 11 ar forsvinner det\
+  \ - NO-N 2,74 ~ NO-S 2,85. Kvar finns\nbara SE-N > SE-S (3,27 mot 1,53, i alla delperioder),\
+  \ en andra fraga.\n\nMatning: temp/measure_b.py (kor samma regression pa en korning).\
+  \ Prisdata:\ntemp/fetch_hist_prices.py -> temp/zone_prices_hist.parquet."
+zones:
+  FI:
+    a_amp: 0.535
+    a_amp2: -0.225
+    a_peak: 1.1
+    a_peak2: 47.7
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 4.0
+    b_peak: 21.3
+    c_amp: 0.1319
+    c_amp2: 0.0867
+    c_mid: 0.6032
+    c_peak: 36.3
+    c_peak2: 25.6
+    p_norm: mid
+  NO-N:
+    a_amp: 0.43166667
+    a_amp2: -0.23166667
+    a_peak: 4.2
+    a_peak2: 48.2
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 4.0
+    b_peak: 21.5
+    c_amp: 0.2379
+    c_amp2: 0.0463
+    c_mid: 0.6061
+    c_peak: 40.1
+    c_peak2: 2.5
+    p_norm: mid
+  NO-S:
+    a_amp: 0.305
+    a_amp2: -0.09166667
+    a_peak: 5.1
+    a_peak2: 48.1
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 4.0
+    b_peak: 26.7
+    c_amp: 0.2379
+    c_amp2: 0.0463
+    c_mid: 0.6061
+    c_peak: 40.1
+    c_peak2: 2.5
+    p_norm: mid
+  SE-N:
+    a_amp: 0.42666667
+    a_amp2: -0.21166667
+    a_peak: 5.1
+    a_peak2: 47.9
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 4.0
+    b_peak: 20.2
+    c_amp: 0.28
+    c_amp2: 0.0697
+    c_mid: 0.6143
+    c_peak: 39.3
+    c_peak2: 1.4
+    p_norm: mid
+  SE-S:
+    a_amp: 0.45833333
+    a_amp2: -0.125
+    a_peak: 5.3
+    a_peak2: 47.5
+    b_amp: 0.0
+    b_low_frac: 1.0
+    b_mean: 4.0
+    b_peak: 25.8
+    c_amp: 0.28
+    c_amp2: 0.0697
+    c_mid: 0.6143
+    c_peak: 39.3
+    c_peak2: 1.4
+    p_norm: mid
