@@ -7,7 +7,10 @@ cables. The model combines **capacity expansion** (what should be built for 2040
 **dispatch** (how the resulting system runs, hour by hour, and what prices it produces),
 using 2023–2025 weather, inflow and load as the three reference years.
 
-![Model schematic](docs/nordpsa_schematic.png)
+![Model overview](docs/nordpsa_overview.png)
+
+*Model structure per zone, the six-zone grid, and the annual energy balance from the
+baseline 2040 dispatch run. Labels are in Swedish.*
 
 ## What it models
 
