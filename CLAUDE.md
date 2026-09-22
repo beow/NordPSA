@@ -104,7 +104,8 @@ nordpsa expand | dispatch | today → results/<run>/  (+ run_config.yaml)
 - `constraints/` — the `extra_functionality` callbacks: `soc` (cyclic SOC anchor), `terminal_value`, `bid_ladder`, `hydro_ops` (operation restrictions)
 - `profiles/` — time series the model is built on: `hydro_inflow` (NVE/ENTSO-E inflow + RoR, parametric spring-flood model, RoR high-frequency), `nuclear_availability` (synthetic stochastic availability), `heat_load` (When2Heat district-heating profiles)
 - `data/` — clients for external sources, used only by `scripts/fetch_*.py` and `build_inputs.py`: `esett`, `ec` (Energy Charts), `entsoe` (+ Elexon), `ninja` (Renewables.ninja)
-- `wv/` — terminal curve + scoring
+- `analysis/` — post-processing of solved runs: `energy_balance.country_balance` (per-country balance that must close to ≈ 0), used by `scripts/nordpsa_overview.py`
+- `wv/` — terminal curve
 
 ### Network components
 

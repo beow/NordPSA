@@ -91,6 +91,14 @@ Each run writes `results/<output>/`: the solved network (`network.nc`), CSV time
 fully resolved settings, and `run_meta.txt`. A dispatch inherits its source run's world
 from that file, so scenario settings never have to be repeated.
 
+To draw the overview figure shown above for any run (model structure with the run's
+energy flows and capacities, the zone grid with prices and congestion, and the energy
+balance per country):
+
+```bash
+python scripts/nordpsa_overview.py run002_disp        # writes docs/nordpsa_overview_run002.png
+```
+
 A full three-year expansion at 2h resolution takes several hours and ~6 GB of RAM; a
 single year at 3h runs in minutes.
 

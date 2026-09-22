@@ -1,0 +1,201 @@
+"""Energibalans per land (medel TWh/år) för en löst körning.
+
+BALANSEN ÄR EN ÄKTA KONTROLL. Varje term mäts OBEROENDE direkt ur körningens CSV:er /
+nätverk:
+  + produktion (alla källor INKL slack/lastskärning)
+  + batteri (netto urladdning)
+  − last  − H2-elektrolys  − värme-el  − EV-laddning
+  − kontinent-export (market-generatorer)
+  − intern export (NTC-länkflöden ur flows.csv; summerar till 0 på Norden-nivå)
+Identiteten ska bli ≈ 0. Eftersom exporten räknas från market-gen + länkflöden (INTE som
+residualen prod−last) avslöjar en balans ≠ 0 en glömd eller felräknad post.
+
+    from nordpsa.analysis.energy_balance import country_balance
+    tbl = country_balance("run460_baseline_dispatch_1h")   # index: SE, NO, DK, FI, Norden
+"""
+import pandas as pd
+import pypsa
+
+from nordpsa.inputs import load_config
+from nordpsa.settings import RESULTS_DIR
+
+ZONES = ['SE-N', 'SE-S', 'NO-N', 'NO-S', 'DK', 'FI']
+
+COUNTRY_MAP = {'SE-N': 'SE', 'SE-S': 'SE', 'NO-N': 'NO', 'NO-S': 'NO', 'DK': 'DK', 'FI': 'FI'}
+COUNTRIES   = ['SE', 'NO', 'DK', 'FI', 'Norden']
+# SOURCES = produktionsposter (mäts var för sig; 'hydro'+'ror' slås ihop till 'vatten'
+# i visningen, 'slack' ingår i prod_twh men visas ej som egen rad).
+# 'DSR' = industriell efterfrågeflex, modellerad som shed-generator på ELBUSSEN → den är
+# en KÄLLA i nodbalansen även om den fysiskt är bortkopplad last.
+SOURCES     = ['hydro', 'ror', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
+               'DSR', 'slack']
+# Visningsrader: vatten (= hydro+ror), produktion, demand, KONSUMTION TOTAL (= demand-summa), balans.
+# DSR ligger på KONSUMTIONSsidan: ingen energi produceras, det är efterfrågan som uteblir.
+# Modellen implementerar den som shed-generator på elbussen (den ÄR en källa i nodbalansen
+# och budar i meriten vid 100/250/500 €/MWh), men att räkna in den i PRODUKTION TOTAL gör
+# att den raden inte längre är faktisk generering. Visas därför POSITIV bland de negativa
+# förbrukningsraderna — den drar ifrån konsumtionen.
+SHOW_ROWS   = ['vatten', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
+               'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec', 'DSR',
+               'batt_net', 'kont_export', 'intern_export', 'kons_total', 'curt']
+ROW_LABELS  = {
+    'vatten': 'Vattenkraft',
+    'nuclear': 'Kärnkraft', 'wind_onshore': 'Vind onshore',
+    'wind_offshore': 'Vind offshore', 'solar': 'Sol',
+    'thermal': 'Termisk',
+    'gas': 'Gas',
+    'DSR': 'Efterfrågeflex (DSR)',
+    'prod_twh': 'PRODUKTION TOTAL', 'load_twh': 'Last', 'h2_elec': 'H2 (elektrolys + oflex)',
+    'heat_elec': 'Värme (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
+    # ⚠️ UTANFÖR BALANSEN och sist i tabellen: VRE-raderna visar dispatchad energi, så
+    # curtailment är inte längre en post som ska dras av någonstans — den är en upplysning
+    # om hur mycket som fanns men inte togs. Parenteserna i etiketten signalerar det, och
+    # nordpsa_overview kursiverar raden.
+    # ⚠️ HETTE 'spill' till 2026-08-19. Raden är UTESLUTANDE VRE-curtailment —
+    # hydrons förbiledning ingår INTE (den ligger i hydro_spill.csv och är 0,0000
+    # TWh i alla körningar sedan run316). 'Spill' betyder dessutom just hydrospill
+    # i resten av kodbasen (--spill-cost), så namnet pekade på fel storhet.
+    'curt': '(Curtailed VRE)',
+    'kont_export': 'Kontinental export', 'intern_export': 'Norden-intern export',
+    'kons_total': 'KONSUMTION TOTAL',
+}
+# Sänk-/förbruknings-rader visas NEGATIVA (utflöde) i tabellen. Rent KOSMETISKT —
+# balanskontrollen nedan använder de RÅA (positiva) värdena via BALANCE_SIGNS.
+DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
+               'kont_export', 'intern_export', 'kons_total'}
+
+
+# Balanskontroll: ÄKTA — varje post oberoende mätt. Identitet:
+#   produktion + batteri − last − H2 − värme-el − EV-laddning − kont.export − intern export = 0
+# Konstant, inte presentation: importörer (scripts/nordpsa_overview.py, notebook-cellen)
+# får samma teckenkonvention.
+BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'DSR': +1, 'load_twh': -1, 'h2_elec': -1,
+                 'heat_elec': -1, 'ev_elec': -1, 'kont_export': -1,
+                 'intern_export': -1}
+
+
+def country_balance(res_label):
+    """Energibalans per land (medel TWh/år) för en given körning — alla poster oberoende."""
+    RES_ = RESULTS_DIR / res_label
+    cfg  = load_config()
+    nn = pypsa.Network(); nn.import_from_netcdf(RES_ / 'network.nc')
+    disp = pd.read_csv(RES_ / 'dispatch_generators.csv', index_col=0, parse_dates=True)
+    hyd  = pd.read_csv(RES_ / 'dispatch_hydro.csv',      index_col=0, parse_dates=True)
+    flw  = pd.read_csv(RES_ / 'flows.csv',               index_col=0, parse_dates=True)
+    # loads_t.p, INTE p_set: konstanta laster (H2 typ 1) sätts statiskt på loads.p_set och
+    # saknas därför helt som kolumner i loads_t.p_set. För laster gäller p == p_set.
+    nl = (nn.loads_t.p if len(nn.loads_t.p.columns) else nn.loads_t.p_set).copy()
+    nl.index = pd.to_datetime(nl.index).tz_localize(None)
+    nl = nl.reindex(disp.index)
+    # AC-laster per zon. Uppdelningen på rader är namnbaserad men UTTÖMMANDE: allt som
+    # inte känns igen hamnar på 'Last'. En ny last kan därför aldrig försvinna tyst ur
+    # balansen — vilket 'H2 inflex' gjorde 2026-08-16 (35,1 TWh/år i run361).
+    ac_loads = {z: [l for l in nn.loads.index[nn.loads.bus == z] if l in nl.columns] for z in ZONES}
+    dt_h    = (disp.index[1] - disp.index[0]).total_seconds() / 3600
+    n_years = len(disp) * dt_h / 8760.0          # → medel per år
+    twh     = lambda s: float(s.sum()) * dt_h / 1e6 / n_years
+    zero    = pd.Series(0.0, index=disp.index)
+
+    # NTC-länkar = länkar mellan två AC-zoner (elektrolysör-länkar går till H2-buss → exkl).
+    ntc = [(l, nn.links.at[l, 'bus0'], nn.links.at[l, 'bus1']) for l in nn.links.index
+           if nn.links.at[l, 'bus0'] in ZONES and nn.links.at[l, 'bus1'] in ZONES]
+    # Batteri-storage (ej hydro) per buss
+    batt = nn.storage_units[nn.storage_units.carrier != 'hydro'] if len(nn.storage_units) else nn.storage_units
+    # VRE-tillgänglighet (p_max_pu × p_nom_opt) för curtailment/spill-beräkning.
+    VRE_CARRIERS = {'wind_onshore', 'wind_offshore', 'solar'}
+    pmax = nn.generators_t.p_max_pu.copy()
+    pmax.index = pd.to_datetime(pmax.index).tz_localize(None)
+    pmax = pmax.reindex(disp.index)
+
+    def zmkt(zone):
+        cols = [g for g in disp.columns if g in nn.generators.index
+                and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == 'market']
+        return disp[cols].sum(axis=1) if cols else zero
+
+    rows = []
+    for zone in ZONES:
+        r = {'country': COUNTRY_MAP[zone]}
+        curt = zero.copy()                       # ackumulerad VRE-curtailment (→ spill-raden)
+        for c in SOURCES:
+            if c == 'hydro':
+                # Magasin (StorageUnit); RoR-generatorerna redovisas separat som 'ror'.
+                s = hyd.get(f'{zone} hydro', zero).clip(lower=0)
+            elif c == 'ror':
+                rcols = [g for g in disp.columns if g in nn.generators.index
+                         and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == 'hydro']
+                s = disp[rcols].clip(lower=0).sum(axis=1) if rcols else zero
+            else:
+                # Summera ALLA generatorer med carrier c i zonen (t.ex. 'nuclear' +
+                # 'nuclear exp', wind_onshore + wind_new) — ej bara exakt '{zon} {c}'.
+                ccols = [g for g in disp.columns if g in nn.generators.index
+                         and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == c]
+                disp_c = disp[ccols].clip(lower=0).sum(axis=1) if ccols else zero   # slack ingår här
+                if c in VRE_CARRIERS and ccols:
+                    # VRE redovisas som FAKTISKT DISPATCHAT (2026-08-19; visade tidigare
+                    # TILLGÄNGLIGT, vilket gjorde PRODUKTION TOTAL till en hybrid: summan
+                    # var inte vad som matades in på nätet). Curtailment räknas fortfarande
+                    # men är en UPPLYSNINGSRAD utanför balansen.
+                    avail = sum((pmax[g] * nn.generators.at[g, 'p_nom_opt']
+                                 for g in ccols if g in pmax.columns), zero)
+                    curt = curt + (avail - disp_c).clip(lower=0)
+                s = disp_c
+            r[c] = twh(s)
+        r['curt']      = twh(curt)
+        # Länkar väljs på CARRIER, inte på namn: LMA-uppdelningen gav flera elektrolysörer
+        # per zon ('{z} electrolyser ef' för elektrobränslen), och en namnuppslagning
+        # missade dem tyst (15,2 TWh/år i run361).
+        def lsum(carrier, side='bus0'):
+            sel = [l for l in nn.links.index if nn.links.at[l, 'carrier'] == carrier
+                   and nn.links.at[l, side] == zone]
+            return sum((flw.get(l, zero).clip(lower=0) for l in sel), zero)
+
+        # KVV-el (bakpress-länk: bränsle×η_el → AC) läggs på thermal-raden (matchar eSett).
+        eta_el = float(((((cfg.get('heat') or {}).get('zones') or {}).get(zone, {}).get('chp')) or {}).get('eta_el', 0.0))
+        r['thermal'] += twh(lsum('heat chp', 'bus1')) * eta_el
+        # Värme-el (AC → värmebuss via VP + el-panna, länk-p0).
+        r['heat_elec'] = twh(lsum('heat hp') + lsum('heat elboiler'))
+        # Oflexibla AC-laster som INTE hör till 'Last'-raden: de ligger på elbussen men
+        # redovisas på sin egen rad (EV resp. H2 typ 1 = konstant vätgaslast).
+        zl        = ac_loads[zone]
+        ev_names  = [l for l in zl if ' EV ' in l and l.endswith('inflex')]
+        h2_names  = [l for l in zl if l.endswith('H2 inflex')]
+        ev_inflex = sum((nl[l].fillna(0.0) for l in ev_names), zero)
+        h2_inflex = sum((nl[l].fillna(0.0) for l in h2_names), zero)
+        # H2-el = elektrolysörer (länk-p0) + oflexibel H2-last (AC-last).
+        r['h2_elec']   = twh(lsum('electrolyser') + h2_inflex)
+        # EV-laddning = flexibel (charger-länk p0) + oflexibel (fast AC-last, svk-läget).
+        r['ev_elec']   = twh(lsum('EV charger') + ev_inflex)
+        # Kontinent-export (market-gen: p>0 import, p<0 export → netto export = −Σp)
+        r['kont_export'] = -twh(zmkt(zone))
+        # Intern export = netto NTC-flöde UT ur zonen (p0 = bus0→bus1)
+        ie = zero.copy()
+        for l, b0, b1 in ntc:
+            f = flw.get(l, zero)
+            if   b0 == zone: ie = ie + f
+            elif b1 == zone: ie = ie - f
+        r['intern_export'] = twh(ie)
+        # Batteri netto urladdning (positiv = ut på nätet); index per position (samma snapshots)
+        bz = [s for s in batt.index if nn.storage_units.at[s, 'bus'] == zone]
+        r['batt_net'] = (float(nn.storage_units_t.p[bz].to_numpy().sum()) * dt_h / 1e6 / n_years) if bz else 0.0
+        # 'Last' = ALLA övriga AC-laster (restposten, så inget kan falla mellan stolarna).
+        r['load_twh'] = twh(sum((nl[l].fillna(0.0) for l in zl
+                                 if l not in ev_names and l not in h2_names), zero))
+        rows.append(r)
+
+    d = pd.DataFrame(rows)
+    # DSR utanför PRODUKTION TOTAL (se SHOW_ROWS); slack ingår, det ÄR levererad energi.
+    d['prod_twh']   = d[[s for s in SOURCES if s != 'DSR']].sum(axis=1)
+    d['vatten']     = d['hydro'] + d['ror']         # magasin + älv (RoR) i en post
+    # KONSUMTION TOTAL = inhemsk last + nettoexport (export = utflöde = last) − batteri (netto ut).
+    # = PRODUKTION TOTALT vid balans → de två totalraderna möts.
+    d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec']
+                       + d['kont_export'] + d['intern_export']
+                       - d['batt_net'] - d['DSR'])
+    # SHOW_ROWS + de råa källposterna som slås ihop i visningen ('hydro'/'ror' → 'vatten',
+    # 'slack' ingår i prod_twh). Importörer behöver dem uppdelade — scripts/nordpsa_overview.py
+    # ritar magasin och älvkraft som separata boxar. Tabeller indexerar SHOW_ROWS explicit,
+    # så extrakolumnerna syns aldrig.
+    extra = [c for c in SOURCES if c not in SHOW_ROWS]
+    cyr = d.groupby('country')[SHOW_ROWS + extra].sum()
+    cyr.loc['Norden'] = cyr.sum()
+    return cyr
