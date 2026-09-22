@@ -345,7 +345,7 @@ def make_link_extendable(n, cfg: dict, link_name: str, overnight_eur_per_w: floa
           f"overnight {overnight_eur_per_w:.2f} €/W, annual.kap {ann/1e3:.0f} €/kW/år)")
 
 
-def apply_post_build(n, cfg: dict, s: dict, extras: dict, n_years: float) -> None:
+def apply_post_build(n, cfg: dict, s: dict, n_years: float) -> None:
     """Ändringar som kräver det byggda nätverket, i fast ordning."""
     lh = s["scenario"]["low_hydro"]
     if lh is not None:

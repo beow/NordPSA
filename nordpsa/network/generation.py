@@ -168,7 +168,7 @@ def add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
 
 
 def add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
-                       ccfg: dict, r: float, n_years: float, snapshots=None,
+                       r: float, n_years: float, snapshots=None,
                        synth_params: dict | None = None) -> None:
     """Exogen FAST kärnkraft via --add-nuclear-fixed ZON:N:MW[:SEED] som EGEN generator
     '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max) om

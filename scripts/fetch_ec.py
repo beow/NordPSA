@@ -36,7 +36,6 @@ PRICE_BZNS_ENTSOE = ["GB"]
 # Nordic MBA-zoner: SE/DK/FI från Energy Charts, NO från ENTSO-E
 NORDIC_MBAS_EC     = ["SE1", "SE2", "SE3", "SE4", "DK1", "DK2", "FI"]
 NORDIC_MBAS_ENTSOE = ["NO1", "NO2", "NO3", "NO4", "NO5"]
-NORDIC_MBAS = NORDIC_MBAS_EC + NORDIC_MBAS_ENTSOE  # för bakåtkompatibilitet
 
 
 def raw_path_dk(year: int) -> Path:

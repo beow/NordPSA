@@ -12,8 +12,6 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
-import yaml
-from scipy.optimize import curve_fit
 
 from nordpsa.settings import ROOT
 
@@ -51,71 +49,6 @@ def load_actual_hydro(zone: str) -> pd.Series:
     daily = ts.resample("D").mean()
     daily.index = daily.index.dayofyear
     return daily.groupby(daily.index).mean()
-
-
-def fit_zone(zone: str, actual: pd.Series) -> Dict[str, float]:
-    """Fittar modellparametrar mot faktisk daglig produktion för en zon."""
-    doy = actual.index.values.astype(float)
-    y   = actual.values
-
-    C0     = float(np.percentile(y, 10))
-    A0     = float(np.percentile(y, 90) - C0)
-    # Startgissning: vårflod topp kring dag 120 (maj), säsongsmin kring februari (phi≈65)
-    p0     = [A0, 120.0, 30.0, A0 * 0.3, 65.0, C0]
-    bounds = (
-        [0,   60,  10,  0,    0,   0      ],
-        [np.inf, 180, 90, np.inf, 180, np.inf],
-    )
-
-    try:
-        popt, _ = curve_fit(_model, doy, y, p0=p0, bounds=bounds, maxfev=10_000)
-    except RuntimeError:
-        popt = p0  # fallback till startgissning
-
-    A, mu, sigma, B, phi, C = popt
-    return {
-        "A": round(float(A), 2),
-        "mu": round(float(mu), 2),
-        "sigma": round(float(sigma), 2),
-        "B": round(float(B), 2),
-        "phi": round(float(phi), 2),
-        "C": round(float(C), 2),
-    }
-
-
-def fit_and_save_all(zones: list[str]) -> Dict[str, Dict[str, float]]:
-    """Fittar parametrar för alla zoner med hydro och sparar till hydro_params.yaml."""
-    all_params: Dict[str, Dict[str, float]] = {}
-
-    for zone in zones:
-        path = RAW_DIR / f"production_{zone}_2023.parquet"
-        if not path.exists():
-            continue
-        # Kolla om zonen har hydro
-        df_check = pd.read_parquet(path)
-        if df_check["hydro"].fillna(0).sum() == 0:
-            print(f"  {zone}: ingen vattenkraft — hoppar över")
-            continue
-
-        print(f"  Fittar inflödesmodell för {zone} ...", end=" ", flush=True)
-        try:
-            actual = load_actual_hydro(zone)
-            params = fit_zone(zone, actual)
-            all_params[zone] = params
-            print(
-                f"OK  C={params['C']:.0f} MW  "
-                f"A={params['A']:.0f} MW  "
-                f"mu=dag {params['mu']:.0f}"
-            )
-        except Exception as e:
-            print(f"FEL: {e}")
-
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    out = PROCESSED_DIR / "hydro_params.yaml"
-    with open(out, "w") as f:
-        yaml.dump(all_params, f, default_flow_style=False, sort_keys=True)
-    print(f"  → {out.name}")
-    return all_params
 
 
 def load_nve_inflow(zone: str, snapshots: pd.DatetimeIndex) -> pd.Series:

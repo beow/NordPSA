@@ -50,12 +50,6 @@ NORDPSA_ZONES = ["SE-N", "SE-S", "NO-N", "NO-S", "DK", "FI"]
 CET_TZ = pytz.timezone("Europe/Stockholm")
 
 
-def _parse_iso8601_z(s: str) -> _dt.datetime:
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    return _dt.datetime.fromisoformat(s)
-
-
 def _coerce_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:

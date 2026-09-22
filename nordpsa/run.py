@@ -185,7 +185,7 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
                       ror_hifreq_tau_days=float(rh["tau_days"]))
 
     n_years = len(snapshots) * res / 8760.0
-    world.apply_post_build(n, cfg, s, extras, n_years)
+    world.apply_post_build(n, cfg, s, n_years)
     callbacks = _hydro_constraints(n, cfg, s)
     world.apply_potentials(n, s, extras)
 

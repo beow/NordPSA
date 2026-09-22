@@ -85,7 +85,6 @@ data/processed/
   vre_pnom.yaml           (installed capacities per zone/carrier)
   nuclear_profile.parquet (availability factor per zone, 0-1)
   thermal_profile.parquet (must-run thermal MW per zone)
-  hydro_params.yaml       (GENERATED — do not edit, auto-fitted from production data)
   market_price.parquet    (DE-LU hourly price)
             ↓
 nordpsa/network/ (build_network) → pypsa.Network
@@ -221,7 +220,7 @@ The rolling horizon has an **attractor around 77 TWh**: runs end there regardles
 
 ### Inflow, run-of-river and other data-driven profiles
 
-- **Inflow:** NVE/ENTSO-E measured series for SE and NO (`profiles/hydro_inflow.py`); FI uses the parametric spring-flood model, with parameters that are **hand-calibrated** in `config/hydro_params.yaml` (not `data/processed/hydro_params.yaml`, which is auto-generated and must never be used). Verify hydrology after a run with `n.storage_units_t.inflow`: SE-N should peak ~15 GW in May and ~2.6 GW in January.
+- **Inflow:** NVE/ENTSO-E measured series for SE and NO (`profiles/hydro_inflow.py`); FI uses the parametric spring-flood model, with parameters that are **hand-calibrated** in `config/hydro_params.yaml` (an old `data/processed/hydro_params.yaml` from removed fitting code may exist locally; it is never read). Verify hydrology after a run with `n.storage_units_t.inflow`: SE-N should peak ~15 GW in May and ~2.6 GW in January.
 - **Run-of-river** is a must-run generator split from the reservoir, which keeps the storage volume `p_nom·max_hours`. SE's reported RoR has only ~52 distinct values per year (weekly steps; SvK reports no B11), so SE-N/SE-S/FI get synthetic high-frequency structure (`hydro.ror_hifreq`, σ 0.22), with p_nom locked and weekly energy preserved. The reservoir/RoR split barely affects the aggregate seasonal ratio: the reservoir compensates about two thirds of any change.
 - **Nuclear:** existing fleet must-run on its actual availability profile; with `nuclear.add` the existing fleet switches to a synthetic stochastic profile and new reactors are extendable, load-following down to `new_min_load` (0.6 in the 2040 world). `--dry-run` prints must-run fractions per generator.
 - **Thermal** is must-run on its actual profile and is not subtracted from load.

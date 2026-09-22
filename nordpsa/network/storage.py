@@ -3,8 +3,7 @@
 import pypsa
 
 
-def add_batteries(n: pypsa.Network, batteries: list | None,
-                   ccfg: dict, r: float, n_years: float) -> None:
+def add_batteries(n: pypsa.Network, batteries: list | None, ccfg: dict) -> None:
     """Lägger till batterier som StorageUnit (carrier 'battery').
 
     batteries: lista av (zon, p_nom_mw, max_hours). Alla är FASTA och fria (sunk,

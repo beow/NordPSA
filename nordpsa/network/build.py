@@ -25,7 +25,6 @@ def build_network(
     thermal_profile:         pd.DataFrame,
     hydro_params:            dict,
     market_prices:           Dict[str, pd.Series],
-    actual_inflow:           bool = True,
     hydro_mc_override:       Dict[str, pd.Series] | None = None,
     voll:                    float | None = None,
     batteries:               list | None = None,
@@ -93,7 +92,6 @@ def build_network(
     add_slack(n, cfg, all_zones=(voll is not None), voll_price=voll)
     add_thermal(n, thermal_profile, cfg)
     add_hydro(n, cfg, hydro_params, snapshots, ccfg,
-               actual_inflow=actual_inflow,
                zone_prices=zone_prices,
                ror_hifreq=ror_hifreq,
                ror_hifreq_seed=ror_hifreq_seed,
@@ -103,12 +101,12 @@ def build_network(
     add_vre(n, cfg, vre_profiles, vre_noms, ccfg, r, fom, n_years)
     add_gas(n, cfg, ccfg, r, fom, n_years)
     add_market_connections(n, cfg, market_prices)
-    add_batteries(n, batteries, ccfg, r, n_years)
+    add_batteries(n, batteries, ccfg)
     add_extra_nuclear(n, extra_nuclear, ccfg, r, n_years, snapshots,
                        (synthetic_nuclear or {}).get("params"), fom)
-    add_fixed_nuclear(n, (synthetic_nuclear or {}).get("fixed"), cfg, ccfg, r, n_years,
+    add_fixed_nuclear(n, (synthetic_nuclear or {}).get("fixed"), cfg, r, n_years,
                        snapshots, (synthetic_nuclear or {}).get("params"))
-    add_hydrogen(n, cfg, r, fom, n_years, hydrogen_overrides)
+    add_hydrogen(n, cfg, r, n_years, hydrogen_overrides)
     add_industrial_dsr(n, cfg)
     add_heat(n, cfg, heat_demand, r, n_years)
     add_chp(n, cfg, heat_demand, r, n_years)

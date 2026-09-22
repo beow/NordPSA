@@ -61,7 +61,6 @@ def add_hydro(
     hydro_params:         dict,
     snapshots:            pd.DatetimeIndex,
     ccfg:                 dict,
-    actual_inflow:        bool = True,
     zone_prices:          dict | None = None,
     ror_hifreq:           float = 0.0,
     ror_hifreq_seed:      int = 0,
@@ -74,7 +73,7 @@ def add_hydro(
         if p_nom == 0 or zone not in hydro_params:
             continue
 
-        used_nve = bool(actual_inflow and zone in NVE_INFLOW_ZONES)
+        used_nve = zone in NVE_INFLOW_ZONES
         if used_nve:
             inflow = load_nve_inflow(zone, snapshots)
             # Run-of-river: separat must-run-generator. Reservoarinflödet

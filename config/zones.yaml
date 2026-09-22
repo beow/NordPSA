@@ -7,15 +7,15 @@ zones:
     mbas: [SE1, SE2]
     hydro_p_nom_mw: 13300   # SvK/Energiföretagen 2024: SE1 5.2 + SE2 8.1 GW (var 11500)
     hydro_max_hours: 2180   # 29.0 TWh reservoarvolym bevarad (13300×2180); var 2522×11500
-    hydro_soc_initial: 0.567  # = hydro_soc_start (EC 2023-01-02, SE). VAR 0.62 (3-årssnitt
-                              # ENTSO-E A72 SE1+SE2) till 2026-08-23 — se noten vid hydro_soc_start.
+    hydro_soc_initial: 0.567  # EC 2023-01-02, SE (se noten SOC-ANKARET). VAR 0.62 (3-årssnitt
+                              # ENTSO-E A72 SE1+SE2) till 2026-08-23 — se noten SOC-ANKARET.
     nuclear_p_nom_mw: 0
 
   SE-S:
     mbas: [SE3, SE4]
     hydro_p_nom_mw: 2900    # SvK/Energiföretagen 2024: SE3 2.6 + SE4 0.3 GW (var 2000)
     hydro_max_hours: 1207   # 3.5 TWh reservoarvolym bevarad (2900×1207); var 1750×2000
-    hydro_soc_initial: 0.567  # = hydro_soc_start (EC ger bara LANDSNIVÅ, så SE-S delar SE-N:s
+    hydro_soc_initial: 0.567  # EC 2023-01-02, SE (EC ger bara LANDSNIVÅ, så SE-S delar SE-N:s
                               # tal). VAR 0.55 (SE3+SE4 snitt) till 2026-08-23.
     nuclear_p_nom_mw: 6900   # Forsmark 1-3 + Ringhals 3-4
 
@@ -23,14 +23,14 @@ zones:
     mbas: [NO3, NO4]
     hydro_p_nom_mw: 11000
     hydro_max_hours: 2727   # 30.0 TWh reservoar (NVE NO3+NO4)
-    hydro_soc_initial: 0.630  # = hydro_soc_start (EC 2023-01-02, NO). VAR 0.70 till 2026-08-23.
+    hydro_soc_initial: 0.630  # EC 2023-01-02, NO (se noten SOC-ANKARET). VAR 0.70 till 2026-08-23.
     nuclear_p_nom_mw: 0
 
   NO-S:
     mbas: [NO1, NO2, NO5]
     hydro_p_nom_mw: 22000
     hydro_max_hours: 2609   # 57.4 TWh reservoar (NVE NO1+NO2+NO5)
-    hydro_soc_initial: 0.630  # = hydro_soc_start (EC 2023-01-02, NO). VAR 0.70 till 2026-08-23.
+    hydro_soc_initial: 0.630  # EC 2023-01-02, NO (se noten SOC-ANKARET). VAR 0.70 till 2026-08-23.
     nuclear_p_nom_mw: 0
 
   DK:
@@ -45,7 +45,7 @@ zones:
     hydro_max_hours: 1719          # 5.5 TWh magasinsvolym (5.5e6/3200; Åbo Akademi-review); var 500 (1.6 TWh, okalibrerad placeholder från initial commit)
     hydro_ror_fraction: 0.33       # ~1/3 av FI:s vattenkraftsENERGI är run-of-river (ej reglerbar); splittas till must-run (formad efter avrinning, glättad till CF~0.5), reservoaren får resten + hela lagervolymen
     hydro_ror_regulated_frac: 0.80  # ⚠️ ANTAGANDE: finska verk körs dygns-/effektreglerat, inte fritt strömmande (Gemini, Montel-valideringen). Formen blandas (1-α)·inflöde + α·platt; α anpassad mot NO:s UPPMÄTTA B11 (0,75/0,87) — se scripts/synth_se_ror.SE_ROR_ALPHA. Höjer FI:s v/s 0,64 → 0,79 (mål 1,13)
-    hydro_soc_initial: 0.575  # = hydro_soc_start (EC 2023-01-02, FI). VAR 0.65 till 2026-08-23.
+    hydro_soc_initial: 0.575  # EC 2023-01-02, FI (se noten SOC-ANKARET). VAR 0.65 till 2026-08-23.
     nuclear_p_nom_mw: 4400   # Loviisa 1-2 + Olkiluoto 1-3
 
 # Syntetisk kärnkrafts-tillgänglighet. Delade Monte-Carlo-parametrar för alla zoner;
@@ -366,38 +366,20 @@ baseline_batteries:
 # Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
 
 # Driftrestriktioner på RESERVOARvattenkraften (REN OPTION, default av).
-# Aktiveras med --hydro-restrictions. Hindrar LP:ns två orealistiska ytterligheter:
-# (a) att stänga av vattenkraften helt under långa lågprisperioder — små magasin i
-# älvsystemen skulle svämma över; (b) att köra maxeffekt vecka efter vecka, ett
-# vanligt utfall i ELLI-liknande modeller.
-# Alla andelar avser RESERVOARDELENS p_nom (efter ev. RoR-split), inte hela flottan.
-# FAKTISK fyllnadsgrad vid periodens start (2023-01-01), för --rolling-horizon.
-#
-# ⚠️ SKILJ FRÅN zones.*.hydro_soc_initial. Den är CYKLISKA körningars ankare för
-# start = slut ("normalnivå att återvända till") och ändras INTE här — en ändring där
-# skulle göra run260-baselinen oreproducerbar. Detta är något annat: ett äkta
-# BEGYNNELSEVILLKOR. I rullande horisont finns inget cykliskt villkor alls, nivån bärs
-# över från fönster till fönster i tre år, och startvärdet propagerar därför genom hela
-# körningen i stället för att tvättas bort.
-#
-# ⛔ ANVÄNDS INTE LÄNGRE SOM DEFAULT (2026-08-23). Rullande horisont startar numera på
-# hydro_soc_initial — samma nivå som expansionen — så att de två lägena blir jämförbara.
-# Mätt på run418 mot run418-dispatch: den gamla defaulten startade dispatchen 8 TWh lägre
-# (61,1 % mot 67,5 % av 125,4 TWh), vilket gjorde årsvisa prisjämförelser mellan lägena
-# missvisande.
-#
+# SOC-ANKARET (zones.*.hydro_soc_initial): uppmätt fyllnadsgrad vid periodens start.
+# Används av båda lägena — expansionens cykliska start = slut och den rullande
+# horisontens begynnelsevillkor — så att lägena startar på samma lager.
 # KÄLLA: Energy Charts, veckovis magasinenergi (TWh per land),
 # veckan 2023-01-02: SE 18,42 TWh / NO 55,07 / FI 3,16 — dividerat med modellens
 # zonvolymer (SE 32,49 / NO 87,40 / FI 5,50 TWh).
 # ⚠️ ANTAGANDE: samma fyllnadsgrad i båda delzonerna inom ett land (EC ger bara
 # landsnivå). SE-N och SE-S kan i verkligheten skilja sig åt.
-hydro_soc_start:
-  SE-N: 0.567
-  SE-S: 0.567
-  NO-N: 0.630
-  NO-S: 0.630
-  FI:   0.575
 
+# Aktiveras med hydro.restrictions (default på). Hindrar LP:ns två orealistiska ytterligheter:
+# (a) att stänga av vattenkraften helt under långa lågprisperioder — små magasin i
+# älvsystemen skulle svämma över; (b) att köra maxeffekt vecka efter vecka, ett
+# vanligt utfall i ELLI-liknande modeller.
+# Alla andelar avser RESERVOARDELENS p_nom (efter ev. RoR-split), inte hela flottan.
 hydro_operation:
   active: false
   # ── LÅSTA 2026-08-14 efter run337/340/341/342. Ändra inte utan ny mätning. ──

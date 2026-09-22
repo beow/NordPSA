@@ -6,7 +6,7 @@ from nordpsa.network.core import MC_SLACK
 from nordpsa.network.costs import crf
 
 
-def add_hydrogen(n: pypsa.Network, cfg: dict, r: float, fom: float,
+def add_hydrogen(n: pypsa.Network, cfg: dict, r: float,
                   n_years: float, overrides: dict | None = None) -> None:
     """Bygger valfria vätgassystem per zon (power-to-X):
 
