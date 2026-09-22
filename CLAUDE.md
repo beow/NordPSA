@@ -19,9 +19,10 @@ pip install -e .                       # install nordpsa package
 Data must be fetched and built before solving:
 
 ```bash
-make fetch        # fetch eSett load + production data (scripts/fetch_esett.py)
-make fetch-ec     # fetch Energy Charts VRE profiles + DE-LU day-ahead price
-make build        # build processed parquet inputs (scripts/build_inputs.py)
+make data         # full pipeline: fetch (eSett, Energy Charts, NVE/ENTSO-E, ninja, Open-Meteo),
+                  # synthetic SE run-of-river, then build data/processed/
+make build        # only rebuild data/processed/ from data/raw/
+make fetch-nve    # single steps: see Makefile (needs ENTSOE_API_TOKEN / NINJA_TOKEN)
 ```
 
 ### Running the model: three commands

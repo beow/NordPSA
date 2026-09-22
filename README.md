@@ -43,20 +43,28 @@ The solver is [HiGHS](https://highs.dev) (installed with the environment).
 Input data is fetched from public sources and built into `data/processed/`; neither raw
 nor processed data is part of the repository.
 
+Two sources need a free API key in the environment: `ENTSOE_API_TOKEN`
+([ENTSO-E Transparency](https://transparency.entsoe.eu)) and `NINJA_TOKEN`
+([Renewables.ninja](https://www.renewables.ninja)). Then:
+
 ```bash
-make fetch            # eSett: load and production per zone
-make fetch-ec         # Energy Charts: VRE profiles and continental prices
-make fetch-nve        # NVE/ENTSO-E: hydro inflow and run-of-river
-make fetch-ninja      # Renewables.ninja: offshore wind profiles
-make fetch-openmeteo  # Open-Meteo: temperatures for heat demand
-python scripts/synth_se_ror.py   # synthetic Swedish run-of-river (SvK reports none)
-make build            # build data/processed/
-make build-heat       # district-heating load profiles
+make data             # fetch everything, then build data/processed/
 ```
 
-Some sources need a free API key in the environment: `ENTSOE_API_TOKEN`
-([ENTSO-E Transparency](https://transparency.entsoe.eu)) and `NINJA_TOKEN`
-([Renewables.ninja](https://www.renewables.ninja)).
+which runs, in order:
+
+| step | source / output |
+|---|---|
+| `make fetch-esett` | eSett: load and production per zone |
+| `make fetch-ec` | Energy Charts: VRE profiles and continental prices |
+| `make fetch-nve` | NVE and ENTSO-E: reservoir inflow and run-of-river |
+| `make fetch-ninja` | Renewables.ninja: offshore wind profiles |
+| `make fetch-openmeteo` | Open-Meteo: temperatures for heat demand |
+| `make synth-ror` | synthetic Swedish run-of-river (Svenska kraftnät reports none) |
+| `make build` | `data/processed/`: load, VRE, nuclear, thermal, prices, EV, heat |
+
+Fetch steps skip files that already exist, so `make data` can be re-run after an
+interruption. `make build` alone rebuilds `data/processed/` from `data/raw/`.
 
 ## Running
 
