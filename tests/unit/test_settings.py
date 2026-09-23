@@ -104,3 +104,20 @@ def test_dispatch_from_run_without_config_is_explained(results_dir):
     (results_dir / "old_run").mkdir()
     with pytest.raises(SystemExit, match="run_config.yaml saknas"):
         settings.resolve_from_run("old_run")
+
+
+def test_stability_validation_rules():
+    ok = settings.resolve("dispatch", "today", capacities="config",
+                          sets=["stability.enabled=true", "stability.ek_system_gws=120"])
+    assert ok["stability"]["enabled"] and ok["dispatch"]["stability_slack_penalty"] == 100
+    for sets, msg in [
+        (["stability.enabled=true"], "ek_system_gws eller"),
+        (["stability.ek_system_gws=-1"], "ek_system_gws"),
+        (["stability.sync_weight.DK=1.5"], "sync_weight"),
+        (["dispatch.stability_slack_penalty=0"], "stability_slack_penalty"),
+    ]:
+        with pytest.raises(SystemExit, match=msg):
+            settings.resolve("dispatch", "today", capacities="config", sets=sets)
+    with pytest.raises(SystemExit, match="bara dispatch"):
+        settings.resolve("expansion", "2040_svk_mm",
+                         sets=["stability.enabled=true", "stability.ek_system_gws=120"])

@@ -15,8 +15,10 @@ import sys
 
 from nordpsa import inputs as inp
 from nordpsa import modes, settings, solve, world
+from nordpsa.analysis.stability import stability_data, stability_report, write_stability_reports
 from nordpsa.constraints import (hydro_bid_ladder, hydro_operation_bounds,
-                                 hydro_operation_constraints, hydro_operation_feasibility_report)
+                                 hydro_operation_constraints, hydro_operation_feasibility_report,
+                                 stability_constraints, stability_feasibility_report)
 from nordpsa.network import build_network
 from nordpsa.settings import RESULTS_DIR, ROOT
 
@@ -55,6 +57,12 @@ def summary_flags(s: dict) -> list[str]:
     if s["voll"] is not None: f.append(f"voll{int(s['voll'])}")
     if s["hydro"]["restrictions"]: f.append("hydro-restrictions")
     if s["heat"]["enabled"]: f.append("heat")
+    st = s["stability"]
+    if st["enabled"]:
+        f.append("stability" + (f"-ek{st['ek_system_gws']:g}" if st["ek_system_gws"] else "")
+                 + "".join(f"_{z}{v:g}" for z, v in st["ek_zone_floor_gws"].items()))
+        pen = s["dispatch"]["stability_slack_penalty"]
+        f.append(f"stabslack-{pen:g}" if pen else "stab-hard")
     for e in r["experiments"]:
         f.append(f"exp-{e}")
     for spec in r["set"]:
@@ -133,6 +141,41 @@ def _hydro_constraints(n, cfg: dict, s: dict) -> list:
     return callbacks
 
 
+def _stability_sdata(cfg: dict, s: dict) -> dict:
+    st = s["stability"]
+    for zone in list(st["ek_zone_floor_gws"]) + list(st["sync_weight"]):
+        if zone not in cfg["zones"]:
+            raise SystemExit(f"stability: okänd zon {zone!r}")
+    return stability_data(st["tech"], st["sync_weight"], cfg)
+
+
+def _stability_constraints(n, cfg: dict, s: dict) -> list:
+    """Krav på rotationsenergi (dispatch). Anropas EFTER frysningen av kapaciteterna."""
+    st, pen = s["stability"], s["dispatch"]["stability_slack_penalty"]
+    sdata = _stability_sdata(cfg, s)
+    print(f"Stabilitetskrav (rotationsenergi), sync_weight {sdata['sync_weight']}, "
+          + (f"mjukt, straff {pen:g} €/(MWs·h)" if pen else "HÅRT"))
+    for line in stability_feasibility_report(n, sdata, st["ek_system_gws"],
+                                             st["ek_zone_floor_gws"]):
+        print(f"  {line}")
+    return [stability_constraints(sdata, st["ek_system_gws"], st["ek_zone_floor_gws"], pen)]
+
+
+def _print_stability(summ, slack, wts) -> None:
+    sy = summ.loc["SYSTEM"]
+    print(f"Rotationsenergi SYSTEM (inkopplat): min {sy['Ek_on_min']:.1f}  "
+          f"p05 {sy['Ek_on_p05']:.1f}  median {sy['Ek_on_median']:.1f} GWs "
+          f"(utan krav hade driften gett lo/hi-medianer {sy['Ek_lo_median']:.1f}/"
+          f"{sy['Ek_hi_median']:.1f})")
+    if slack is not None:
+        for col in slack:
+            used = slack[col] > 1e-3
+            print(f"  slack {col}: {float(wts.reindex(slack.index)[used].sum()):.0f} h, "
+                  f"max {slack[col].max()/1e3:.1f} GWs, "
+                  f"{float((slack[col] * wts.reindex(slack.index)).sum())/1e3:.0f} GWs·h")
+    print("  → stability_*.csv")
+
+
 def _dry_run_report(n) -> None:
     nuc = n.generators[n.generators.carrier == "nuclear"]
     print("\n=== DRY-RUN: kärnkraftsgeneratorer ===")
@@ -193,6 +236,8 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
         if caps not in ("config",):              # frys till källkörningens p_nom_opt
             modes.freeze_capacities_from(n, caps)
         modes.apply_vre_curtailment_cost(n, float(s["dispatch"]["vre_curtailment_cost"]))
+        if s["stability"]["enabled"]:
+            callbacks += _stability_constraints(n, cfg, s)
 
     if dry_run:
         _dry_run_report(n)
@@ -214,6 +259,12 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
         # exporteras också — PyPSA ackumulerar fönstren i n.*_t.
         n.export_to_netcdf(RESULTS_DIR / label / "network.nc")
         solve.save_results_dict(results, label)
+        if s["stability"]["enabled"]:
+            rep = stability_report(n, sdata=_stability_sdata(cfg, s),
+                                   online=results.get("stability_online"))
+            write_stability_reports(rep, RESULTS_DIR / label)
+            _print_stability(rep["summary"], results.get("stability_slack"),
+                             n.snapshot_weightings.generators)
     else:
         solve.save_results(n, label)
     print("Klart!")

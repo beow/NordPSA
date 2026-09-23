@@ -63,6 +63,14 @@ hydro:
     tau_days: 3.5
     seed: 7
 
+stability:                  # krav på rotationsenergi (data: zones.yaml:stability); ärvs av dispatch --from
+  enabled: false            # ⚠️ av som default: regressionstestet kräver bit-identiskt LP
+  ek_system_gws: null       # nordiskt krav Σ_z w_z·E_k,z(t) ≥ krav [GWs]
+  ek_zone_floor_gws: {}     # fri tabell, zon: GWs. Robusthetsvillkor (nätdelning), INTE fysik:
+                            # hela synkronområdet har en frekvens
+  sync_weight: {}           # fri tabell, zon: vikt — override på zones.yaml:stability.sync_weight
+  tech: {}                  # fri tabell, teknikklass: {H: …, m_min: …} — override på zones.yaml
+
 solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex. user_bound_scale)
 
 # ---- lägesberoende; bara det aktiva lägets sektion används ----------------------------
@@ -78,3 +86,6 @@ dispatch:
   terminal_curve: config/terminal_curves/terminal_curve_2040_gemini_v12.yaml
   terminal_anchor: null     # tal (alla zoner) eller {zon: λ_bas}; null = kurvfilens ankare
   terminal_segments: 20
+  stability_slack_penalty: 100  # €/(MWs·h) underskott mot stabilitetskraven; null = hårt krav.
+                            # ~15× dyraste verkliga källan (gas på minlast ≈ 6,8). Används slacken
+                            # i > 1 % av timmarna är kravet, inte straffet, problemet

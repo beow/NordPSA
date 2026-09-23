@@ -19,7 +19,8 @@ import pypsa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nordpsa.analysis.stability import stability_report, write_stability_reports  # noqa: E402
+from nordpsa.analysis.stability import (stability_data, stability_report,  # noqa: E402
+                                        write_stability_reports)
 
 
 def _weights(items: list[str]) -> dict:
@@ -33,8 +34,8 @@ def _weights(items: list[str]) -> dict:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", type=Path)
-    ap.add_argument("--sync-weight", nargs="*", default=["DK=0.35"],
-                    help="zonvikt i det nordiska systemvärdet, ZON=VIKT (default DK=0.35, ⚠️ okalibrerat)")
+    ap.add_argument("--sync-weight", nargs="*", default=None,
+                    help="zonvikt i det nordiska systemvärdet, ZON=VIKT (default zones.yaml:stability)")
     ap.add_argument("--thresholds", nargs="*", type=float, default=[100, 120, 145],
                     help="E_k-trösklar för systemet [GWs] att räkna timmar under")
     ap.add_argument("--no-write", action="store_true", help="skriv inga CSV:er")
@@ -42,9 +43,12 @@ def main():
 
     logging.getLogger("pypsa").setLevel(logging.WARNING)
     n = pypsa.Network(args.run_dir / "network.nc")
-    sw = _weights(args.sync_weight)
+    sdata = stability_data(sync_weight=_weights(args.sync_weight or []))
+    sw = sdata["sync_weight"]
+    online_csv = args.run_dir / "stability_online.csv"
+    online = pd.read_csv(online_csv, index_col=0, parse_dates=True) if online_csv.exists() else None
 
-    rep = stability_report(n, sw, tuple(args.thresholds))
+    rep = stability_report(n, sw, tuple(args.thresholds), sdata, online)
     cap, summ = rep["capacity"], rep["summary"]
 
     pd.set_option("display.width", 200)
@@ -54,7 +58,7 @@ def main():
     tot = cap.groupby("tech").sum()
     tot.index = pd.MultiIndex.from_product([["TOTAL"], tot.index])
     print(pd.concat([cap, tot]).round(1).to_string())
-    print("\nE_k [GWs], S_k [GVA], SCR per zon (lo = u=p, hi = u=p/m_min, max = allt tillgängligt; SCR mot inmatad IBR):")
+    print("\nE_k [GWs], S_k [GVA], SCR per zon (on = löst p_online, lo = u=p, hi = u=p/m_min, max = allt tillgängligt; SCR mot inmatad IBR):")
     print(summ.round(1).to_string())
 
     if not args.no_write:

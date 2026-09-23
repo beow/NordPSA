@@ -462,6 +462,10 @@ stability:
   # effekt), avail = tillgänglighetsfaktor för gfm, ibr_w = vikt i SCR-kravets P_IBR,
   # i_ibr = omriktarens felström [pu av märkström] (räknas bara med sk_include_ibr).
   x_t: 0.12                      # ⚠️ ANTAGANDE: maskintransformatorns reaktans, 0,10–0,15 pu
+  # Zonens vikt i det nordiska systemvärdet Σ_z w_z·E_k,z. DK-zonen är elektriskt två system:
+  # DK1 tillhör det kontinentala synkronområdet, DK2 det nordiska. ⚠️ 0,35 ≈ DK2:s andel,
+  # okalibrerat; kör 0 som känslighetsfall. Zoner som saknas har vikt 1.
+  sync_weight: {DK: 0.35}
   tech:
     nuclear:     {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 1.00}
     nuclear_new: {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 0.60}

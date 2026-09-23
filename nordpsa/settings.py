@@ -175,6 +175,22 @@ def validate(s: dict) -> None:
     bl = s["hydro"]["bid_ladder"]
     if bl is not None and (len(bl) != 2 or int(bl[0]) < 1):
         raise SystemExit("hydro.bid_ladder: [K, BREDD] med K ≥ 1, eller null")
+    st = s["stability"]
+    if st["enabled"]:
+        if mode == "expansion":
+            raise SystemExit("stability.enabled: bara dispatch än så länge (expansionens "
+                             "kapacitetsvillkor är inte implementerat)")
+        if not st["ek_system_gws"] and not st["ek_zone_floor_gws"]:
+            raise SystemExit("stability.enabled kräver ek_system_gws eller ek_zone_floor_gws")
+    if st["ek_system_gws"] is not None and float(st["ek_system_gws"]) <= 0:
+        raise SystemExit("stability.ek_system_gws: > 0 eller null")
+    if any(float(v) < 0 for v in st["ek_zone_floor_gws"].values()):
+        raise SystemExit("stability.ek_zone_floor_gws: golven måste vara ≥ 0")
+    if any(not 0 <= float(v) <= 1 for v in st["sync_weight"].values()):
+        raise SystemExit("stability.sync_weight: vikterna måste ligga i [0, 1]")
+    pen = s["dispatch"]["stability_slack_penalty"]
+    if pen is not None and float(pen) <= 0:
+        raise SystemExit("dispatch.stability_slack_penalty: > 0, eller null för hårt krav")
 
 
 def save(s: dict, label: str) -> Path:

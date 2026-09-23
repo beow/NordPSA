@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from nordpsa.constraints import hydro_soc_initial_constraint, hydro_terminal_value
+from nordpsa.constraints import (hydro_soc_initial_constraint, hydro_terminal_value,
+                                 stability_results)
 from nordpsa.settings import RESULTS_DIR, ROOT
 
 
@@ -64,6 +65,7 @@ def extract_results(n) -> dict:
     }
     if len(n.stores) > 0:
         out["h2_store_soc"] = n.stores_t.e
+    out.update(stability_results(n))      # tom utan stabilitetsvillkor
     return out
 
 

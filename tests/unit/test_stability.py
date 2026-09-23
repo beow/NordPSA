@@ -92,3 +92,110 @@ def test_online_bounds(net):
     wind = np.array([np.nan, 0.5, 1.0, 2.0])
     np.testing.assert_allclose(ts[("P_ibr_out", "A")], np.nan_to_num(wind))
     np.testing.assert_allclose(ts[("SCR_max", "A")], ts[("Sk_max", "A")] / wind)
+
+
+# ---- villkoren (constraints/stability.py) på ett löst leksaksnät --------------------------
+from nordpsa.constraints.stability import (stability_constraints,  # noqa: E402
+                                           stability_feasibility_report, stability_results)
+
+E_RES = SD["tech"]["hydro_res"]["H"] / SD["tech"]["hydro_res"]["cos_phi"]   # MWs/MW
+E_GAS = SD["tech"]["gas"]["H"] / SD["tech"]["gas"]["cos_phi"]
+M_RES, M_GAS = SD["tech"]["hydro_res"]["m_min"], SD["tech"]["gas"]["m_min"]
+
+
+def toy():
+    """A: magasin 1000 MW + vind, B: gas 500 MW + vind. Vinden täcker lasten, så utan krav
+    står magasin och gas still och systemet har ingen rotationsenergi alls."""
+    sn = pd.date_range("2023-01-02", periods=6, freq="h")
+    n = pypsa.Network()
+    n.set_snapshots(sn)
+    for b in ("A", "B"):
+        n.add("Bus", b, carrier="AC")
+    n.add("Link", "A-B", bus0="A", bus1="B", carrier="AC", p_nom=2000, p_min_pu=-1)
+    n.add("StorageUnit", "A hydro", bus="A", carrier="hydro", p_nom=1000, max_hours=100,
+          state_of_charge_initial=50000, marginal_cost=20)
+    n.add("Generator", "A wind", bus="A", carrier="wind_onshore", p_nom=2000, p_max_pu=0.9)
+    n.add("Generator", "B wind", bus="B", carrier="wind_onshore", p_nom=1000, p_max_pu=0.9)
+    n.add("Generator", "B gas", bus="B", carrier="gas", p_nom=500, marginal_cost=100)
+    n.add("Load", "A load", bus="A", p_set=800)
+    n.add("Load", "B load", bus="B", p_set=300)
+    return n
+
+
+def solve_toy(sys_gws=None, floors=None, weights=None, penalty=None):
+    n = toy()
+    sd = stability_data(sync_weight=weights or {})
+    cb = stability_constraints(sd, sys_gws, floors or {}, penalty) if (sys_gws or floors) else None
+    status, _ = n.optimize(solver_name="highs", extra_functionality=cb)
+    return n, status, stability_results(n) if status == "ok" else {}
+
+
+def ek_gws(n, res):
+    on = res["stability_online"]
+    return pd.DataFrame({"A": on["A hydro"] * E_RES, "B": on["B gas"] * E_GAS}) / 1e3
+
+
+@pytest.fixture(scope="module")
+def reference():
+    n, status, res = solve_toy()
+    assert status == "ok"
+    return n, res
+
+
+def test_disabled_adds_nothing(reference):
+    n, res = reference
+    assert res == {}                                      # extract_results oförändrat
+    assert not [c for c in n.model.constraints if "stability" in c]
+
+
+def test_system_requirement_binds_and_costs_more(reference):
+    ref, _ = reference
+    assert ref.storage_units_t.p_dispatch["A hydro"].max() < 1e-6, "referensen körde hydro — svagt test"
+    n, status, res = solve_toy(sys_gws=2.0)
+    assert status == "ok"
+    ek = ek_gws(n, res)
+    assert (ek.sum(axis=1) >= 2.0 - 1e-6).all()
+    assert n.objective > ref.objective + 1.0
+    # billigast per MWs: magasinet (20 €/MWh · m_min/e) före gasen (100 · m_min/e)
+    assert n.generators_t.p["B gas"].max() < 1e-6
+    np.testing.assert_allclose(n.storage_units_t.p_dispatch["A hydro"], M_RES * 2000 / E_RES,
+                               rtol=1e-6)
+    assert (res["stability_dual"]["SYSTEM"] > 0).all()
+
+
+def test_commitment_bounds_hold():
+    n, _, res = solve_toy(sys_gws=2.5, floors={"B": 0.5})
+    on = res["stability_online"]
+    p = pd.concat([n.storage_units_t.p_dispatch["A hydro"], n.generators_t.p["B gas"]], axis=1)
+    cap = pd.Series({"A hydro": 1000.0, "B gas": 500.0})
+    mmin = pd.Series({"A hydro": M_RES, "B gas": M_GAS})
+    on = on[p.columns]
+    assert (p <= on + 1e-6).all().all()
+    assert (p >= on * mmin - 1e-6).all().all()
+    assert (on <= cap + 1e-6).all().all()
+
+
+def test_zone_floor_is_local():
+    n, status, res = solve_toy(floors={"B": 1.0})
+    assert status == "ok"
+    assert (ek_gws(n, res)["B"] >= 1.0 - 1e-6).all()
+    assert n.generators_t.p["B gas"].min() > 0            # A:s magasin kan inte hjälpa B
+
+
+def test_sync_weight_zero_excludes_zone_from_system():
+    n, status, res = solve_toy(sys_gws=2.0, weights={"B": 0.0})
+    assert status == "ok"
+    assert (ek_gws(n, res)["A"] >= 2.0 - 1e-6).all()      # hela kravet på A
+
+
+def test_hard_infeasible_soft_prices_the_shortfall():
+    ek_max_a = 1000 * E_RES / 1e3                         # A:s tak; B räknas inte
+    _, status, _ = solve_toy(sys_gws=5.0, weights={"B": 0.0})
+    assert status != "ok"
+    n, status, res = solve_toy(sys_gws=5.0, weights={"B": 0.0}, penalty=100.0)
+    assert status == "ok"
+    np.testing.assert_allclose(res["stability_slack"]["SYSTEM"], (5.0 - ek_max_a) * 1e3,
+                               rtol=1e-6)
+    lines = stability_feasibility_report(toy(), stability_data(sync_weight={"B": 0.0}), 5.0, {})
+    assert "INFEASIBLE" in lines[0]
+    assert not "INFEASIBLE" in stability_feasibility_report(toy(), SD, 2.0, {})[0]

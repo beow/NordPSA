@@ -105,10 +105,10 @@ nordpsa expand | dispatch | today → results/<run>/  (+ run_config.yaml)
 - `solve.py` — cyclic LP, rolling horizon with terminal curve, result extraction/saving
 - `inputs.py` — config and processed inputs, snapshots, resampling, CF boost
 - `network/` — builds the PyPSA network: `build.py` (`build_network`) calls one module per component type — `core` (buses, links, load, slack), `generation` (thermal, nuclear, VRE, gas), `hydropower`, `storage`, `market`, `hydrogen`, `heat`, `ev`, `dsr`; `costs` annualizes capital costs
-- `constraints/` — the `extra_functionality` callbacks: `soc` (cyclic SOC anchor), `terminal_value`, `bid_ladder`, `hydro_ops` (operation restrictions)
+- `constraints/` — the `extra_functionality` callbacks: `soc` (cyclic SOC anchor), `terminal_value`, `bid_ladder`, `hydro_ops` (operation restrictions), `stability` (rotational-energy requirement, dispatch only)
 - `profiles/` — time series the model is built on: `hydro_inflow` (NVE/ENTSO-E inflow + RoR, parametric spring-flood model, RoR high-frequency), `nuclear_availability` (synthetic stochastic availability), `heat_load` (When2Heat district-heating profiles)
 - `data/` — clients for external sources, used only by `scripts/fetch_*.py` and `build_inputs.py`: `esett`, `ec` (Energy Charts), `entsoe` (+ Elexon), `ninja` (Renewables.ninja)
-- `analysis/` — post-processing of solved runs: `energy_balance.country_balance` (per-country balance that must close to ≈ 0), used by `scripts/nordpsa_overview.py`
+- `analysis/` — post-processing of solved runs: `energy_balance.country_balance` (per-country balance that must close to ≈ 0), used by `scripts/nordpsa_overview.py`; `stability` (rotational energy E_k and short-circuit power S_k per zone, `scripts/stability_report.py`, works on any old run)
 - `wv/` — terminal curve
 
 ### Network components
@@ -229,6 +229,23 @@ The rolling horizon has an **attractor around 77 TWh**: runs end there regardles
 - **Run-of-river** is a must-run generator split from the reservoir, which keeps the storage volume `p_nom·max_hours`. SE's reported RoR has only ~52 distinct values per year (weekly steps; SvK reports no B11), so SE-N/SE-S/FI get synthetic high-frequency structure (`hydro.ror_hifreq`, σ 0.22), with p_nom locked and weekly energy preserved. The reservoir/RoR split barely affects the aggregate seasonal ratio: the reservoir compensates about two thirds of any change.
 - **Nuclear:** existing fleet must-run on its actual availability profile; with `nuclear.add` the existing fleet switches to a synthetic stochastic profile and new reactors are extendable, load-following down to `new_min_load` (0.6 in the 2040 world). `--dry-run` prints must-run fractions per generator.
 - **Thermal** is must-run on its actual profile and is not subtracted from load.
+
+### Stability: rotational energy (dispatch only, off by default)
+
+`stability.enabled` adds a Nordic requirement on rotational energy, `Σ_z w_z·E_k,z(t) ≥ ek_system_gws` (optional zone floors `ek_zone_floor_gws`), to a **dispatch**. Expansion is refused until the capacity-based formulation exists. Data (H, cosφ, X''_d, m_min per technology class, the `"Component:carrier"` mapping, `sync_weight`) is in `zones.yaml:stability`; settings in `defaults.yaml:stability`.
+
+- **Commitment is linearized:** every synchronous unit that is not must-run gets `u = p_online` with `m_min·u ≤ p ≤ u ≤ p_max_pu·p_nom`, and contributes `E_k = eff·H/cosφ·u`. Must-run units (thermal, existing nuclear, RoR) contribute their `p_max_pu·p_nom`. Commitment is free; what makes inertia cost is `p ≥ m_min·u` — more online requires more *production*. **m_min therefore sets the whole price of inertia** (hydro 0.30, gas/CHP 0.40, new nuclear 0.60).
+- **Soft in dispatch:** slack at `dispatch.stability_slack_penalty` (100 €/(MWs·h), ~15× the dearest real source). Slack used in > 1 % of hours means the requirement, not the penalty, is the problem. `stability_feasibility_report` prints E_k,max vs the requirement before solving.
+- **Outputs:** `stability_online.csv`, `stability_slack.csv`, `stability_dual.csv` (€/(MWs·h), per hour) and `stability_{capacity,timeseries,summary}.csv`. ⚠️ Where the requirement is slack, `u` is not unique (anything in `[p, p/m_min]`), so `Ek_on` is only meaningful in binding hours.
+- **Measuring any run** without the constraint: `lo` (u = p), `hi` (u = p/m_min) and `max` (all available online) bound the unknown commitment. SCR is measured against **actual inverter infeed**: against installed capacity it is < 1 in DK, FI and SE-S even in today's system, which works.
+
+⚠️ **Status and limits:**
+- **Everything is literature typical values, not measurements** — H, cosφ, X''_d, X_T, m_min, `sync_weight DK 0.35` (DK2's share; DK1 belongs to the continental area). The level 120 GWs is a proposal from the Nordic TSOs' FFR material (120–145), **not calibrated**; Fingrid's measured kinetic-energy series (which also includes load inertia) was deliberately skipped.
+- **Inertia is a system quantity**; zone floors are a robustness (network-split) condition, not physics. HVDC gives none: the continental `market` valves contribute nothing, and DK1's AC support from Germany is not in the model.
+- **Aggregation error:** one reservoir per zone makes `u` "share of the fleet online", which is reasonable for hydro but optimistic for 1.5 GW nuclear units ⇒ inertia cost is underestimated. FFR is not credited against the requirement (a fixed requirement is an upper bound on need).
+- Not modelled: synchronous condensers, grid-forming batteries, an SCR requirement, and the expansion counterpart (capacity-based requirement with investable condensers and batteries) — planned, not built.
+
+**First run** (`run469_stab_ek120_dispatch_2h` vs `run468_baseline_dispatch_2h`, identical otherwise): 120 GWs is always reachable (E_k,max ≥ 212) and binds in **3.6 % of hours** (942 of 26 304), almost all May–August around midday — solar hours with low load. It is met by running reservoir hydro harder (NO-N +0.44, NO-S +0.35 GW in binding hours), never by slack or gas. Dual 2.2 €/(MWs·h) mean, 5.4 max; three-year mean prices move ≤ 0.1 €/MWh (NO-N −0.7), prices in binding hours fall (NO-N −20 €/MWh, the forced hydro production is price-taking). Reservoir end stock −0.11 TWh. ⇒ at 120 GWs the 2040 baseline has a **mild, cheap** inertia problem; the requirement level, not the mechanism, is the open question.
 
 ### Solver
 

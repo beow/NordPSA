@@ -9,12 +9,13 @@ Per enhet, med p_nom i MW aktiv effekt (för KVV-länken på bränslesidan, där
 Teknikdata och mappning (komponenttyp, carrier) → teknikklass ligger i
 config/zones.yaml, block `stability:`.
 
-Gamla körningar har ingen inkopplingsvariabel, så inkopplad effekt u är okänd. Den
-begränsas i stället av samma villkor som dispatchen kommer att få (m_min·u ≤ p ≤ u ≤ ā):
+Utan stabilitetsvillkor har körningen ingen inkopplingsvariabel, så inkopplad effekt u är
+okänd. Den begränsas i stället av samma villkor som dispatchen har (m_min·u ≤ p ≤ u ≤ ā):
 
     lo   u = p                        minst inkopplat som är förenligt med driften
     hi   u = min(p / m_min, ā)        mest inkopplat som är förenligt med driften
     max  u = ā = p_max_pu · p_nom     allt tillgängligt inkopplat (fysikalisk övre gräns)
+    on   u = p_online                 den lösta inkopplingen (bara med stability.enabled)
 
 Enheter med p_min_pu = p_max_pu (thermal, befintlig kärnkraft, strömkraft) är `fixed`:
 deras inkoppling är bestämd av data, u = ā i alla tre fallen.
@@ -48,10 +49,12 @@ _TECH_DEFAULTS = {"H": 0.0, "cos_phi": 1.0, "xd2": np.nan, "m_min": 0.0, "avail"
                   "ibr_w": 0.0, "i_ibr": 0.0, "aux_loss_pu": 0.0}
 
 
-def stability_data(tech: dict | None = None) -> dict:
-    """zones.yaml:s `stability:`-block, med ev. overrides per teknikklass."""
-    sdata = dict(load_config()["stability"])
+def stability_data(tech: dict | None = None, sync_weight: dict | None = None,
+                   cfg: dict | None = None) -> dict:
+    """zones.yaml:s `stability:`-block, med ev. overrides per teknikklass och zonvikt."""
+    sdata = dict((cfg or load_config())["stability"])
     sdata["tech"] = {k: dict(v) for k, v in sdata["tech"].items()}
+    sdata["sync_weight"] = {**(sdata.get("sync_weight") or {}), **(sync_weight or {})}
     for k, v in (tech or {}).items():
         if k not in sdata["tech"]:
             raise ValueError(f"stability.tech: okänd teknikklass {k!r}")
@@ -144,15 +147,25 @@ def capacity_contribution(u: pd.DataFrame, by_zone: bool = True) -> pd.DataFrame
     return df.groupby(["zone", "tech"])[num].sum()
 
 
-def online_capacity(n, u: pd.DataFrame, kind: str) -> pd.DataFrame:
-    """Inkopplad kapacitet u(t) [MW, i p_nom-enheter] för commit-enheterna (snapshot × enhet)."""
-    if kind not in KINDS:
-        raise ValueError(f"kind måste vara en av {KINDS}")
+def online_capacity(n, u: pd.DataFrame, kind: str,
+                    online: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Inkopplad kapacitet u(t) [MW, i p_nom-enheter] för commit-enheterna (snapshot × enhet).
+
+    kind = "on" kräver `online`, den lösta p_online (saknade enheter = 0).
+    """
+    if kind not in KINDS + ("on",):
+        raise ValueError(f"kind måste vara en av {KINDS + ('on',)}")
     parts = []
     for c, uc in u[u["mode"] == "commit"].groupby("component"):
         avail = n.get_switchable_as_dense(c, "p_max_pu")[uc.index] * uc.cap
         if kind == "max":
             parts.append(avail)
+            continue
+        if kind == "on":
+            p = online.reindex(index=n.snapshots, columns=uc.index).fillna(0.0)
+            fixed = uc.index[uc.fixed]
+            p[fixed] = avail[fixed]
+            parts.append(p)
             continue
         attr, col = _DISPATCH[c]
         p = getattr(n, attr)[col].reindex(index=n.snapshots, columns=uc.index).fillna(0.0)
@@ -167,10 +180,11 @@ def online_capacity(n, u: pd.DataFrame, kind: str) -> pd.DataFrame:
 
 
 def stability_metrics(n, u: pd.DataFrame, sync_weight: dict | None = None,
-                      sk_include_ibr: bool = False) -> pd.DataFrame:
+                      sk_include_ibr: bool = False,
+                      online: pd.DataFrame | None = None) -> pd.DataFrame:
     """Tidsserier, kolumner (metric, zon). Enheter GWs, GVA, GW, –.
 
-    Ek_<kind>, Sk_<kind>, SCR_<kind> för kind i max/hi/lo; P_ibr (installerad) och P_ibr_out
+    Ek_<kind>, Sk_<kind>, SCR_<kind> för kind i max/hi/lo (+ on med `online`); P_ibr (installerad) och P_ibr_out
     (inmatad), båda ibr_w-viktade. Ek_<kind> har dessutom kolumnen SYSTEM = Σ_z w_z · Ek_z.
 
     SCR = S_k / P_ibr_out, mot omriktarnas FAKTISKA inmatning i timmen (batteriets laddning
@@ -201,8 +215,9 @@ def stability_metrics(n, u: pd.DataFrame, sync_weight: dict | None = None,
 
     res = {}
     cm = u[u["mode"] == "commit"]
-    for kind in KINDS:
-        on = online_capacity(n, u, kind)
+    kinds = KINDS + (("on",) if online is not None else ())
+    for kind in kinds:
+        on = online_capacity(n, u, kind, online)
         for metric, coef, const in (("Ek", cm.e_coef, ek_const), ("Sk", cm.s_coef, sk_const)):
             val = (on * coef[on.columns]).T.groupby(cm.zone[on.columns]).sum().T
             res[f"{metric}_{kind}"] = val.reindex(index=sn, columns=zones, fill_value=0.0) / 1e3 + const
@@ -211,7 +226,7 @@ def stability_metrics(n, u: pd.DataFrame, sync_weight: dict | None = None,
     res["P_ibr_out"] = p_ibr_out
 
     w = pd.Series({z: float(sw.get(z, 1.0)) for z in zones})
-    for kind in KINDS:
+    for kind in kinds:
         res[f"Ek_{kind}"][SYSTEM] = (res[f"Ek_{kind}"] * w).sum(axis=1)
     out = pd.concat(res, axis=1, names=["metric", "zone"])
     return out
@@ -225,14 +240,15 @@ def stability_summary(ts: pd.DataFrame, weights: pd.Series,
     vilket är exakt när alla snapshots har samma vikt.
     """
     rows = {}
-    for metric in ("Ek_max", "Ek_hi", "Ek_lo", "Sk_max", "Sk_lo", "SCR_max", "SCR_hi", "SCR_lo",
-                   "P_ibr_out"):
+    on = ("Ek_on", "Sk_on", "SCR_on") if "Ek_on" in ts else ()
+    for metric in on + ("Ek_max", "Ek_hi", "Ek_lo", "Sk_max", "Sk_lo", "SCR_max", "SCR_hi",
+                        "SCR_lo", "P_ibr_out"):
         df = ts[metric]
         rows[(metric, "min")] = df.min()
         rows[(metric, "p05")] = df.quantile(0.05)
         rows[(metric, "median")] = df.median()
     for thr in thresholds_gws:
-        for kind in ("hi", "lo"):
+        for kind in ("on", "hi", "lo") if on else ("hi", "lo"):
             sys_ek = ts[(f"Ek_{kind}", SYSTEM)]
             below = float(weights.reindex(ts.index)[sys_ek < thr].sum())
             rows[(f"h_Ek_{kind}<{thr:g}", "h")] = pd.Series({SYSTEM: below})   # bara systemet
@@ -244,10 +260,14 @@ def stability_summary(ts: pd.DataFrame, weights: pd.Series,
 
 
 def stability_report(n, sync_weight: dict | None = None,
-                     thresholds_gws: tuple = (100, 120, 145), sdata: dict | None = None) -> dict:
-    """Allt för ett nätverk: enhetstabell, kapacitetsbidrag, tidsserier och sammanfattning."""
+                     thresholds_gws: tuple = (100, 120, 145), sdata: dict | None = None,
+                     online: pd.DataFrame | None = None) -> dict:
+    """Allt för ett nätverk: enhetstabell, kapacitetsbidrag, tidsserier och sammanfattning.
+    sync_weight = None tar vikterna ur sdata (zones.yaml)."""
+    sdata = sdata or stability_data()
     u = unit_table(n, sdata)
-    ts = stability_metrics(n, u, sync_weight)
+    sw = sdata["sync_weight"] if sync_weight is None else sync_weight
+    ts = stability_metrics(n, u, sw, online=online)
     return {"units": u, "capacity": capacity_contribution(u), "timeseries": ts,
             "summary": stability_summary(ts, n.snapshot_weightings.generators, thresholds_gws)}
 
