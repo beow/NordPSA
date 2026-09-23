@@ -101,12 +101,12 @@ note: "PRODUKTIONSKURVA v9, 2026-08-29. = v8 med b_amp 0 (var 0,27). ENDA faltet
   \ mot eSetts 1,30). Mat NO sarskilt.\n\nFRIHETSGRADER: a_scale (1) + b_amp (1) +\
   \ lambda_bas (1) = TRE, alla globala.\nLasta: b_mean 0,80 · alla sasongsfaser ·\
   \ hela x_ref · kvoten a_amp2/a_amp ·\nb_low_frac 1,0 · p_norm 'mid'.\nAnkaret likformigt\
-  \ 73. Dispatch med\n--terminal-anchor SE-N:66.5 SE-S:66.5 NO-N:69.1 NO-S:69.6 FI:70.5.\n\
+  \ 73. Dispatch med\ndispatch.terminal_anchor SE-N: 66.5, SE-S: 66.5, NO-N:69.1 NO-S:69.6 FI:70.5.\n\
   \nANKARE: de per-zons vardena ovan ar DRIFTKORRIGERINGEN for begransad framsyn,\n\
   harledd ur run390:s drift. Spridningen 64,5-72,5 (1,12x) ar INTE ett pastaende om\
   \ att\nvatten ar olika mycket vart i olika zoner -- facit (run386) ger 72,87 likformigt\
   \ OCH\nnoll drift, men en rullande horisont kan bara fa det ena av tva med ett enda\
-  \ tal.\n⚠️ EXPANSION ska koras med 73 LIKFORMIGT (--terminal-anchor 73 eller --hydro-mc-curve\n\
+  \ tal.\n⚠️ EXPANSION ska koras med 73 LIKFORMIGT (dispatch.terminal_anchor 73 eller expansion.hydro_mc_curve\n\
   mot en fil med 73): cykliskt SOC ger noll drift per konstruktion, sa korrigeringen\n\
   saknar mening dar och skulle bli en artificiell zonskillnad i hydrons marginalkostnad.\n\
   ⚠️ Kanslighetens tvapunktsskattning (run378 vs run379) visade sig 4x for LAG for\
@@ -122,9 +122,9 @@ note_expansion: "EXPANSIONSVARIANT av v7 (2026-08-20). Identisk med terminal_cur
   \ noll drift per konstruktion, sa korrigeringen saknar mening dar och skulle bli\
   \ en artificiell zonskillnad i hydrons marginalkostnad. Facit (run320/run386) ger\
   \ lambda konstant 72,87-73,02 i alla fem zoner. v7-filens egen not, rad 74, sager\
-  \ samma sak.\nANVANDS SOM: --hydro-mc-curve config/terminal_curve_2040_gemini_v7_exp73.yaml\n\
-  ⛔ --terminal-anchor 73 gor INTE samma sak: den flaggan laser bara den rullande horisontens\
-  \ vag (run_model.py:915), medan --hydro-mc-curve (rad 2461) tar ankaret rakt ur\
+  \ samma sak.\nANVANDS SOM: expansion.hydro_mc_curve config/terminal_curves/terminal_curve_2040_gemini_v12_exp73.yaml\n\
+  ⛔ dispatch.terminal_anchor 73 gor INTE samma sak: den nyckeln laser bara den rullande horisontens\
+  \ vag, medan expansion.hydro_mc_curve tar ankaret rakt ur\
   \ filen via load_params(). Darfor behovs den har filen.\n\n⭐⭐⭐ LAMBDA_BAS LAST FOR\
   \ EXPANSION 2026-08-22: 73 LIKFORMIGT. Inte langre en fri parameter.\nGRUND: lambda_bas\
   \ ar den ENDA av kurvans tre globala frihetsgrader som ar MATT i expansionens\n\

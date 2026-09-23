@@ -94,13 +94,13 @@ note: "PRODUKTIONSKURVA v9, 2026-08-29. = v8 med b_amp 0 (var 0,27). ENDA faltet
   \ sasongsbalansering (v/s 1,59 mot eSetts 1,30). Mat NO sarskilt.\n\nFRIHETSGRADER:\
   \ a_scale (1) + b_amp (1) + lambda_bas (1) = TRE, alla globala.\nLasta: b_mean 0,80\
   \ · alla sasongsfaser · hela x_ref · kvoten a_amp2/a_amp ·\nb_low_frac 1,0 · p_norm\
-  \ 'mid'.\nAnkaret likformigt 73. Dispatch med\n--terminal-anchor SE-N:66.5 SE-S:66.5\
+  \ 'mid'.\nAnkaret likformigt 73. Dispatch med\ndispatch.terminal_anchor SE-N: 66.5, SE-S: 66.5,\
   \ NO-N:69.1 NO-S:69.6 FI:70.5.\n\nANKARE: de per-zons vardena ovan ar DRIFTKORRIGERINGEN\
   \ for begransad framsyn,\nharledd ur run390:s drift. Spridningen 64,5-72,5 (1,12x)\
   \ ar INTE ett pastaende om att\nvatten ar olika mycket vart i olika zoner -- facit\
   \ (run386) ger 72,87 likformigt OCH\nnoll drift, men en rullande horisont kan bara\
   \ fa det ena av tva med ett enda tal.\n⚠️ EXPANSION ska koras med 73 LIKFORMIGT\
-  \ (--terminal-anchor 73 eller --hydro-mc-curve\nmot en fil med 73): cykliskt SOC\
+  \ (dispatch.terminal_anchor 73 eller expansion.hydro_mc_curve\nmot en fil med 73): cykliskt SOC\
   \ ger noll drift per konstruktion, sa korrigeringen\nsaknar mening dar och skulle\
   \ bli en artificiell zonskillnad i hydrons marginalkostnad.\n⚠️ Kanslighetens tvapunktsskattning\
   \ (run378 vs run379) visade sig 4x for LAG for SE-N\n(1,36 TWh per enhet, ej 0,343).\

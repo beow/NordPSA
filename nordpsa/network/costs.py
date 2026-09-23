@@ -22,8 +22,8 @@ def scenario_overnight_mw(cfg: dict, tech: str, name: str = "svk_2040",
     """Overnight €/MW (INKL. byggränta IDC) + (lifetime, fom_fraction, vom) för en
     teknik ur cfg['cost_scenarios'][name]. Speglar IDC-matten i apply_cost_scenario
     (nordpsa/world.py) men returnerar råtal utan att mutera cfg['costs']. Används för att
-    prissätta TILLAGD kapacitet (--add-battery / --add-nuclear-fixed) från SvK-2040
-    OBEROENDE av run:ens --cost-scenario."""
+    prissätta TILLAGD kapacitet (nuclear.add_fixed) från SvK-2040
+    OBEROENDE av körningens scenario.cost."""
     p   = cfg["cost_scenarios"][name][tech]
     r   = cfg["costs"]["discount_rate"]
     idc = 1.0 + p["build_years"] / 2 * r

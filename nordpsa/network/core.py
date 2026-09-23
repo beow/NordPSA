@@ -35,7 +35,7 @@ def add_slack(n: pypsa.Network, cfg: dict, all_zones: bool = False,
     """Load shedding-generator per zon.
 
     all_zones=False (standard): bara zoner utan marknadsanslutning.
-    all_zones=True (--voll): alla zoner, inklusive de med marknadsanslutning.
+    all_zones=True (voll satt): alla zoner, inklusive de med marknadsanslutning.
       Används som VOLL-mått: slack-dispatch × VOLL = losskostnad i EUR.
       Priser toppas vid VOLL istf att dualvariabler exploderar.
     voll_price: lossprislapp (EUR/MWh). None → MC_SLACK (3000). När satt

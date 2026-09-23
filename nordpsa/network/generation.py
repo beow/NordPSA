@@ -65,10 +65,10 @@ def add_nuclear(
         tcfg["overnight_eur_per_w"], tcfg["lifetime_years"], r, tcfg.get("fom_fraction", fom_fraction)
     ) * n_years
 
-    # Expansionsläge (--add-nuclear angivet → synthetic_nuclear['active']): befintlig
+    # Expansionsläge (nuclear.add satt → synthetic_nuclear['active']): befintlig
     # flotta blir FAST (ej extendable) + SYNTETISK profil; ny kärnkraft expanderas
     # separat i add_extra_nuclear. Dispatchläge: faktisk profil, extendable per config.
-    # OBS: exogen FAST kärnkraft (--add-nuclear-fixed) byggs numera i en EGEN generator
+    # OBS: exogen FAST kärnkraft (nuclear.add_fixed) byggs numera i en EGEN generator
     # (add_fixed_nuclear) och rör INTE denna befintliga-flotta-funktion.
     syn          = synthetic_nuclear or {}
     syn_active   = bool(syn.get("active"))
@@ -83,7 +83,7 @@ def add_nuclear(
             continue
 
         if syn_active and zone in syn_existing and p_nom_existing > 0:
-            # Befintlig flotta som syntetisk blandflotta (expansionsläge, --add-nuclear).
+            # Befintlig flotta som syntetisk blandflotta (expansionsläge, nuclear.add).
             sc   = syn_existing[zone]
             n_ex = int(sc["n_reactors"]); seed = int(sc["seed"])
             reactor_mw = [p_nom_existing / n_ex] * n_ex
@@ -116,7 +116,7 @@ def add_nuclear(
 def add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
                        r: float, n_years: float, snapshots=None,
                        synth_params: dict | None = None, fom_fraction: float = 0.02) -> None:
-    """Ny kärnkraft via --add-nuclear ZON:N:SEED (Generator '{zon} nuclear exp').
+    """Ny kärnkraft via nuclear.add [[zon, antal, seed]] (Generator '{zon} nuclear exp').
 
     extra_nuclear: lista av (zon, n_reactors, seed). N nya reaktorer med SYNTETISK
     stokastisk tillgänglighet (seed per zon → dekorrelerade avbrott), EXTENDABLE —
@@ -128,11 +128,11 @@ def add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
         return
     tcfg     = ccfg["nuclear"]
     mc       = tcfg["vom_eur_per_mwh"]
-    # Per-zon diskontoränta (--nuclear-discount-rate ZON:RATE) → annualiserad kapital-
+    # Per-zon diskontoränta (nuclear.discount_rate_by_zone) → annualiserad kapital-
     # kostnad räknas om per zon. Default = global r. Påverkar bara EXTENDABLE expansion.
     disc_by_zone = tcfg.get("discount_rate_by_zone") or {}
     params   = synth_params or {}
-    # min_load_frac_exp (--nuclear-min-load) gäller BARA NY kärnkraft; befintliga flottan
+    # min_load_frac_exp (nuclear.new_min_load) gäller BARA NY kärnkraft; befintliga flottan
     # styrs av min_load_frac och förblir ren must-run. <1.0 = lastföljande ny kärnkraft.
     min_frac = float(params.get("min_load_frac_exp", params.get("min_load_frac", 1.0)))
     mw_each  = float(params.get("mw_per_reactor", 1500.0))
@@ -170,9 +170,9 @@ def add_extra_nuclear(n: pypsa.Network, extra_nuclear: list | None, ccfg: dict,
 def add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
                        r: float, n_years: float, snapshots=None,
                        synth_params: dict | None = None) -> None:
-    """Exogen FAST kärnkraft via --add-nuclear-fixed ZON:N:MW[:SEED] som EGEN generator
+    """Exogen FAST kärnkraft via nuclear.add_fixed [[zon, antal, MW]] som EGEN generator
     '{zon} nuclear fixed' (separat från befintliga flottan). Must-run (p_min=p_max) om
-    inte min_load_frac_exp/--nuclear-min-load sänker golvet (lastföljande ny kärnkraft),
+    inte min_load_frac_exp/nuclear.new_min_load sänker golvet (lastföljande ny kärnkraft),
     SYNTETISK stokastisk tillgänglighet (seed → dekorrelerade avbrott), FAST p_nom.
     Bär verklig annualiserad SvK-2040-kapex (inkl. IDC) + VOM — laddas på p_nom ÄVEN i
     dispatch (konstant i objektivet → synliggör kostnaden). Befintliga flottan lämnas
@@ -198,7 +198,7 @@ def add_fixed_nuclear(n: pypsa.Network, fixed_nuclear: dict | None, cfg: dict,
             seed = int(params.get("seed", 0)) + (zlib.crc32(zone.encode()) % 1000)
         p_nom = float(sum(reactor_mw))
         p_max = availability_timeseries(params, snapshots, reactor_mw, seed=seed)
-        # min_load_frac_exp (--nuclear-min-load) gäller även denna exogena NYA kärnkraft;
+        # min_load_frac_exp (nuclear.new_min_load) gäller även denna exogena NYA kärnkraft;
         # utan flaggan = 1.0 = must-run (oförändrat beteende).
         min_frac = float(params.get("min_load_frac_exp", params.get("min_load_frac", 1.0)))
         p_min = (p_max * min_frac).clip(lower=0)
@@ -244,7 +244,7 @@ def add_vre(
             tcfg       = ccfg[cost_key]
             mc         = tcfg["vom_eur_per_mwh"]
             extendable = tcfg["extendable"]
-            # Per-zon diskontoränta (t.ex. --offwind-discount-rate SE-S:0.03) → egen
+            # Per-zon diskontoränta (vre.offwind_discount_rate_by_zone) → egen
             # annualiserad kapitalkostnad för den zonen/tekniken. Default = global r.
             r_zone     = float((tcfg.get("discount_rate_by_zone") or {}).get(zone, r))
             cap_cost   = annualized_cost(

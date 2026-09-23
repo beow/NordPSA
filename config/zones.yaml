@@ -50,7 +50,7 @@ zones:
 
 # Syntetisk kärnkrafts-tillgänglighet. Delade Monte-Carlo-parametrar för alla zoner;
 # antal reaktorer + seed anges per zon (befintlig: nuclear_synth_existing nedan;
-# ny: --add-nuclear ZON:N:SEED). Forcerad felrat lambda_fail härleds så att årlig
+# ny: nuclear.add [[zon, antal, seed]]). Forcerad felrat lambda_fail härleds så att årlig
 # medel-CF ≈ target_cf.
 nuclear_synth:
   target_cf: 0.85
@@ -59,11 +59,11 @@ nuclear_synth:
   maintenance_days: [25, 45]         # uniform min/max revisionslängd (dygn)
   revision_frequency: annual         # annual | biennial
   min_load_frac: 1.0                 # p_min_pu = min_load_frac × p_max_pu (1.0 = must-run)
-  mw_per_reactor: 1500               # --add-nuclear: tak p_nom_max = N × detta (MW/reaktor)
+  mw_per_reactor: 1500               # nuclear.add: tak p_nom_max = N × detta (MW/reaktor)
 
-# Befintlig kärnkraftsflotta → syntetisk profil i EXPANSIONSLÄGE (när --add-nuclear anges).
+# Befintlig kärnkraftsflotta → syntetisk profil i EXPANSIONSLÄGE (när nuclear.add är satt).
 # Kapaciteten tas från zones.nuclear_p_nom_mw; här anges bara antal reaktorer + seed per
-# zon för tillgänglighetskurvans form. Dispatchkörningar (utan --add-nuclear) använder
+# zon för tillgänglighetskurvans form. Dispatchkörningar (utan nuclear.add) använder
 # istället faktisk-data-profilen.
 nuclear_synth_existing:
   SE-S: {n_reactors: 6, seed: 101}   # Forsmark 1-3, Ringhals 3-4, Oskarshamn 3 (≈6,9 GW)
@@ -252,7 +252,7 @@ market_elasticity:
 # + Link stor-VP (COP) + Generator bio/KVV (konkurrerande MC) + slack.
 # DUBBELRÄKNING: el_input_twh = dagens el IN i FV (el-panna+VP) som redan ligger i eSett-
 # lasten → dras bort ur AC-lasten (proportionellt mot värmeprofilen), bussen återinför
-# elen endogent. Aktivera med --add-heat. SE-tal: demand=EM 45 TWh (SE-S 40/SE-N 5);
+# elen endogent. Aktivera med heat.enabled. SE-tal: demand=EM 45 TWh (SE-S 40/SE-N 5);
 # el_input ~3-4 TWh ANTAGANDE (förfinas mot EM-bränslemix). Byggnads-VP+industri = laster.
 heat:
   enabled: false
@@ -299,7 +299,7 @@ heat:
     FI:   {el_tax_eur_per_mwh: 0.0, dh_demand_twh: 33.0, el_input_twh: 2.0, hp_el_mw: 450, elboiler_mw: 200, cop: 3.0, mustrun_share: 0.15, store_gwh: 100,
            chp: {eta_el: 0.16, eta_heat: 0.76, fuel_vom: 22.0, share_of_thermal: 0.37}}
 
-# Fordonsladdning (EV smart charging). Antal fordon per zon anges via CLI --add-ev.
+# Fordonsladdning (EV smart charging). Antal fordon per zon anges av demand-scenariots ev_cars.
 # Per-fordon-tal = PLATSHÅLLARE (nordiska medel) att trimma. Bara smart laddning (ingen V2G).
 ev:
   enabled: false
@@ -343,9 +343,9 @@ links:
                           # exakt vid 2015 = publ. asymmetri 2015/2415. Var 2400
   - [SE-S, FI,    1200]   # Fenno-Skan. q95 = max = 1200 i BÅDE 2023-24 och 2026 YtD. Hårt tak
 
-# Tidsdimension via körtyp: dispatch (--no-expansion) modellerar historiska 2023-2025
+# Tidsdimension via körtyp: `nordpsa today` modellerar historiska 2023-2025
 # och använder NTC ovan; expansionskörningar modellerar framtida system och får
-# post-utbyggnads-NTC nedan (appliceras i run_model.py när expansion är på).
+# post-utbyggnads-NTC nedan (scenario.post_expansion_ntc, satt i worlds/2040_svk_mm.yaml).
 # Aurora-linjen (SE-N–FI) togs i drift slutet 2025: 1200 (historisk) → 2000 (expansion).
 links_expansion_overrides:
   - [SE-N, FI,    2000]   # Aurora post-go-live
@@ -354,7 +354,7 @@ links_expansion_overrides:
                           # som modellen redan bär på SE-N↔SE-S — 1000 är alltså ett UTBYGGNADSantagande
 
 # Dagens (befintliga) batterier — laddas som FRIA (capital_cost=0, sunk) i dispatch/
-# dagens-värld-körningar (dvs när INGET --demand-scenario är aktivt). I demand-scenario-
+# dagens-värld-körningar (dvs när scenario.demand är null). I demand-scenario-
 # körningar representeras batteriflottan i stället av scenariots egna 'battery:'-poster,
 # så baseline hoppas då över (undviker dubbelräkning). [zon, MW, timmar].
 baseline_batteries:
@@ -363,7 +363,7 @@ baseline_batteries:
   - [DK,    400, 2]
 
 # Ytterligare fast last per zon (MW) — t.ex. för att emulera datacenter.
-# Default: ingen extra last. Använd --extra-load <MW> på run_model.py för att lägga till.
+# Default: ingen extra last. Sätt scenario.extra_load_mw: {ZON: MW} för att lägga till.
 
 # Driftrestriktioner på RESERVOARvattenkraften (REN OPTION, default av).
 # SOC-ANKARET (zones.*.hydro_soc_initial): uppmätt fyllnadsgrad vid periodens start.
@@ -501,8 +501,8 @@ costs:
     vom_ror_eur_per_mwh: 0.5    # run-of-river (must-run, lägre än reservoar)
     extendable: false   # hydro capacity fixed; no new reservoirs
 
-  # Värmeförsörjning (--add-heat). extendable=true → modellen dimensionerar mot
-  # dessa kostnader i expansion; --no-expansion låser dem (som alla costs.*).
+  # Värmeförsörjning (heat.enabled). extendable=true → modellen dimensionerar mot
+  # dessa kostnader i expansion; med frysta kapaciteter är de låsta (som alla costs.*).
   # overnight anges per MW OUTPUT; koden konverterar till komponentens p_nom-enhet:
   #   heat_pump   (€/W_th) ×COP   → per MW_el (Link-p_nom)
   #   heat_elboiler (€/W_th) ×η   → per MW_el (Link-p_nom)
@@ -566,7 +566,7 @@ costs:
     electrolyser_p_min_pu: 0.0     # min last (0 = helt flexibel)
 
 # Kostnadsscenarier för expansionskörningar (SvK Långsiktig marknadsanalys 2026,
-# 2024 års prisnivå). Väljs med --cost-scenario svk_2040 | svk_2050 → run_model
+# 2024 års prisnivå). Väljs med scenario.cost: svk_2040 | svk_2050 → världen
 # skriver över cfg['costs'] per teknik. Byggränta (IDC): overnight' = OC·(1 +
 # build_years/2·r); fom_fraction = fast_DoU/overnight' (bevarar absolut O&M).
 # Råvärden: oc_eur_per_kw (tab 30 OIC), fom_eur_per_kw (tab 31 fast DoU),
@@ -604,7 +604,7 @@ cost_scenarios:
     battery:       {power_eur_per_kw: 292, energy_eur_per_kwh: 169, fom_fraction: 0.025, build_years: 1, lifetime_years: 15}
 
 # Efterfrågescenarier för expansionskörningar (SvK LMA2026). Väljs med
-# --demand-scenario svk_2040_mm → run_model adderar SvK:s 2026→2040-tillskott
+# scenario.demand: svk_2040_mm → världen adderar SvK:s 2026→2040-tillskott
 # ovanpå dagens eSett-bas, fördelat på zoner och dekomponerat i:
 #   extra_load_mw  — inflexibel platålast (datacenter + ny industri + H&S/förluster-tillväxt)
 #   h2{...}        — vätgas: demand_mw (H2 LHV), electrolyser_mw (MW_el, fast), store_mwh (H2 LHV)
@@ -652,7 +652,7 @@ demand_scenarios:
                               #     saknar HVDC/400kV-korridor genom fjällkedjan, tak 1200-1500 till 2040.
                               # ⚠️ run392 mätte 60,9 % mättnad ÄVEN vid 3000 ⇒ modellen VILL ha mer. Det är en
                               #   ekonomisk signal (NO-N:s 2040-överskott), inte ett fysiskt byggbarhetsbevis.
-                              #   Avgörs endogent med --expand-link NO-N:NO-S:2.5:700:4000 — EJ KÖRD ÄNNU
+                              #   Avgörs endogent med grid.expand_link [[NO-N, NO-S, 2.5, 700, 4000]] — EJ KÖRD ÄNNU
       - [NO-N, SE-N,  1800]   # NO4↔SE1/SE2 + NO3↔SE2 2040. ⭐ LÅST 2026-08-22, sänkt från 2000.
                               # Geminis intervall 1500-1800 (TYNDP 2024: ingen beslutad utbyggnad på
                               # Ofoten/Luleå-snittet) OMSLUTER vår egen publ. day-ahead-kap. max 1400/1550
@@ -677,7 +677,7 @@ demand_scenarios:
       - [NO GB, 1449]         # NO-S↔GB 2040 = nutidens hårda tak (q95=q99=max i 26 304 h).
                               # ⛔ Geminis 1400 AVSLAGET på samma grund
     # Kärnkraft: befintlig flotta (zones.nuclear_p_nom_mw: SE-S 6,9 GW / FI 4,4 GW) finns
-    # med by default. NY kärnkraft adderas via --add-nuclear ZON:N:SEED (syntetisk,
+    # med by default. NY kärnkraft adderas via nuclear.add (syntetisk,
     # extendable). I expansionsläge går befintlig flotta över till syntetisk profil
     # (nuclear_synth_existing). Ingen exogen låsning längre.
     # Kontinentpriser skiftade till SvK 2040 MM-nivå: multiplikativ omskalning av
@@ -710,7 +710,7 @@ demand_scenarios:
       # VRE-potentialer (LMA2026, TWh→MW vid CF onshore ×1,30 / offshore ×1,10):
       # SE land: golv 50 / tak 100 TWh; hav: golv 0 / tak 63 (allt→SE-S); sol: golv 7,4 / tak 25.
       # Split SE→SE-N/SE-S efter install-andel (onshore 59/41, sol 5/95; ⚠️ antagande).
-      # ⚠️ Tak/golv-MW förutsätter --onwind-capfac-increase 0.30 + --offwind-capfac-increase 0.10.
+      # ⚠️ Tak/golv-MW förutsätter vre.onwind_capfac_increase 0.30 + offwind 0.10.
       SE-N:
         extra_load_mw: 4298   # 4110 + 188 (1,6 TWh basgap)
         h2: {demand_mw: 1356, electrolyser_mw: 2550, store_mwh: 29700}
@@ -725,8 +725,8 @@ demand_scenarios:
         pnom_max_mw: {wind_onshore: 14376, wind_offshore: 16283, solar: 24000}
         pnom_min_mw: {wind_onshore:  7188, solar:  7104}   # SE-golv (install on 7092/sol 2778 → +~4,3 GW sol)
         battery: {p_nom_mw: 4500, hours: 2}
-        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny endogen via --add-nuclear,
-        # ny EXOGEN (SvK MM 1,5 GW) via --add-nuclear-fixed SE-S:3:500.
+        # Befintlig kärnkraft 6,9 GW (zones.nuclear_p_nom_mw). Ny endogen via nuclear.add,
+        # ny EXOGEN (SvK MM 1,5 GW) via nuclear.add_fixed [[SE-S, 3, 500]].
       # NO-N/NO-S kalibrerade mot Statnett "Medium forbruksutvikling" 2040 (ej SvK-split):
       # NO total 195 TWh = eSett-bas 138 + Δ56. Δ flat 28 (alm −5, kraftint +15, petrol +6,
       # datac +12), H2 +10, transport(EV) +18. Split NO-N 0.356/NO-S 0.644 = eSett-andel
@@ -763,7 +763,7 @@ demand_scenarios:
         # FI kärnkraft = befintlig 4400 MW (Olkiluoto 1-3 + Loviisa 1-2), must-run historisk
         # profil, ingen ny (SvK MM ny FI-kärnkraft ej medtagen — flaggat). Lägg ev. block här.
 
-# Vätgassystem per zon (opt-in). Utelämna = ingen H2. CLI-motsvarighet: --add-h2.
+# Vätgassystem per zon (opt-in). Utelämna = ingen H2; fylls annars av demand-scenariots h2-block.
 # Exempel (avkommentera för att aktivera):
 # hydrogen:
 #   SE-S:

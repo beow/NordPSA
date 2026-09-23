@@ -1,6 +1,6 @@
 """Analytisk terminalvärdeskurva λ(fyllnadsgrad, vecka) per zon.
 
-Ersätter den årskonstanta `--terminal-lambda-profile` med en kurva som varierar över
+Ersätter den tidigare årskonstanta segmentprofilen med en kurva som varierar över
 året, i den rullande horisontens fönsterslut. Formen är parametrisk och GENERISK —
 den ska bära nordisk hydrologi i allmänhet, inte 2023-25 i synnerhet.
 
@@ -37,7 +37,7 @@ redan implementerar; den här modulen levererar bara koefficienterna.
 
 ⚠️ Kurvan verkar BARA i fönsterslut. Inuti ett fönster råder perfekt framsyn och
 vattenvärdet är platt där ändå. Mekanismens upplösning är fönsterlängden, inte
-veckan — `--rolling-weeks` är därför en förstahandsparameter.
+veckan — `dispatch.rolling_weeks` är därför en förstahandsparameter.
 
 ## Var defaultvärdena kommer ifrån
 

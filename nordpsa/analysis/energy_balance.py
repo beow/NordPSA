@@ -54,7 +54,7 @@ ROW_LABELS  = {
     # ⚠️ HETTE 'spill' till 2026-08-19. Raden är UTESLUTANDE VRE-curtailment —
     # hydrons förbiledning ingår INTE (den ligger i hydro_spill.csv och är 0,0000
     # TWh i alla körningar sedan run316). 'Spill' betyder dessutom just hydrospill
-    # i resten av kodbasen (--spill-cost), så namnet pekade på fel storhet.
+    # i resten av kodbasen (expansion/dispatch.spill_cost), så namnet pekade på fel storhet.
     'curt': '(Curtailed VRE)',
     'kont_export': 'Kontinental export', 'intern_export': 'Norden-intern export',
     'kons_total': 'KONSUMTION TOTAL',

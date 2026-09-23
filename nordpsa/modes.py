@@ -54,10 +54,10 @@ def freeze_capacities_from(n, label):
             #
             # ⭐ Samma resonemang gäller LÄNKAR, och där bet det 2026-08-15: en icke-
             # expanderbar länks p_nom_opt ÄR bara configvärdet, så frysningen skrev tyst
-            # tillbaka det och annullerade `--ntc-override` på en dispatch. run348 blev
+            # tillbaka det och annullerade `grid.ntc_override` på en dispatch. run348 blev
             # därför BIT-IDENTISK med run346 — experimentet såg ut att ha körts men hade
             # aldrig ägt rum. Med regeln här överlever en medveten NTC-ändring, medan en
-            # källa som faktiskt expanderade länken (--expand-link) fortfarande fryses.
+            # källa som faktiskt expanderade länken (grid.expand_link) fortfarande fryses.
             # ⚠️ Lager omfattas AVSIKTLIGT inte: där behövs kopieringen av max_hours nedan
             # för att bevara reservoarvolymen genom RoR-splitten.
             fixed = [x for x in common if not bool(sdf.at[x, "p_nom_extendable"])]
@@ -106,7 +106,7 @@ def apply_vre_curtailment_cost(n, cost: float) -> None:
     INTE konstant utan en produktionssubvention som växer med byggd kapacitet —
     optimeraren bygger till p_nom_max för att skörda den. Subventionen är en
     transferering, inte en resurskostnad, och hör hemma i prisbildningen men inte i
-    investeringskalkylen. Därav tvåpass: expansion med sanna kostnader → --dispatch
+    investeringskalkylen. Därav tvåpass: expansion med sanna kostnader → dispatch
     med negativa bud.
     """
     if not cost:
