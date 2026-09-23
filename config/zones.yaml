@@ -444,6 +444,63 @@ hydro_operation:
       NO-S: 0.30   # ⚠️ ANTAGANDE: som NO-N
       FI:   0.55   # ⚠️ ANTAGANDE: ej i studien; små magasin → nära SE-S
 
+stability:
+  # Rotationsenergi (E_k) och kortslutningseffekt (S_k) per enhet. Läses i dag bara av
+  # nordpsa/analysis/stability.py (efterhandsmätning, ingen LP).
+  #   S_n = eff·p_nom/cosφ [MVA]   E_k = H·S_n [MWs]   S_k = S_n/(X''_d + X_T) [MVA, HV-sidan]
+  # eff = 1 utom för Link (KVV), där p_nom ligger på bränslesidan och elkapaciteten är
+  # efficiency·p_nom. För syncon tolkas p_nom som MVA.
+  # ⚠️ ALLA TAL NEDAN ÄR TYPVÄRDEN UR LITTERATUREN, INTE MÄTNINGAR — samma status som
+  # hydro_operation:s golv. Känslighetsordning: H (linjärt i E_k), m_min (avgör tröghetens
+  # PRIS i dispatch), X''_d + X_T (linjärt i S_k), cosφ (svagt).
+  #
+  # mode: commit – synkron, kan kopplas in/ur (p_online i dispatch; fast om p_min_pu = p_max_pu)
+  #       syncon – synkronkompensator, alltid inkopplad, ingen aktiv effekt
+  #       gfm    – nätbildande omriktare: E_k = H·avail·p_nom oavsett drift, S_k = 0
+  #       ibr    – nätföljande omriktare: ingen tröghet, räknas med vikten ibr_w i SCR-kravet
+  # H [s], cos_phi [–], xd2 = X''_d [pu], m_min = minsta stabila last (andel av inkopplad
+  # effekt), avail = tillgänglighetsfaktor för gfm, ibr_w = vikt i SCR-kravets P_IBR,
+  # i_ibr = omriktarens felström [pu av märkström] (räknas bara med sk_include_ibr).
+  x_t: 0.12                      # ⚠️ ANTAGANDE: maskintransformatorns reaktans, 0,10–0,15 pu
+  tech:
+    nuclear:     {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 1.00}
+    nuclear_new: {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 0.60}
+    hydro_res:   {mode: commit, H: 3.0, cos_phi: 0.90, xd2: 0.22, m_min: 0.30}
+    hydro_ror:   {mode: commit, H: 2.5, cos_phi: 0.90, xd2: 0.22, m_min: 0.00}   # alltid must-run
+    thermal:     {mode: commit, H: 4.0, cos_phi: 0.85, xd2: 0.17, m_min: 0.40}
+    chp:         {mode: commit, H: 4.0, cos_phi: 0.85, xd2: 0.17, m_min: 0.40}
+    gas:         {mode: commit, H: 5.0, cos_phi: 0.85, xd2: 0.16, m_min: 0.40}
+    syncon:      {mode: syncon, H: 1.5, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.010}
+    syncon_fw:   {mode: syncon, H: 6.0, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.015}
+    gfm:         {mode: gfm,    H: 3.0, cos_phi: 1.00, ibr_w: 0.0, avail: 0.90}   # ⚠️ H är ett reglerval
+    ibr:         {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 1.0, i_ibr: 1.2}
+    hvdc:        {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 0.0, i_ibr: 0.0}    # ⭐ ingen tröghet
+  # "<Komponent>:<carrier>" -> teknikklass. Komponenttypen skiljer magasin från strömkraft,
+  # som delar carrier 'hydro'. Carriers som saknas här (last, värme, H2, EV, DSR, slack)
+  # ignoreras, liksom enheter vars elbuss inte har carrier AC.
+  mapping:
+    "Generator:hydro":         hydro_ror   # ⭐ strömkraften ('{zon} hydro_ror', must-run)
+    "StorageUnit:hydro":       hydro_res   # ⭐ magasinet
+    "Generator:nuclear":       nuclear
+    "Generator:thermal":       thermal
+    "Generator:gas":           gas
+    "Link:heat chp":           chp         # ⭐ KVV är en Link: zon = bus1, eff = efficiency
+    "Generator:wind_onshore":  ibr
+    "Generator:wind_offshore": ibr
+    "Generator:solar":         ibr
+    "StorageUnit:battery":     ibr
+    "StorageUnit:battery_gfm": gfm
+    "Generator:syncon":        syncon
+    "Generator:syncon_fw":     syncon_fw
+    # Kontinentventilerna är HVDC (utom DK1–DE, som i verkligheten är AC men modelleras
+    # som prisventil): ingen tröghet och, ⚠️ förenklat, inte heller med i SCR-kravet.
+    "Generator:market":        hvdc
+  # Namnsuffix som går före mappningen: ny kärnkraft delar carrier med den befintliga
+  # flottan men lastföljer ned till nuclear.new_min_load.
+  name_overrides:
+    "nuclear exp":   nuclear_new
+    "nuclear fixed": nuclear_new
+
 # Simulation period
 snapshots:
   start: "2023-01-01"
