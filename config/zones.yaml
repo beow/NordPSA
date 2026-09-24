@@ -466,6 +466,9 @@ stability:
   # DK1 tillhör det kontinentala synkronområdet, DK2 det nordiska. ⚠️ 0,35 ≈ DK2:s andel,
   # okalibrerat; kör 0 som känslighetsfall. Zoner som saknas har vikt 1.
   sync_weight: {DK: 0.35}
+  # Zoner utan SCR-krav. DK:s nätstyrka kommer i verkligheten via AC från DE (DK1) och SE4
+  # (DK2), som modellen inte har; lokalt ligger DK:s SCR nära 0 även i dagens system.
+  scr_exempt: [DK]
   tech:
     nuclear:     {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 1.00}
     nuclear_new: {mode: commit, H: 6.0, cos_phi: 0.90, xd2: 0.25, m_min: 0.60}

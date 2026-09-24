@@ -111,10 +111,12 @@ def test_stability_validation_rules():
                           sets=["stability.enabled=true", "stability.ek_system_gws=120"])
     assert ok["stability"]["enabled"] and ok["dispatch"]["stability_slack_penalty"] == 100
     for sets, msg in [
-        (["stability.enabled=true"], "ek_system_gws eller"),
+        (["stability.enabled=true"], "eller scr_min"),
         (["stability.ek_system_gws=-1"], "ek_system_gws"),
         (["stability.sync_weight.DK=1.5"], "sync_weight"),
         (["dispatch.stability_slack_penalty=0"], "stability_slack_penalty"),
+        (["stability.scr_min=0"], "scr_min"),
+        (["dispatch.stability_scr_slack_penalty=-1"], "stability_scr_slack_penalty"),
     ]:
         with pytest.raises(SystemExit, match=msg):
             settings.resolve("dispatch", "today", capacities="config", sets=sets)

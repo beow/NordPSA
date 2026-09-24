@@ -122,10 +122,13 @@ def toy():
     return n
 
 
-def solve_toy(sys_gws=None, floors=None, weights=None, penalty=None):
+def solve_toy(sys_gws=None, floors=None, weights=None, penalty=None, scr=None, exempt=None):
     n = toy()
     sd = stability_data(sync_weight=weights or {})
-    cb = stability_constraints(sd, sys_gws, floors or {}, penalty) if (sys_gws or floors) else None
+    if exempt is not None:
+        sd["scr_exempt"] = exempt
+    cb = (stability_constraints(sd, sys_gws, floors or {}, penalty, scr)
+          if (sys_gws or floors or scr) else None)
     status, _ = n.optimize(solver_name="highs", extra_functionality=cb)
     return n, status, stability_results(n) if status == "ok" else {}
 
@@ -199,3 +202,29 @@ def test_hard_infeasible_soft_prices_the_shortfall():
     lines = stability_feasibility_report(toy(), stability_data(sync_weight={"B": 0.0}), 5.0, {})
     assert "INFEASIBLE" in lines[0]
     assert not "INFEASIBLE" in stability_feasibility_report(toy(), SD, 2.0, {})[0]
+
+
+S_RES = 1 / ((SD["tech"]["hydro_res"]["xd2"] + X_T) * SD["tech"]["hydro_res"]["cos_phi"])
+S_GAS = 1 / ((SD["tech"]["gas"]["xd2"] + X_T) * SD["tech"]["gas"]["cos_phi"])
+
+
+def test_scr_floor_holds_against_infeed(reference):
+    ref, _ = reference
+    n, status, res = solve_toy(scr=1.5, exempt=[])
+    assert status == "ok"
+    on = res["stability_online"]
+    sk = pd.DataFrame({"A": on["A hydro"] * S_RES, "B": on["B gas"] * S_GAS})
+    ibr = pd.DataFrame({"A": n.generators_t.p["A wind"], "B": n.generators_t.p["B wind"]})
+    assert (sk >= 1.5 * ibr - 1e-4).all().all()
+    ref_ibr = ref.generators_t.p[["A wind", "B wind"]].sum(axis=1)
+    assert (ref_ibr > 0).all(), "referensen hade ingen vind — svagt test"
+    assert n.objective > ref.objective + 1.0
+    assert {"SCR_A", "SCR_B"} <= set(res["stability_dual"])
+
+
+def test_scr_exempt_zone_has_no_requirement():
+    n, status, res = solve_toy(scr=1.5, exempt=["A", "B"])
+    assert status == "ok"
+    assert not [c for c in n.model.constraints if "scr" in c]
+    n2, _, res2 = solve_toy(scr=1.5, exempt=["A"])
+    assert "SCR_B" in res2["stability_dual"] and "SCR_A" not in res2["stability_dual"]

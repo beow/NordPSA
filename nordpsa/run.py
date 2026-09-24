@@ -59,10 +59,15 @@ def summary_flags(s: dict) -> list[str]:
     if s["heat"]["enabled"]: f.append("heat")
     st = s["stability"]
     if st["enabled"]:
-        f.append("stability" + (f"-ek{st['ek_system_gws']:g}" if st["ek_system_gws"] else "")
-                 + "".join(f"_{z}{v:g}" for z, v in st["ek_zone_floor_gws"].items()))
-        pen = s["dispatch"]["stability_slack_penalty"]
-        f.append(f"stabslack-{pen:g}" if pen else "stab-hard")
+        d = s["dispatch"]
+        if st["ek_system_gws"] or st["ek_zone_floor_gws"]:
+            f.append("stability" + (f"-ek{st['ek_system_gws']:g}" if st["ek_system_gws"] else "")
+                     + "".join(f"_{z}{v:g}" for z, v in st["ek_zone_floor_gws"].items()))
+            pen = d["stability_slack_penalty"]
+            f.append(f"stabslack-{pen:g}" if pen else "stab-hard")
+        if st["scr_min"]:
+            pen = d["stability_scr_slack_penalty"]
+            f.append(f"scr-{st['scr_min']:g}" + (f"_slack{pen:g}" if pen else "_hard"))
     for e in r["experiments"]:
         f.append(f"exp-{e}")
     for spec in r["set"]:
@@ -151,18 +156,27 @@ def _stability_sdata(cfg: dict, s: dict) -> dict:
 
 def _stability_constraints(n, cfg: dict, s: dict) -> list:
     """Krav på rotationsenergi (dispatch). Anropas EFTER frysningen av kapaciteterna."""
-    st, pen = s["stability"], s["dispatch"]["stability_slack_penalty"]
+    st, d = s["stability"], s["dispatch"]
+    pen, spen = d["stability_slack_penalty"], d["stability_scr_slack_penalty"]
     sdata = _stability_sdata(cfg, s)
-    print(f"Stabilitetskrav (rotationsenergi), sync_weight {sdata['sync_weight']}, "
-          + (f"mjukt, straff {pen:g} €/(MWs·h)" if pen else "HÅRT"))
+    if st["ek_system_gws"] or st["ek_zone_floor_gws"]:
+        print(f"Stabilitetskrav (rotationsenergi), sync_weight {sdata['sync_weight']}, "
+              + (f"mjukt, straff {pen:g} €/(MWs·h)" if pen else "HÅRT"))
+    if st["scr_min"]:
+        print(f"Stabilitetskrav (nätstyrka), SCR ≥ {st['scr_min']:g} mot omriktarinmatning, "
+              f"undantag {sdata.get('scr_exempt')}, "
+              + (f"mjukt, straff {spen:g} €/(MVA·h)" if spen else "HÅRT"))
     for line in stability_feasibility_report(n, sdata, st["ek_system_gws"],
-                                             st["ek_zone_floor_gws"]):
+                                             st["ek_zone_floor_gws"], st["scr_min"]):
         print(f"  {line}")
-    return [stability_constraints(sdata, st["ek_system_gws"], st["ek_zone_floor_gws"], pen)]
+    return [stability_constraints(sdata, st["ek_system_gws"], st["ek_zone_floor_gws"], pen,
+                                  st["scr_min"], spen)]
 
 
 def _print_stability(summ, slack, wts) -> None:
     sy = summ.loc["SYSTEM"]
+    print(f"SCR per zon (inkopplat, p05): "
+          + ", ".join(f"{z} {v:.2f}" for z, v in summ["SCR_on_p05"].drop("SYSTEM").items()))
     print(f"Rotationsenergi SYSTEM (inkopplat): min {sy['Ek_on_min']:.1f}  "
           f"p05 {sy['Ek_on_p05']:.1f}  median {sy['Ek_on_median']:.1f} GWs "
           f"(utan krav hade driften gett lo/hi-medianer {sy['Ek_lo_median']:.1f}/"
@@ -170,9 +184,10 @@ def _print_stability(summ, slack, wts) -> None:
     if slack is not None:
         for col in slack:
             used = slack[col] > 1e-3
+            unit = "GVA" if col.startswith("SCR_") else "GWs"
             print(f"  slack {col}: {float(wts.reindex(slack.index)[used].sum()):.0f} h, "
-                  f"max {slack[col].max()/1e3:.1f} GWs, "
-                  f"{float((slack[col] * wts.reindex(slack.index)).sum())/1e3:.0f} GWs·h")
+                  f"max {slack[col].max()/1e3:.1f} {unit}, "
+                  f"{float((slack[col] * wts.reindex(slack.index)).sum())/1e3:.0f} {unit}·h")
     print("  → stability_*.csv")
 
 

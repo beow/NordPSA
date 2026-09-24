@@ -68,6 +68,9 @@ stability:                  # krav på rotationsenergi (data: zones.yaml:stabili
   ek_system_gws: null       # nordiskt krav Σ_z w_z·E_k,z(t) ≥ krav [GWs]
   ek_zone_floor_gws: {}     # fri tabell, zon: GWs. Robusthetsvillkor (nätdelning), INTE fysik:
                             # hela synkronområdet har en frekvens
+  scr_min: null             # golv på nätstyrka per zon: S_k ≥ scr_min · omriktarinmatning (ej DK,
+                            # zones.yaml:stability.scr_exempt). 1,5 klarar dagens värld i ≥ 99,9 %
+                            # av timmarna i alla zoner. ⚠️ Zonaggregat, inte SCR i en nätpunkt
   sync_weight: {}           # fri tabell, zon: vikt — override på zones.yaml:stability.sync_weight
   tech: {}                  # fri tabell, teknikklass: {H: …, m_min: …} — override på zones.yaml
 
@@ -89,3 +92,6 @@ dispatch:
   stability_slack_penalty: 100  # €/(MWs·h) underskott mot stabilitetskraven; null = hårt krav.
                             # ~15× dyraste verkliga källan (gas på minlast ≈ 6,8). Används slacken
                             # i > 1 % av timmarna är kravet, inte straffet, problemet
+  stability_scr_slack_penalty: 10  # €/(MVA·h) underskott mot SCR-golvet; null = hårt. ⚠️ STYR
+                            # RESULTATET: 10 ≈ 15 €/MWh spilld VRE vid scr 1,5, dvs. spill bara när
+                            # elen är nästan värdelös, resten blir slack (= investeringsbehov)

@@ -1,4 +1,4 @@
-"""Krav på rotationsenergi i dispatch: linjäriserad inkoppling + mjukt system-/zonkrav.
+"""Krav på rotationsenergi och nätstyrka i dispatch: linjäriserad inkoppling + mjuka krav.
 
 Per synkron enhet i som inte är must-run (p_min_pu ≠ p_max_pu) och har p_nom > 0:
 
@@ -10,9 +10,19 @@ Per synkron enhet i som inte är must-run (p_min_pu ≠ p_max_pu) och har p_nom 
     Σ_z w_z·E_k,z(t) + σ_t   ≥ 1e3·E_sys        custom-stability-ek_system
     E_k,z(t)         + σ_z,t ≥ 1e3·E_floor,z    custom-stability-ek_zone-<zon>
 
+    S_k,z(t) − scr_min·P_IBR,z(t) + σ ≥ 0        custom-stability-scr-<zon>
+    S_k,z(t) = Σ_i∈z s_i·u_i,t + K^S_z(t)       s_i = eff/((X''_d + X_T)·cosφ)  [MVA per MW]
+    P_IBR,z(t) = Σ ibr_w·p                     vind, sol, batteriurladdning (VARIABLER)
+
+SCR-kravet mäts mot omriktarnas faktiska inmatning, så LP:t kan uppfylla det på två sätt:
+koppla in mer synkront eller SPILLA vind/sol. Zoner i zones.yaml:stability.scr_exempt (DK)
+får inget krav. ⚠️ Zonvärdet är ett aggregat: alla maskiner antas sitta i samma punkt
+(optimistiskt) och grannzonernas bidrag saknas (pessimistiskt).
+
 K_z(t) är must-run-enheternas bidrag (thermal, befintlig kärnkraft, strömkraft), som är
 bestämt av data: Σ e_i·p_max_pu_i,t·p_nom_i. Slacken σ ≥ 0 kostar
-`dispatch.stability_slack_penalty` €/(MWs·h); utan straff är kravet hårt.
+`dispatch.stability_slack_penalty` €/(MWs·h) resp. `dispatch.stability_scr_slack_penalty`
+€/(MVA·h); utan straff är kravet hårt.
 
 Vad gör tröghet dyrt när inkopplingen är gratis? p ≥ m_min·u ⇒ mer inkopplat kräver mer
 PRODUKTION, som tränger ut billigare kraft eller förbrukar vatten med positivt
@@ -47,21 +57,31 @@ def _committable(u: pd.DataFrame) -> pd.DataFrame:
     return cm
 
 
-def _const_by_zone(n, u: pd.DataFrame, sn: pd.DatetimeIndex, zones: list) -> pd.DataFrame:
-    """K_z(t) [MWs]: must-run, synkronkompensatorer och nätbildande omriktare."""
+def _const_by_zone(n, u: pd.DataFrame, sn: pd.DatetimeIndex, zones: list,
+                   coef: str = "e_coef") -> pd.DataFrame:
+    """K_z(t): must-run, synkronkompensatorer och (för E_k) nätbildande omriktare.
+    coef = "e_coef" ger MWs, "s_coef" ger MVA (GFM bidrar inte till S_k)."""
     fixed = u[(u["mode"] == "commit") & u.fixed & (u.cap > 0)]
     k = pd.DataFrame(0.0, index=sn, columns=zones)
     if len(fixed):
         on = online_capacity(n, fixed, "max").loc[sn]
-        k = k.add((on * fixed.e_coef).T.groupby(fixed.zone).sum().T, fill_value=0.0)
+        k = k.add((on * fixed[coef]).T.groupby(fixed.zone).sum().T, fill_value=0.0)
     sc, gfm = u[u["mode"] == "syncon"], u[u["mode"] == "gfm"]
-    const = ((sc.e_coef * sc.cap).groupby(sc.zone).sum()
-             .add((gfm.e_coef * gfm.avail * gfm.cap).groupby(gfm.zone).sum(), fill_value=0.0))
+    const = (sc[coef] * sc.cap).groupby(sc.zone).sum()
+    if coef == "e_coef":
+        const = const.add((gfm.e_coef * gfm.avail * gfm.cap).groupby(gfm.zone).sum(),
+                          fill_value=0.0)
     return k.add(const.reindex(zones, fill_value=0.0), axis=1)[zones]
 
 
+def _scr_zones(sdata: dict, zones: list) -> list:
+    exempt = set(sdata.get("scr_exempt") or [])
+    return [z for z in zones if z not in exempt]
+
+
 def stability_constraints(sdata: dict, ek_system_gws: float | None, ek_zone_floor_gws: dict,
-                          slack_penalty: float | None):
+                          slack_penalty: float | None, scr_min: float | None = None,
+                          scr_slack_penalty: float | None = None):
     """extra_functionality-callback för dispatch. sdata = stability_data(...)."""
     sw = dict(sdata.get("sync_weight") or {})
     floors = {z: float(v) for z, v in (ek_zone_floor_gws or {}).items() if float(v) > 0}
@@ -79,6 +99,7 @@ def stability_constraints(sdata: dict, ek_system_gws: float | None, ek_zone_floo
                              coords={"snapshot": sn}, dims="snapshot")
 
         ek = {z: [] for z in zones}                    # linjära uttryck över snapshot [MWs]
+        sk = {z: [] for z in zones}                    # [MVA]
         for c, g in cm.groupby("component"):
             names = pd.Index(g.index, name="name")
             ub = n.get_switchable_as_dense(c, "p_max_pu", sn)[names] * g.cap
@@ -92,16 +113,18 @@ def stability_constraints(sdata: dict, ek_system_gws: float | None, ek_zone_floo
             for z, gz in g.groupby("zone"):
                 e = xr.DataArray(gz.e_coef.to_numpy(), coords={"name": gz.index}, dims="name")
                 ek[z].append((e * on.sel(name=gz.index)).sum("name"))
+                sc = xr.DataArray(gz.s_coef.to_numpy(), coords={"name": gz.index}, dims="name")
+                sk[z].append((sc * on.sel(name=gz.index)).sum("name"))
 
         k = _const_by_zone(n, u, sn, zones)
 
-        def _require(terms: list, rhs: pd.Series, name: str) -> None:
+        def _require(terms: list, rhs: pd.Series, name: str, penalty) -> None:
             rhs_da = xr.DataArray(rhs.to_numpy(dtype=float), coords={"snapshot": sn},
                                   dims="snapshot")
-            if slack_penalty:
+            if penalty:
                 s = m.add_variables(lower=0.0, coords=[sn], name=f"{name}-slack")
                 terms = terms + [s]
-                m.objective = m.objective + (float(slack_penalty) * w_obj * s).sum()
+                m.objective = m.objective + (float(penalty) * w_obj * s).sum()
             if not terms:                          # inget att styra med: bara hårt och omöjligt
                 if (rhs > 1e-6).any():
                     raise ValueError(f"{name}: kravet går inte att uppfylla (inga enheter)")
@@ -112,15 +135,29 @@ def stability_constraints(sdata: dict, ek_system_gws: float | None, ek_zone_floo
             w = pd.Series({z: float(sw.get(z, 1.0)) for z in zones})
             terms = [float(w[z]) * t for z in zones if w[z] > 0 for t in ek[z]]
             rhs = 1e3 * float(ek_system_gws) - (k * w).sum(axis=1)
-            _require(terms, rhs, "custom-stability-ek_system")
+            _require(terms, rhs, "custom-stability-ek_system", slack_penalty)
         for z, f in floors.items():
-            _require(list(ek[z]), 1e3 * f - k[z], f"custom-stability-ek_zone-{z}")
+            _require(list(ek[z]), 1e3 * f - k[z], f"custom-stability-ek_zone-{z}",
+                     slack_penalty)
+
+        if scr_min:
+            ks = _const_by_zone(n, u, sn, zones, "s_coef")
+            ibr = u[u["mode"].isin(["ibr", "gfm"]) & (u.ibr_w > 0) & (u.cap > 0)]
+            for z in _scr_zones(sdata, zones):
+                terms = list(sk[z])
+                for c, g in ibr[ibr.zone == z].groupby("component"):
+                    wz = xr.DataArray(g.ibr_w.to_numpy(), coords={"name": g.index}, dims="name")
+                    p = m.variables[_PVAR[c]].sel(name=g.index)
+                    terms.append((-float(scr_min) * wz * p).sum("name"))
+                if len(terms) == len(sk[z]):           # ingen omriktare i zonen
+                    continue
+                _require(terms, -ks[z], f"custom-stability-scr-{z}", scr_slack_penalty)
 
     return _extra_functionality
 
 
 def stability_feasibility_report(n, sdata: dict, ek_system_gws: float | None,
-                                 ek_zone_floor_gws: dict) -> list[str]:
+                                 ek_zone_floor_gws: dict, scr_min: float | None = None) -> list[str]:
     """Förhandskontroll efter frysningen: räcker E_k om ALLT tillgängligt kopplas in?
 
     Timmar där E_k,max ligger under kravet kan bara klaras med slack (eller blir
@@ -149,6 +186,21 @@ def stability_feasibility_report(n, sdata: dict, ek_system_gws: float | None,
     for z, f in (ek_zone_floor_gws or {}).items():
         if float(f) > 0:
             _line(z, ek[z], float(f))
+    if scr_min:
+        # Utan spill: räcker S_k om allt synkront kopplas in mot ALL tillgänglig omriktareffekt?
+        sk = ((on * cm.s_coef[on.columns]).T.groupby(cm.zone[on.columns]).sum().T
+              .reindex(columns=zones, fill_value=0.0))
+        sk = sk.add(_const_by_zone(n, u[u["mode"] != "commit"], n.snapshots, zones, "s_coef"))
+        ibr = u[u["mode"].isin(["ibr", "gfm"]) & (u.ibr_w > 0)]
+        avail = pd.concat([n.get_switchable_as_dense(c, "p_max_pu")[g.index] * g.cap * g.ibr_w
+                           for c, g in ibr.groupby("component")], axis=1)
+        pav = avail.T.groupby(ibr.zone[avail.columns]).sum().T.reindex(columns=zones,
+                                                                       fill_value=0.0)
+        for z in _scr_zones(sdata, zones):
+            short = sk[z] < float(scr_min) * pav[z]
+            lines.append(f"SCR {z:5s} krav {float(scr_min):.2f}   timmar där allt synkront "
+                         f"inkopplat inte räcker mot full omriktarinmatning: "
+                         f"{float(wts[short].sum()):.0f} (kräver spill eller slack)")
     return lines
 
 
@@ -165,13 +217,17 @@ def stability_results(n) -> dict:
               for c in _PVAR if f"{c}-p_online" in m.variables]
     if online:
         out["stability_online"] = pd.concat(online, axis=1)
-    names = [c for c in m.constraints if c.startswith("custom-stability-ek_")]
+    names = [c for c in m.constraints
+             if c.startswith(("custom-stability-ek_", "custom-stability-scr-"))]
     if names:
+        # kolumner: SYSTEM / <zon> (E_k, MWs) och SCR_<zon> (MVA)
         label = {c: (SYSTEM if c == "custom-stability-ek_system"
+                     else "SCR_" + c.removeprefix("custom-stability-scr-")
+                     if c.startswith("custom-stability-scr-")
                      else c.removeprefix("custom-stability-ek_zone-")) for c in names}
         w = n.snapshot_weightings.objective                  # dual per snapshot → per timme
         dual = pd.DataFrame({label[c]: m.constraints[c].dual.to_pandas() for c in names})
-        out["stability_dual"] = dual.div(w.reindex(dual.index), axis=0)   # €/(MWs·h)
+        out["stability_dual"] = dual.div(w.reindex(dual.index), axis=0)   # €/(MWs·h), €/(MVA·h)
         slack = {label[c]: m.variables[f"{c}-slack"].solution.to_pandas()
                  for c in names if f"{c}-slack" in m.variables}
         if slack:
