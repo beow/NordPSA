@@ -51,7 +51,7 @@ def test_classification(net):
     assert u.loc["A hydro", "tech"] == "hydro_res"
     assert u.loc["A hydro_ror", "tech"] == "hydro_ror"
     assert u.loc["A nuclear exp", "tech"] == "nuclear_new"          # namnsuffix före carrier
-    assert u.loc["A wind", "tech"] == "ibr"
+    assert u.loc["A wind", "tech"] == "ibr_wind"
     assert u.loc["A market", "tech"] == "hvdc"
     assert u.loc["A hydro_ror", "fixed"] and not u.loc["A hydro", "fixed"]
     # värmebussen räknas inte, inte heller en länk vars bus1 är en värmebuss
@@ -228,3 +228,10 @@ def test_scr_exempt_zone_has_no_requirement():
     assert not [c for c in n.model.constraints if "scr" in c]
     n2, _, res2 = solve_toy(scr=1.5, exempt=["A"])
     assert "SCR_B" in res2["stability_dual"] and "SCR_A" not in res2["stability_dual"]
+
+
+def test_gfm_share_reduces_scr_load(net):
+    n, _ = net
+    sd = stability_data(tech={"ibr_wind": {"ibr_w": 0.7}})       # 30 % av vinden nätbildande
+    ts = stability_metrics(n, unit_table(n, sd))
+    np.testing.assert_allclose(ts[("P_ibr_out", "A")], 0.7 * np.array([0, 0.5, 1.0, 2.0]))

@@ -480,7 +480,12 @@ stability:
     syncon:      {mode: syncon, H: 1.5, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.010}
     syncon_fw:   {mode: syncon, H: 6.0, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.015}
     gfm:         {mode: gfm,    H: 3.0, cos_phi: 1.00, ibr_w: 0.0, avail: 0.90}   # ⚠️ H är ett reglerval
-    ibr:         {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 1.0, i_ibr: 1.2}
+    # Nätföljande (GFL) omriktare, en klass per teknik. ibr_w = andel av inmatningen som
+    # behöver extern nätstyrka = 1 − andelen nätbildande (GFM). 1,0 = allt GFL (värsta fallet).
+    # Känslighet: --set stability.tech.ibr_wind.ibr_w=0.7 (30 % av vinden nätbildande).
+    ibr_wind:    {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 1.0, i_ibr: 1.2}
+    ibr_solar:   {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 1.0, i_ibr: 1.2}
+    ibr_battery: {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 1.0, i_ibr: 1.2}
     hvdc:        {mode: ibr,    H: 0.0, cos_phi: 1.00, ibr_w: 0.0, i_ibr: 0.0}    # ⭐ ingen tröghet
   # "<Komponent>:<carrier>" -> teknikklass. Komponenttypen skiljer magasin från strömkraft,
   # som delar carrier 'hydro'. Carriers som saknas här (last, värme, H2, EV, DSR, slack)
@@ -492,10 +497,10 @@ stability:
     "Generator:thermal":       thermal
     "Generator:gas":           gas
     "Link:heat chp":           chp         # ⭐ KVV är en Link: zon = bus1, eff = efficiency
-    "Generator:wind_onshore":  ibr
-    "Generator:wind_offshore": ibr
-    "Generator:solar":         ibr
-    "StorageUnit:battery":     ibr
+    "Generator:wind_onshore":  ibr_wind
+    "Generator:wind_offshore": ibr_wind
+    "Generator:solar":         ibr_solar
+    "StorageUnit:battery":     ibr_battery
     "StorageUnit:battery_gfm": gfm
     "Generator:syncon":        syncon
     "Generator:syncon_fw":     syncon_fw
