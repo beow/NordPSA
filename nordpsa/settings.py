@@ -175,11 +175,22 @@ def validate(s: dict) -> None:
     bl = s["hydro"]["bid_ladder"]
     if bl is not None and (len(bl) != 2 or int(bl[0]) < 1):
         raise SystemExit("hydro.bid_ladder: [K, BREDD] med K ≥ 1, eller null")
+    if s["battery"]["endogenous"]:
+        if s["scenario"]["battery_total"] is not None:
+            raise SystemExit("battery.endogenous och scenario.battery_total utesluter varandra")
+        if s["run"]["capacities"] == "config":
+            raise SystemExit("battery.endogenous kräver en expansion (eller dispatch --from en)")
+    ge = s["battery"]["gfm_extra_eur_per_kw"]
+    if ge is not None and float(ge) < 0:
+        raise SystemExit("battery.gfm_extra_eur_per_kw: ≥ 0 eller null")
+    if float(s["battery"]["cost_scale"]) <= 0:
+        raise SystemExit("battery.cost_scale: > 0")
+    if int(s["battery"]["hours"]) <= 0:
+        raise SystemExit("battery.hours: > 0")
+    if s["syncon"]["enabled"] and s["run"]["capacities"] == "config":
+        raise SystemExit("syncon.enabled kräver en expansion (eller dispatch --from en)")
     st = s["stability"]
     if st["enabled"]:
-        if mode == "expansion":
-            raise SystemExit("stability.enabled: bara dispatch än så länge (expansionens "
-                             "kapacitetsvillkor är inte implementerat)")
         if not (st["ek_system_gws"] or st["ek_zone_floor_gws"] or st["scr_min"]):
             raise SystemExit("stability.enabled kräver ek_system_gws, ek_zone_floor_gws "
                              "eller scr_min")

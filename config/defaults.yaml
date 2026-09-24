@@ -74,6 +74,18 @@ stability:                  # krav på rotationsenergi (data: zones.yaml:stabili
   sync_weight: {}           # fri tabell, zon: vikt — override på zones.yaml:stability.sync_weight
   tech: {}                  # fri tabell, teknikklass: {H: …, m_min: …} — override på zones.yaml
 
+battery:                    # batteriflottan; ärvs av dispatch --from
+  endogenous: false         # true: demand-scenariots FRIA batterier ersätts av investerbara, två typer:
+                            # nätföljande '{zon} battery exp' och nätbildande '{zon} battery gfm'
+                            # (merkostnad zones.yaml:costs.battery.gfm_extra_eur_per_kw)
+  hours: 4                  # lagringstid för de investerbara batterierna
+  cost_scale: 1.0           # skalar investeringen (effekt- och energidel) för de investerbara batterierna
+  gfm_extra_eur_per_kw: null  # merkostnad nätbildande; null = zones.yaml:costs.battery. 0 ⇒ BARA
+                            # nätbildande byggs (nätföljande vore dominerad och bara degenererad)
+
+syncon:
+  enabled: false            # investerbara synkronkompensatorer '{zon} syncon' (zones.yaml:costs.syncon)
+
 solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex. user_bound_scale)
 
 # ---- lägesberoende; bara det aktiva lägets sektion används ----------------------------

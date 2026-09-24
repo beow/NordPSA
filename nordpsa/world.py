@@ -184,6 +184,20 @@ def prepare_config(cfg: dict, s: dict) -> dict:
             print("  Baseline-batterier (fria): "
                   + ", ".join(f"{z} {mw:.0f}MW/{h:.0f}h" for z, mw, h in extras["batteries"]))
 
+    ext = mode == "expansion"
+    extras["battery_invest"] = None
+    if s["battery"]["endogenous"]:
+        if extras["batteries"]:
+            print("  → battery.endogenous: scenariots fria batterier tas bort ("
+                  + ", ".join(f"{z} {mw:.0f}MW" for z, mw, _h in extras["batteries"]) + ")")
+        extras["batteries"] = []
+        ge = s["battery"]["gfm_extra_eur_per_kw"]
+        extras["battery_invest"] = {"hours": float(s["battery"]["hours"]), "extendable": ext,
+                                    "cost_scale": float(s["battery"]["cost_scale"]),
+                                    "gfm_extra": None if ge is None else float(ge)}
+    extras["syncon"] = ({"aux_loss_pu": float(cfg["stability"]["tech"]["syncon"]["aux_loss_pu"]),
+                         "extendable": ext} if s["syncon"]["enabled"] else None)
+
     for pair, mw in (s["grid"]["ntc_override"] or {}).items():
         z0, z1 = pair.split(":")
         hit = [link for link in cfg.get("links", []) if link[0] == z0 and link[1] == z1]

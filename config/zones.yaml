@@ -479,7 +479,10 @@ stability:
     gas:         {mode: commit, H: 5.0, cos_phi: 0.85, xd2: 0.16, m_min: 0.40}
     syncon:      {mode: syncon, H: 1.5, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.010}
     syncon_fw:   {mode: syncon, H: 6.0, cos_phi: 1.00, xd2: 0.15, aux_loss_pu: 0.015}
-    gfm:         {mode: gfm,    H: 3.0, cos_phi: 1.00, ibr_w: 0.0, avail: 0.90}   # ⚠️ H är ett reglerval
+    # Nätbildande batteri: tröghet H·avail och felström sk_pu·avail per MW, oavsett om det
+    # laddar eller laddar ur. ⚠️ H är ett reglerval, sk_pu (1,1–1,3) begränsas av omriktarens
+    # strömtålighet, avail = att laddningsnivå och marginal inte alltid räcker.
+    gfm:         {mode: gfm,    H: 3.0, cos_phi: 1.00, ibr_w: 0.0, avail: 0.90, sk_pu: 1.2}
     # Nätföljande (GFL) omriktare, en klass per teknik. ibr_w = andel av inmatningen som
     # behöver extern nätstyrka = 1 − andelen nätbildande (GFM). 1,0 = allt GFL (värsta fallet).
     # Känslighet: --set stability.tech.ibr_wind.ibr_w=0.7 (30 % av vinden nätbildande).
@@ -612,6 +615,18 @@ costs:
     lifetime_years:     15
     fom_fraction:       0.025
     p_nom_max_mw:       50000   # tak per zon för expanderbara batterier
+    # Merkostnad för NÄTBILDANDE (GFM) styrning: överdimensionerad omriktare + styrsystem.
+    # ⚠️ ANTAGANDE, okalibrerat. Används av battery.endogenous ('{zon} battery gfm').
+    gfm_extra_eur_per_kw: 40
+
+  # Synkronkompensator ('{zon} syncon', stability.syncon). p_nom tolkas som MVA.
+  # ⚠️ ANTAGANDEN: 100 €/kVA, 40 år ⇒ ~8 650 €/MVA/år vid r = 6 %. Kalibrera mot verklig
+  # upphandling (National Grid Stability Pathfinder, EirGrid, Energinet).
+  syncon:
+    overnight_eur_per_kva: 100
+    lifetime_years: 40
+    fom_fraction: 0.02
+    p_nom_max_mw: 10000         # tak per zon [MVA]
 
   # Vätgas (power-to-X). Elektrolys (el→H2), Store-lager (energi €/kWh, effekt via
   # länkar), valfri turbin (H2→el). Allt i MWh LHV. overnight: el/turbin €/kW,

@@ -12,7 +12,8 @@ from nordpsa.network.heat import add_chp, add_heat, heat_demand_profiles
 from nordpsa.network.hydrogen import add_hydrogen
 from nordpsa.network.hydropower import add_hydro
 from nordpsa.network.market import add_market_connections
-from nordpsa.network.storage import add_batteries
+from nordpsa.network.stability import add_synchronous_condensers
+from nordpsa.network.storage import add_batteries, add_investable_batteries
 
 
 def build_network(
@@ -37,6 +38,8 @@ def build_network(
     ror_hifreq:              float = 0.0,
     ror_hifreq_seed:         int = 0,
     ror_hifreq_tau_days:     float = 3.5,
+    battery_invest:          dict | None = None,
+    syncon:                  dict | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -111,5 +114,14 @@ def build_network(
     add_heat(n, cfg, heat_demand, r, n_years)
     add_chp(n, cfg, heat_demand, r, n_years)
     add_ev(n, cfg, ev_profiles, ev_overrides, snapshots, dt_h, n_years)
+    zones = list(cfg["zones"])
+    if battery_invest:        # {hours, extendable}
+        add_investable_batteries(n, zones, ccfg, r, n_years, battery_invest["hours"],
+                                 battery_invest["extendable"],
+                                 battery_invest.get("cost_scale", 1.0),
+                                 battery_invest.get("gfm_extra"))
+    if syncon:                # {aux_loss_pu, extendable}
+        add_synchronous_condensers(n, zones, ccfg, r, n_years, syncon["aux_loss_pu"],
+                                   syncon["extendable"])
 
     return n

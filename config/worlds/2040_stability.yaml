@@ -1,0 +1,42 @@
+# Värld: 2040_svk_mm + stabilitet. Batterierna är ENDOGENA (två typer: nätföljande och
+# nätbildande), synkronkompensatorer får byggas, och kraven på rotationsenergi och
+# nätstyrka gäller per timme (hårda i expansion, mjuka i dispatch).
+#
+# ⚠️ Världar ärver inte av varandra: allt ovanför "stabilitet" är en KOPIA av
+# 2040_svk_mm.yaml och måste hållas i synk (tests/unit/test_settings.py jämför dem).
+# Referens utan krav i samma värld: --set stability.enabled=false.
+
+modes: [expansion, dispatch]
+
+scenario:
+  cost: svk_2040
+  demand: svk_2040_mm
+  post_expansion_ntc: true  # Aurora SE-N–FI 2000, NO-N↔NO-S 1000
+
+nuclear:
+  add:                      # tio nya reaktorer per zon, eget frö per zon
+    - [SE-S, 10, 201]
+    - [SE-N, 10, 202]
+    - [FI,   10, 203]
+  new_min_load: 0.6         # ny kärnkraft lastföljer ned till 60 %; befintlig flotta must-run
+
+vre:
+  onwind_capfac_increase: 0.30  # 2040:s nybyggnadsflotta
+  offwind_capfac_increase: 0.10
+
+heat:
+  enabled: true
+
+# ---- stabilitet --------------------------------------------------------------------------
+battery:
+  endogenous: true          # scenariots fria batterier ersätts av investerbara GFL + GFM
+  hours: 4
+
+syncon:
+  enabled: true
+
+stability:
+  enabled: true
+  ek_system_gws: 150        # ⚠️ beslut 2026-09-24, okalibrerat (operatörernas underlag 120–145)
+  scr_min: 1.5              # klaras av dagens värld i ≥ 99,9 % av timmarna i alla zoner
+                            # 0 % nätbildande vind och sol (zones.yaml-default)

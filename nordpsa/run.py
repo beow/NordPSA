@@ -57,6 +57,14 @@ def summary_flags(s: dict) -> list[str]:
     if s["voll"] is not None: f.append(f"voll{int(s['voll'])}")
     if s["hydro"]["restrictions"]: f.append("hydro-restrictions")
     if s["heat"]["enabled"]: f.append("heat")
+    if s["battery"]["endogenous"]:
+        ge = s["battery"]["gfm_extra_eur_per_kw"]
+        f.append(f"battinvest-{s['battery']['hours']:g}h_"
+                 + ("gfm-only" if ge is not None and float(ge) == 0 else "gfl+gfm")
+                 + ("" if ge is None or float(ge) == 0 else f"_gfmextra{float(ge):g}")
+                 + ("" if float(s["battery"]["cost_scale"]) == 1.0
+                    else f"_cost×{float(s['battery']['cost_scale']):g}"))
+    if s["syncon"]["enabled"]: f.append("syncon")
     st = s["stability"]
     if st["enabled"]:
         d = s["dispatch"]
@@ -155,9 +163,14 @@ def _stability_sdata(cfg: dict, s: dict) -> dict:
 
 
 def _stability_constraints(n, cfg: dict, s: dict) -> list:
-    """Krav på rotationsenergi (dispatch). Anropas EFTER frysningen av kapaciteterna."""
+    """Krav på rotationsenergi och nätstyrka. Anropas EFTER frysningen av kapaciteterna.
+    Mjuka i dispatch (straff), hårda i expansion: där gör synkronkompensatorer, nätbildande
+    batterier och spill dem alltid uppfyllbara, och skuggpriset blir tolkbart."""
     st, d = s["stability"], s["dispatch"]
-    pen, spen = d["stability_slack_penalty"], d["stability_scr_slack_penalty"]
+    if s["run"]["mode"] == "dispatch":
+        pen, spen = d["stability_slack_penalty"], d["stability_scr_slack_penalty"]
+    else:
+        pen = spen = None
     sdata = _stability_sdata(cfg, s)
     if st["ek_system_gws"] or st["ek_zone_floor_gws"]:
         print(f"Stabilitetskrav (rotationsenergi), sync_weight {sdata['sync_weight']}, "
@@ -240,7 +253,9 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
                       hydro_mc_override=mc_override,
                       ror_hifreq=float(rh["sigma"]),
                       ror_hifreq_seed=int(rh["seed"]),
-                      ror_hifreq_tau_days=float(rh["tau_days"]))
+                      ror_hifreq_tau_days=float(rh["tau_days"]),
+                      battery_invest=extras["battery_invest"],
+                      syncon=extras["syncon"])
 
     n_years = len(snapshots) * res / 8760.0
     world.apply_post_build(n, cfg, s, n_years)
@@ -251,8 +266,8 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
         if caps not in ("config",):              # frys till källkörningens p_nom_opt
             modes.freeze_capacities_from(n, caps)
         modes.apply_vre_curtailment_cost(n, float(s["dispatch"]["vre_curtailment_cost"]))
-        if s["stability"]["enabled"]:
-            callbacks += _stability_constraints(n, cfg, s)
+    if s["stability"]["enabled"]:                   # efter frysningen
+        callbacks += _stability_constraints(n, cfg, s)
 
     if dry_run:
         _dry_run_report(n)
@@ -282,4 +297,11 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
                              n.snapshot_weightings.generators)
     else:
         solve.save_results(n, label)
+        if s["stability"]["enabled"]:
+            res = solve.stability_results(n)
+            rep = stability_report(n, sdata=_stability_sdata(cfg, s),
+                                   online=res.get("stability_online"))
+            write_stability_reports(rep, RESULTS_DIR / label)
+            _print_stability(rep["summary"], res.get("stability_slack"),
+                             n.snapshot_weightings.generators)
     print("Klart!")

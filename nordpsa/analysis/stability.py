@@ -46,7 +46,7 @@ _DISPATCH = {"Generator": ("generators_t", "p"),
              "StorageUnit": ("storage_units_t", "p_dispatch"),
              "Link": ("links_t", "p0")}             # p0: samma sida som p_nom
 _TECH_DEFAULTS = {"H": 0.0, "cos_phi": 1.0, "xd2": np.nan, "m_min": 0.0, "avail": 1.0,
-                  "ibr_w": 0.0, "i_ibr": 0.0, "aux_loss_pu": 0.0}
+                  "ibr_w": 0.0, "i_ibr": 0.0, "aux_loss_pu": 0.0, "sk_pu": 0.0}
 
 
 def stability_data(tech: dict | None = None, sync_weight: dict | None = None,
@@ -66,14 +66,16 @@ def stability_tech(sdata: dict) -> pd.DataFrame:
     """Teknikklasser med koefficienter per MW aktiv märkeffekt (eff = 1).
 
     e_coef [MWs/MW] = H/cosφ
-    s_coef [MVA/MW] = 1/((X''_d + X_T)·cosφ) för synkrona klasser, annars 0
+    s_coef [MVA/MW] = 1/((X''_d + X_T)·cosφ) för synkrona klasser, sk_pu för
+                      nätbildande (begränsad felström), annars 0
     """
     t = pd.DataFrame.from_dict(sdata["tech"], orient="index")
     for col, val in _TECH_DEFAULTS.items():
         t[col] = t[col].fillna(val) if col in t else val
     t["e_coef"] = t.H / t.cos_phi
     sync = t["mode"].isin(["commit", "syncon"])
-    t["s_coef"] = np.where(sync, 1.0 / ((t.xd2 + sdata["x_t"]) * t.cos_phi), 0.0)
+    t["s_coef"] = np.where(sync, 1.0 / ((t.xd2 + sdata["x_t"]) * t.cos_phi),
+                           np.where(t["mode"] == "gfm", t.sk_pu, 0.0))
     bad = sync & t.xd2.isna()
     if bad.any():
         raise ValueError(f"stability.tech: xd2 saknas för {list(t.index[bad])}")
@@ -138,7 +140,7 @@ def capacity_contribution(u: pd.DataFrame, by_zone: bool = True) -> pd.DataFrame
     df["S_n_MVA"] = u.eff * u.cap / u.cos_phi
     derate = np.where(u["mode"] == "gfm", u.avail, 1.0)
     df["Ek_max_GWs"] = u.e_coef * u.cap * derate / 1e3
-    df["Sk_max_GVA"] = u.s_coef * u.cap / 1e3
+    df["Sk_max_GVA"] = u.s_coef * u.cap * derate / 1e3
     df["P_ibr_GW"] = np.where(u["mode"].isin(["ibr", "gfm"]), u.ibr_w * u.cap, 0.0) / 1e3
     df["Ifault_ibr_GVA"] = np.where(u["mode"].isin(["ibr", "gfm"]), u.i_ibr * u.cap, 0.0) / 1e3
     if not by_zone:
@@ -202,7 +204,7 @@ def stability_metrics(n, u: pd.DataFrame, sync_weight: dict | None = None,
     sc, gfm = u[u["mode"] == "syncon"], u[u["mode"] == "gfm"]
     ibr = u[u["mode"].isin(["ibr", "gfm"])]
     ek_const = by_zone(sc.e_coef * sc.cap) + by_zone(gfm.e_coef * gfm.avail * gfm.cap)
-    sk_const = by_zone(sc.s_coef * sc.cap)
+    sk_const = by_zone(sc.s_coef * sc.cap) + by_zone(gfm.s_coef * gfm.avail * gfm.cap)
     if sk_include_ibr:
         sk_const = sk_const + by_zone(ibr.i_ibr * ibr.cap)
     p_ibr = by_zone(ibr.ibr_w * ibr.cap)

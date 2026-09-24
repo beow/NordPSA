@@ -235,3 +235,86 @@ def test_gfm_share_reduces_scr_load(net):
     sd = stability_data(tech={"ibr_wind": {"ibr_w": 0.7}})       # 30 % av vinden nätbildande
     ts = stability_metrics(n, unit_table(n, sd))
     np.testing.assert_allclose(ts[("P_ibr_out", "A")], 0.7 * np.array([0, 0.5, 1.0, 2.0]))
+
+
+# ---- expansion: investerbar kapacitet i villkoren -----------------------------------------
+S_SC = 1 / ((SD["tech"]["syncon"]["xd2"] + X_T) * SD["tech"]["syncon"]["cos_phi"])
+GFM = SD["tech"]["gfm"]
+
+
+def toy_expansion(syncon_cost=None, gfm_cost=None, gas_ext=False):
+    """En zon: vind 1000 MW (CF 0,8) täcker lasten 500; gas som dyr reserv. Att spilla
+    vind kräver gas ⇒ nätstyrkan byggs hellre än att vinden spills."""
+    sn = pd.date_range("2023-01-02", periods=4, freq="h")
+    n = pypsa.Network()
+    n.set_snapshots(sn)
+    n.add("Bus", "Z", carrier="AC")
+    n.add("Load", "Z load", bus="Z", p_set=500)
+    n.add("Generator", "Z wind", bus="Z", carrier="wind_onshore", p_nom=1000, p_max_pu=0.8)
+    n.add("Generator", "Z gas", bus="Z", carrier="gas", p_nom=0 if gas_ext else 1000,
+          p_nom_extendable=gas_ext, capital_cost=1.0, marginal_cost=100)
+    if syncon_cost is not None:
+        n.add("Generator", "Z syncon", bus="Z", carrier="syncon", p_nom_extendable=True,
+              p_min_pu=-0.01, p_max_pu=-0.01, capital_cost=syncon_cost)
+    if gfm_cost is not None:
+        n.add("StorageUnit", "Z battery gfm", bus="Z", carrier="battery_gfm",
+              p_nom_extendable=True, max_hours=4, capital_cost=gfm_cost,
+              cyclic_state_of_charge=True)
+    return n
+
+
+def solve_exp(n, **kw):
+    cb = stability_constraints(dict(SD, scr_exempt=[]), None, {}, None, **kw)
+    status, _ = n.optimize(solver_name="highs", extra_functionality=cb)
+    assert status == "ok"
+    return n
+
+
+def test_expansion_builds_syncon_for_scr():
+    n = solve_exp(toy_expansion(syncon_cost=1.0), scr_min=1.5)
+    wind = n.generators_t.p["Z wind"]
+    assert wind.min() > 490                                # vinden spills inte bort
+    gas_on = stability_results(n)["stability_online"]["Z gas"]
+    sk = n.generators.at["Z syncon", "p_nom_opt"] * S_SC + gas_on * (
+        1 / ((SD["tech"]["gas"]["xd2"] + X_T) * SD["tech"]["gas"]["cos_phi"]))
+    assert (sk >= 1.5 * wind - 1e-3).all()
+    assert n.generators.at["Z syncon", "p_nom_opt"] > 100
+    np.testing.assert_allclose(n.generators_t.p["Z syncon"],
+                               -0.01 * n.generators.at["Z syncon", "p_nom_opt"], rtol=1e-6)
+
+
+def test_expansion_gfm_battery_provides_strength_without_being_load():
+    n = solve_exp(toy_expansion(gfm_cost=1.0), scr_min=1.5)
+    cap = n.storage_units.at["Z battery gfm", "p_nom_opt"]
+    wind = n.generators_t.p["Z wind"]
+    assert n.generators_t.p["Z gas"].max() < 1e-6          # gasen är dyrare än batteriet
+    # nätbildande batteri ger sk_pu·avail per MW oavsett drift och räknas inte som last
+    np.testing.assert_allclose(cap * GFM["sk_pu"] * GFM["avail"], 1.5 * wind.max(), rtol=1e-6)
+
+
+def test_expansion_commitment_capped_by_built_capacity():
+    n = solve_exp(toy_expansion(gas_ext=True), scr_min=1.5)
+    on = stability_results(n)["stability_online"]["Z gas"]
+    assert (on <= n.generators.at["Z gas", "p_nom_opt"] + 1e-6).all()
+    assert n.generators.at["Z gas", "p_nom_opt"] > 0       # utan syncon: gas byggs för styvhet
+
+
+def test_investable_batteries_cost_scale_and_gfm_only():
+    from nordpsa.inputs import load_config
+    from nordpsa.network.costs import crf
+    from nordpsa.network.storage import add_investable_batteries
+    ccfg = load_config()["costs"]
+    bc = ccfg["battery"]
+    ann = crf(int(bc["lifetime_years"]), 0.06) + float(bc.get("fom_fraction", 0.025))
+    n = pypsa.Network()
+    n.set_snapshots(pd.date_range("2023-01-02", periods=2, freq="h"))
+    n.add("Bus", "Z", carrier="AC")
+    add_investable_batteries(n, ["Z"], ccfg, 0.06, 1.0, 4, True, cost_scale=0.5, gfm_extra=0.0)
+    assert list(n.storage_units.index) == ["Z battery gfm"]          # bara nätbildande
+    oc = 0.5 * (bc["power_eur_per_kw"] + 4 * bc["energy_eur_per_kwh"]) * 1e3
+    assert n.storage_units.at["Z battery gfm", "capital_cost"] == pytest.approx(oc * ann)
+    n2 = pypsa.Network()
+    n2.set_snapshots(n.snapshots)
+    n2.add("Bus", "Z", carrier="AC")
+    add_investable_batteries(n2, ["Z"], ccfg, 0.06, 1.0, 4, True)
+    assert set(n2.storage_units.index) == {"Z battery exp", "Z battery gfm"}

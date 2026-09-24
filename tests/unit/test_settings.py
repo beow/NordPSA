@@ -120,6 +120,17 @@ def test_stability_validation_rules():
     ]:
         with pytest.raises(SystemExit, match=msg):
             settings.resolve("dispatch", "today", capacities="config", sets=sets)
-    with pytest.raises(SystemExit, match="bara dispatch"):
+    with pytest.raises(SystemExit, match="utesluter"):
         settings.resolve("expansion", "2040_svk_mm",
-                         sets=["stability.enabled=true", "stability.ek_system_gws=120"])
+                         sets=["battery.endogenous=true", "scenario.battery_total=[25, 4]"])
+    with pytest.raises(SystemExit, match="kräver en expansion"):
+        settings.resolve("dispatch", "today", capacities="config", sets=["syncon.enabled=true"])
+
+
+def test_stability_world_is_svk_mm_plus_stability():
+    base = settings.resolve("expansion", "2040_svk_mm")
+    stab = settings.resolve("expansion", "2040_stability")
+    for key in ("scenario", "nuclear", "vre", "heat", "grid", "market", "hydro", "voll"):
+        assert stab[key] == base[key], f"2040_stability har glidit isär från 2040_svk_mm i {key}"
+    assert stab["battery"]["endogenous"] and stab["syncon"]["enabled"]
+    assert stab["stability"]["enabled"] and stab["stability"]["ek_system_gws"] == 150
