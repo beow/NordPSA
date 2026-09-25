@@ -38,5 +38,6 @@ syncon:
 stability:
   enabled: true
   ek_system_gws: 150        # ⚠️ beslut 2026-09-24, okalibrerat (operatörernas underlag 120–145)
-  scr_min: 1.5              # klaras av dagens värld i ≥ 99,9 % av timmarna i alla zoner
+  scr_min: 2.0              # beslut 2026-09-24 (var 1,5). Dagens värld under 2,0: SE-N 0,8 %
+                            # av timmarna, övriga zoner 0 %
                             # 0 % nätbildande vind och sol (zones.yaml-default)
