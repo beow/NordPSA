@@ -192,6 +192,24 @@ def load_run(res_label, struct_label=None):
                 fixed += e
         return fixed, expn
 
+    def cap_fixed_exp(carrier):
+        """(fast_GW, exp_GW) för ett kraftslag, samma uppdelning som split_fixed_exp:
+        fast = ej-extendable p_nom_opt + p_nom_min för extendable, exp = p_nom_opt − p_nom_min."""
+        fixed = expn = 0.0
+        for g in G.index[G.carrier == carrier]:
+            gs = GS if g in GS.index else G
+            po = float(G.at[g, "p_nom_opt"])
+            if gs.at[g, "p_nom_extendable"]:
+                pmin = min(float(gs.at[g, "p_nom_min"]), po)
+                fixed += pmin; expn += po - pmin
+            else:
+                fixed += po
+        return fixed / 1e3, expn / 1e3
+
+    gw_split = {k: cap_fixed_exp(c) for k, c in (
+        ("nuclear", "nuclear"), ("onw", "wind_onshore"), ("offw", "wind_offshore"),
+        ("sol", "solar"), ("thermal", "thermal"), ("gas", "gas"), ("ror", "hydro"))}
+
     nuclear_fixed, nuclear_exp = split_fixed_exp("nuclear")
     onw_fixed,  onw_exp  = split_fixed_exp("wind_onshore")
     offw_fixed, offw_exp = split_fixed_exp("wind_offshore")
@@ -283,7 +301,7 @@ def load_run(res_label, struct_label=None):
         nuclear=N["nuclear"], onw=N["wind_onshore"], offw=N["wind_offshore"], sol=N["solar"],
         nuclear_fixed=nuclear_fixed, nuclear_exp=nuclear_exp,
         onw_fixed=onw_fixed, onw_exp=onw_exp, offw_fixed=offw_fixed, offw_exp=offw_exp,
-        sol_fixed=sol_fixed, sol_exp=sol_exp,
+        sol_fixed=sol_fixed, sol_exp=sol_exp, gw_split=gw_split,
         gas=N["gas"], netexp=N["kont_export"], thermal_pure=thermal_pure, ror=ror,
         hydro_gen=N["hydro"], hydro_reservoir=N["hydro"], ellast=N["load_twh"],
         magasin_vol=float((hy.p_nom_opt * hy.max_hours).sum()) / 1e6,  # TWh
@@ -374,17 +392,26 @@ def split_val(key, total, fixed, expn):
         return f"{expn:.0f} TWh{tag(key)}"
     return f"{total:.0f} TWh (F)"
 
+def gw_val(key):
+    """Kapacitetsrad: 'fast GW (F) + utbyggt GW (E/ET)', eller bara det som finns."""
+    fixed, expn = K["gw_split"][key]
+    if expn > 0.05 and fixed > 0.05:
+        return f"{fixed:.1f} GW (F)  +  {expn:.1f} GW{tag(key)}"
+    if expn > 0.05 or fixed <= 0.05:          # ev. inget byggt alls: visa ändå E/ET-taggen
+        return f"{expn:.1f} GW{tag(key)}"
+    return f"{fixed:.1f} GW (F)"
+
 gens = [
-    ("Kärnkraft (must-run)", C["nuc"], split_val("nuclear", K['nuclear'], K['nuclear_fixed'], K['nuclear_exp'])),
-    ("Vind, land", C["onw"], split_val("onw", K['onw'], K['onw_fixed'], K['onw_exp'])),
-    ("Vind, hav", C["offw"], split_val("offw", K['offw'], K['offw_fixed'], K['offw_exp'])),
-    ("Sol-PV", C["sol"], split_val("sol", K['sol'], K['sol_fixed'], K['sol_exp'])),
-    ("Termisk must-run", C["therm"], f"{K['thermal_pure']:.0f} TWh{tag('thermal')}"),
-    ("Gas CCGT-CCS", C["gas"], f"{K['gas']:.0f} TWh{tag('gas')}"),
+    ("Kärnkraft (must-run)", C["nuc"], split_val("nuclear", K['nuclear'], K['nuclear_fixed'], K['nuclear_exp']) + "\n" + gw_val("nuclear")),
+    ("Vind, land", C["onw"], split_val("onw", K['onw'], K['onw_fixed'], K['onw_exp']) + "\n" + gw_val("onw")),
+    ("Vind, hav", C["offw"], split_val("offw", K['offw'], K['offw_fixed'], K['offw_exp']) + "\n" + gw_val("offw")),
+    ("Sol-PV", C["sol"], split_val("sol", K['sol'], K['sol_fixed'], K['sol_exp']) + "\n" + gw_val("sol")),
+    ("Termisk must-run", C["therm"], f"{K['thermal_pure']:.0f} TWh{tag('thermal')}\n" + gw_val("thermal")),
+    ("Gas CCGT-CCS", C["gas"], f"{K['gas']:.0f} TWh{tag('gas')}\n" + gw_val("gas")),
     ("Kontinent exp/imp", C["mkt"], f"netto-exp {K['netexp']:.0f} TWh{tag('market')}"),
 ]
 if K["ror"] > 0.5:   # lägg in RoR-box bara om körningen har älvkraft
-    gens.insert(4, ("Vattenkraft, älv (RoR)", C["ror"], f"{K['ror']:.0f} TWh{tag('ror')}"))
+    gens.insert(4, ("Vattenkraft, älv (RoR)", C["ror"], f"{K['ror']:.0f} TWh{tag('ror')}\n" + gw_val("ror")))
 gy_top = 88.0
 gstep = (gy_top - 19.0) / (len(gens) - 1)
 for i, (lab, col, val) in enumerate(gens):
