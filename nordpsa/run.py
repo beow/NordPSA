@@ -18,7 +18,8 @@ from nordpsa import modes, settings, solve, world
 from nordpsa.analysis.stability import stability_data, stability_report, write_stability_reports
 from nordpsa.constraints import (hydro_bid_ladder, hydro_operation_bounds,
                                  hydro_operation_constraints, hydro_operation_feasibility_report,
-                                 stability_constraints, stability_feasibility_report)
+                                 scr_joint, stability_constraints,
+                                 stability_feasibility_report)
 from nordpsa.network import build_network
 from nordpsa.settings import RESULTS_DIR, ROOT
 
@@ -76,6 +77,8 @@ def summary_flags(s: dict) -> list[str]:
         if st["scr_min"]:
             pen = d["stability_scr_slack_penalty"]
             f.append(f"scr-{st['scr_min']:g}" + (f"_slack{pen:g}" if pen else "_hard"))
+            for h, mem in (st["scr_joint"] or {}).items():
+                f.append(f"scr-joint-{h}" + "".join(f"+{z}{float(a):g}" for z, a in mem.items()))
     for e in r["experiments"]:
         f.append(f"exp-{e}")
     for spec in r["set"]:
@@ -159,7 +162,13 @@ def _stability_sdata(cfg: dict, s: dict) -> dict:
     for zone in list(st["ek_zone_floor_gws"]) + list(st["sync_weight"]):
         if zone not in cfg["zones"]:
             raise SystemExit(f"stability: okänd zon {zone!r}")
-    return stability_data(st["tech"], st["sync_weight"], cfg)
+    sdata = stability_data(st["tech"], st["sync_weight"], cfg)
+    sdata["scr_joint"] = st["scr_joint"]
+    try:
+        scr_joint(sdata, list(cfg["zones"]))
+    except ValueError as e:
+        raise SystemExit(str(e))
+    return sdata
 
 
 def _stability_constraints(n, cfg: dict, s: dict) -> list:
@@ -178,6 +187,7 @@ def _stability_constraints(n, cfg: dict, s: dict) -> list:
     if st["scr_min"]:
         print(f"Stabilitetskrav (nätstyrka), SCR ≥ {st['scr_min']:g} mot omriktarinmatning, "
               f"undantag {sdata.get('scr_exempt')}, "
+              + (f"gemensamt {sdata['scr_joint']}, " if sdata["scr_joint"] else "")
               + (f"mjukt, straff {spen:g} €/(MVA·h)" if spen else "HÅRT"))
     for line in stability_feasibility_report(n, sdata, st["ek_system_gws"],
                                              st["ek_zone_floor_gws"], st["scr_min"]):

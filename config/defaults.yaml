@@ -71,6 +71,9 @@ stability:                  # krav på rotationsenergi (data: zones.yaml:stabili
   scr_min: null             # golv på nätstyrka per zon: S_k ≥ scr_min · omriktarinmatning (ej DK,
                             # zones.yaml:stability.scr_exempt). 1,5 klarar dagens värld i ≥ 99,9 %
                             # av timmarna i alla zoner. ⚠️ Zonaggregat, inte SCR i en nätpunkt
+  scr_joint: {}             # fri tabell, värdzon: {undantagen zon: andel}. Andelen av zonens styvhet OCH
+                            # omriktarinmatning läggs i värdzonens SCR-krav, t.ex. {SE-S: {DK: 0.35}}
+                            # = DK2 via Öresund. ⚠️ andelen gäller hela zonen (KVV och vind/sol lika)
   sync_weight: {}           # fri tabell, zon: vikt — override på zones.yaml:stability.sync_weight
   tech: {}                  # fri tabell, teknikklass: {H: …, m_min: …} — override på zones.yaml
 

@@ -95,7 +95,7 @@ def test_online_bounds(net):
 
 
 # ---- villkoren (constraints/stability.py) på ett löst leksaksnät --------------------------
-from nordpsa.constraints.stability import (stability_constraints,  # noqa: E402
+from nordpsa.constraints.stability import (scr_joint, stability_constraints,  # noqa: E402
                                            stability_feasibility_report, stability_results)
 
 E_RES = SD["tech"]["hydro_res"]["H"] / SD["tech"]["hydro_res"]["cos_phi"]   # MWs/MW
@@ -122,11 +122,14 @@ def toy():
     return n
 
 
-def solve_toy(sys_gws=None, floors=None, weights=None, penalty=None, scr=None, exempt=None):
+def solve_toy(sys_gws=None, floors=None, weights=None, penalty=None, scr=None, exempt=None,
+              joint=None):
     n = toy()
     sd = stability_data(sync_weight=weights or {})
     if exempt is not None:
         sd["scr_exempt"] = exempt
+    if joint:
+        sd["scr_joint"] = joint
     cb = (stability_constraints(sd, sys_gws, floors or {}, penalty, scr)
           if (sys_gws or floors or scr) else None)
     status, _ = n.optimize(solver_name="highs", extra_functionality=cb)
@@ -228,6 +231,33 @@ def test_scr_exempt_zone_has_no_requirement():
     assert not [c for c in n.model.constraints if "scr" in c]
     n2, _, res2 = solve_toy(scr=1.5, exempt=["A"])
     assert "SCR_B" in res2["stability_dual"] and "SCR_A" not in res2["stability_dual"]
+
+
+def test_scr_joint_adds_share_of_exempt_zone():
+    """B undantagen men med andelen 0,5 i A:s krav: hälften av B:s styvhet och hälften av
+    B:s vind räknas i A. Utan den andelen har B inget krav alls."""
+    a = 0.5
+    n, status, res = solve_toy(scr=1.5, exempt=["B"], joint={"A": {"B": a}})
+    assert status == "ok"
+    on = res["stability_online"]
+    gp = n.generators_t.p
+    lhs = on["A hydro"] * S_RES + a * on["B gas"] * S_GAS
+    assert (lhs >= 1.5 * (gp["A wind"] + a * gp["B wind"]) - 1e-4).all()
+    assert set(res["stability_dual"]) == {"SCR_A"}
+    alone, _, _ = solve_toy(scr=1.5, exempt=["B"])
+    assert n.objective > alone.objective + 1.0         # B:s vind belastar nu A
+
+
+def test_scr_joint_validation():
+    zones = ["A", "B"]
+    base = dict(SD, scr_exempt=["B"])
+    assert scr_joint(dict(base, scr_joint={"A": {"B": 0.35}}), zones) == {"A": {"B": 0.35}}
+    for bad in ({"A": {"C": 0.3}},                    # okänd zon
+                {"B": {"B": 0.3}},                    # värden undantagen
+                {"B": {"A": 0.3}},                    # A är inte undantagen (dubbelräkning)
+                {"A": {"B": 0.0}}, {"A": {"B": 1.5}}):
+        with pytest.raises(ValueError):
+            scr_joint(dict(base, scr_joint=bad), zones)
 
 
 def test_gfm_share_reduces_scr_load(net):

@@ -24,6 +24,14 @@ kärnkraft, strömkraft) och fasta j-enheter: konstanter ur data.
 SCR-kravet mäts mot omriktarnas faktiska inmatning, så LP:t kan uppfylla det genom att
 koppla in mer synkront, bygga synkronkompensatorer eller nätbildande batterier, eller
 SPILLA vind/sol. Zoner i zones.yaml:stability.scr_exempt (DK) får inget krav.
+
+Gemensamt krav (sdata["scr_joint"] = {värd: {zon: andel}}, t.ex. {SE-S: {DK: 0.35}}): en
+andel a av en undantagen zon läggs in i värdzonens krav, med både sin styvhet och sin
+omriktarinmatning:
+    S_k,värd + a·S_k,zon − scr_min·(P_IBR,värd + a·P_IBR,zon) + σ ≥ 0   custom-stability-scr-<värd>
+DK2 (a ≈ 0,35) hör elektriskt ihop med SE4 via Öresund; en konstant styvhet till DK2 skulle
+räkna SE4:s maskiner två gånger. ⚠️ a skalar hela zonen: DK2 antas ha andelen a av både
+kraftvärmen och vinden/solen.
 ⚠️ Zonvärdet är ett aggregat: alla maskiner antas sitta i samma punkt (optimistiskt) och
 grannzonernas bidrag saknas (pessimistiskt).
 
@@ -81,6 +89,30 @@ def _const_by_zone(n, u: pd.DataFrame, sn: pd.DatetimeIndex, zones: list,
 def _scr_zones(sdata: dict, zones: list) -> list:
     exempt = set(sdata.get("scr_exempt") or [])
     return [z for z in zones if z not in exempt]
+
+
+def scr_joint(sdata: dict, zones: list) -> dict:
+    """{värd: {zon: andel}} ur sdata["scr_joint"], kontrollerat mot zonerna.
+
+    Bara undantagna zoner får läggas in (annars räknas de två gånger), värden måste ha ett
+    eget krav, och en zons andelar får tillsammans vara högst 1."""
+    joint = {h: {z: float(a) for z, a in (m or {}).items()}
+             for h, m in (sdata.get("scr_joint") or {}).items()}
+    exempt = set(sdata.get("scr_exempt") or [])
+    used: dict = {}
+    for host, members in joint.items():
+        if host not in zones or host in exempt:
+            raise ValueError(f"stability.scr_joint: värdzonen {host!r} saknas eller är undantagen")
+        for z, a in members.items():
+            if z not in zones or z not in exempt:
+                raise ValueError(f"stability.scr_joint: {z!r} måste vara en zon i scr_exempt")
+            if not 0 < a <= 1:
+                raise ValueError(f"stability.scr_joint: andelen för {z!r} ska ligga i (0, 1]")
+            used[z] = used.get(z, 0.0) + a
+    over = [z for z, a in used.items() if a > 1 + 1e-9]
+    if over:
+        raise ValueError(f"stability.scr_joint: andelarna för {over} summerar till över 1")
+    return joint
 
 
 def _da(values, index, dim="name"):
@@ -181,14 +213,20 @@ def stability_constraints(sdata: dict, ek_system_gws: float | None, ek_zone_floo
             ks = _const_by_zone(n, u, sn, zones, "s_coef")
             ibr = u[u["mode"].isin(["ibr", "gfm"]) & (u.ibr_w > 0)
                     & ((u.cap > 0) | u.extendable)]
+            joint = scr_joint(sdata, zones)
             for z in _scr_zones(sdata, zones):
-                terms = list(sk[z])
-                for c, g in ibr[ibr.zone == z].groupby("component"):
-                    p = m.variables[_PVAR[c]].sel(name=g.index)
-                    terms.append((-float(scr_min) * _da(g.ibr_w, g.index) * p).sum("name"))
-                if len(terms) == len(sk[z]):           # ingen omriktare i zonen
+                parts = {z: 1.0, **joint.get(z, {})}   # zon: andel i kravet
+                terms, n_ibr = [], 0
+                for zz, a in parts.items():
+                    terms += [a * t for t in sk[zz]]
+                    for c, g in ibr[ibr.zone == zz].groupby("component"):
+                        p = m.variables[_PVAR[c]].sel(name=g.index)
+                        terms.append((-float(scr_min) * a * _da(g.ibr_w, g.index) * p).sum("name"))
+                        n_ibr += 1
+                if not n_ibr:                          # ingen omriktare i zonen
                     continue
-                _require(terms, -ks[z], f"custom-stability-scr-{z}", scr_slack_penalty)
+                rhs = -sum(a * ks[zz] for zz, a in parts.items())
+                _require(terms, rhs, f"custom-stability-scr-{z}", scr_slack_penalty)
 
     return _extra_functionality
 
@@ -234,9 +272,14 @@ def stability_feasibility_report(n, sdata: dict, ek_system_gws: float | None,
                            for c, g in ibr.groupby("component")], axis=1)
         pav = avail.T.groupby(ibr.zone[avail.columns]).sum().T.reindex(columns=zones,
                                                                        fill_value=0.0)
+        joint = scr_joint(sdata, zones)
         for z in _scr_zones(sdata, zones):
-            short = sk[z] < float(scr_min) * pav[z]
-            lines.append(f"SCR {z:5s} krav {float(scr_min):.2f}   timmar där allt synkront "
+            parts = {z: 1.0, **joint.get(z, {})}
+            skz = sum(a * sk[zz] for zz, a in parts.items())
+            pavz = sum(a * pav[zz] for zz, a in parts.items())
+            short = skz < float(scr_min) * pavz
+            label = "+".join([z] + [f"{a:g}·{zz}" for zz, a in parts.items() if zz != z])
+            lines.append(f"SCR {label:5s} krav {float(scr_min):.2f}   timmar där allt synkront "
                          f"inkopplat inte räcker mot full omriktarinmatning: "
                          f"{float(wts[short].sum()):.0f} (kräver spill eller slack)")
     return lines
