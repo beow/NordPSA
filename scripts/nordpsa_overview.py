@@ -105,7 +105,8 @@ cfg   = yaml.safe_load(open(ROOT / "config" / "zones.yaml"))
 # Raddefinitioner OCH balanslogiken ligger i paketet (nordpsa/analysis/energy_balance.py).
 sys.path.insert(0, str(ROOT))
 from nordpsa.analysis.energy_balance import (country_balance, COUNTRIES, SOURCES,   # noqa: E402
-                                             SHOW_ROWS, ROW_LABELS, DISPLAY_NEG, BALANCE_SIGNS)
+                                             SHOW_ROWS, ROW_LABELS, DISPLAY_NEG, BALANCE_SIGNS,
+                                             show_rows)
 
 
 def load_run(res_label, struct_label=None):
@@ -577,7 +578,8 @@ for z, (xz, yz) in zpos.items():
 # --- energibalans-tabell ---
 ax.text((103.0 + 138.0) / 2, 62.8, f"Energibalans  (TWh/år)  —  {RUN}",
         ha="center", fontsize=12, weight="bold", color=C["text"])
-rows_order = SHOW_ROWS + ["__balance__"]
+rows = show_rows(bal)                       # utan valfria nollrader (t.ex. syncon)
+rows_order = rows + ["__balance__"]
 balance_row = {c: sum(sgn * bal.loc[c, row] for row, sgn in BALANCE_SIGNS.items())
                for c in COUNTRIES}
 table_rows = []
@@ -612,8 +614,8 @@ for (r, c), cell in tbl.get_celld().items():
     if rn == "BALANS (≈0)":
         cell.set_facecolor("#fdebd0"); cell.get_text().set_weight("bold")
     # Rödmarkera produktionssiffror där kraftslagets kapacitet ligger vid sitt tak (p_nom_opt≈max).
-    if r > 0 and c > 0 and (r - 1) < len(SHOW_ROWS):
-        if cap_binds.get((COUNTRIES[c - 1], SHOW_ROWS[r - 1])):
+    if r > 0 and c > 0 and (r - 1) < len(rows):
+        if cap_binds.get((COUNTRIES[c - 1], rows[r - 1])):
             cell.get_text().set_color("#c0392b"); cell.get_text().set_weight("bold")
 
 # ---- titel ----

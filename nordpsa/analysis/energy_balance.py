@@ -36,7 +36,7 @@ SOURCES     = ['hydro', 'ror', 'nuclear', 'wind_onshore', 'wind_offshore', 'sola
 # att den raden inte längre är faktisk generering. Visas därför POSITIV bland de negativa
 # förbrukningsraderna — den drar ifrån konsumtionen.
 SHOW_ROWS   = ['vatten', 'nuclear', 'wind_onshore', 'wind_offshore', 'solar', 'thermal', 'gas',
-               'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec', 'DSR',
+               'prod_twh', 'load_twh', 'h2_elec', 'heat_elec', 'ev_elec', 'syncon_elec', 'DSR',
                'batt_net', 'kont_export', 'intern_export', 'kons_total', 'curt']
 ROW_LABELS  = {
     'vatten': 'Vattenkraft',
@@ -47,6 +47,7 @@ ROW_LABELS  = {
     'DSR': 'Efterfrågeflex (DSR)',
     'prod_twh': 'PRODUKTION TOTAL', 'load_twh': 'Last', 'h2_elec': 'H2 (elektrolys + oflex)',
     'heat_elec': 'Värme (VP+panna)', 'ev_elec': 'EV-laddning', 'batt_net': 'Batteri (netto ut)',
+    'syncon_elec': 'Synkronkomp. (hjälpkraft)',
     # ⚠️ UTANFÖR BALANSEN och sist i tabellen: VRE-raderna visar dispatchad energi, så
     # curtailment är inte längre en post som ska dras av någonstans — den är en upplysning
     # om hur mycket som fanns men inte togs. Parenteserna i etiketten signalerar det, och
@@ -61,7 +62,7 @@ ROW_LABELS  = {
 }
 # Sänk-/förbruknings-rader visas NEGATIVA (utflöde) i tabellen. Rent KOSMETISKT —
 # balanskontrollen nedan använder de RÅA (positiva) värdena via BALANCE_SIGNS.
-DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
+DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec', 'syncon_elec',
                'kont_export', 'intern_export', 'kons_total'}
 
 
@@ -70,8 +71,18 @@ DISPLAY_NEG = {'load_twh', 'h2_elec', 'heat_elec', 'ev_elec',
 # Konstant, inte presentation: importörer (scripts/nordpsa_overview.py, notebook-cellen)
 # får samma teckenkonvention.
 BALANCE_SIGNS = {'prod_twh': +1, 'batt_net': +1, 'DSR': +1, 'load_twh': -1, 'h2_elec': -1,
-                 'heat_elec': -1, 'ev_elec': -1, 'kont_export': -1,
+                 'heat_elec': -1, 'ev_elec': -1, 'syncon_elec': -1, 'kont_export': -1,
                  'intern_export': -1}
+
+
+# Rader som bara visas när körningen har komponenten (annars en rad med bara 0,0).
+OPTIONAL_ROWS = {'syncon_elec'}
+
+
+def show_rows(*balances):
+    """SHOW_ROWS utan valfria rader som är 0 i alla givna balanser (country_balance-utdata)."""
+    return [r for r in SHOW_ROWS if r not in OPTIONAL_ROWS
+            or any(float(b[r].abs().max()) > 1e-9 for b in balances)]
 
 
 def country_balance(res_label):
@@ -165,6 +176,12 @@ def country_balance(res_label):
         r['h2_elec']   = twh(lsum('electrolyser') + h2_inflex)
         # EV-laddning = flexibel (charger-länk p0) + oflexibel (fast AC-last, svk-läget).
         r['ev_elec']   = twh(lsum('EV charger') + ev_inflex)
+        # Synkronkompensatorernas hjälpkraft: generatorer med carrier 'syncon' och negativ p
+        # (p_min_pu = p_max_pu = −aux_loss_pu). Utan raden sluter balansen inte i zoner med
+        # syncons (run494: SE 0,28, FI 0,29 TWh/år).
+        scols = [g for g in disp.columns if g in nn.generators.index
+                 and nn.generators.at[g, 'bus'] == zone and nn.generators.at[g, 'carrier'] == 'syncon']
+        r['syncon_elec'] = -twh(disp[scols].sum(axis=1)) if scols else 0.0
         # Kontinent-export (market-gen: p>0 import, p<0 export → netto export = −Σp)
         r['kont_export'] = -twh(zmkt(zone))
         # Intern export = netto NTC-flöde UT ur zonen (p0 = bus0→bus1)
@@ -188,7 +205,7 @@ def country_balance(res_label):
     d['vatten']     = d['hydro'] + d['ror']         # magasin + älv (RoR) i en post
     # KONSUMTION TOTAL = inhemsk last + nettoexport (export = utflöde = last) − batteri (netto ut).
     # = PRODUKTION TOTALT vid balans → de två totalraderna möts.
-    d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec']
+    d['kons_total'] = (d['load_twh'] + d['h2_elec'] + d['heat_elec'] + d['ev_elec'] + d['syncon_elec']
                        + d['kont_export'] + d['intern_export']
                        - d['batt_net'] - d['DSR'])
     # SHOW_ROWS + de råa källposterna som slås ihop i visningen ('hydro'/'ror' → 'vatten',
