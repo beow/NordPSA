@@ -12,8 +12,8 @@ from nordpsa.network.heat import add_chp, add_heat, heat_demand_profiles
 from nordpsa.network.hydrogen import add_hydrogen
 from nordpsa.network.hydropower import add_hydro
 from nordpsa.network.market import add_market_connections
-from nordpsa.network.stability import add_synchronous_condensers
-from nordpsa.network.storage import add_batteries, add_investable_batteries
+from nordpsa.network.stability import add_fixed_synchronous_condensers, add_synchronous_condensers
+from nordpsa.network.storage import add_batteries, add_fixed_gfm_batteries, add_investable_batteries
 
 
 def build_network(
@@ -40,6 +40,8 @@ def build_network(
     ror_hifreq_tau_days:     float = 3.5,
     battery_invest:          dict | None = None,
     syncon:                  dict | None = None,
+    syncon_fixed:            dict | None = None,
+    gfm_fixed:               dict | None = None,
 ) -> pypsa.Network:
     """
     Bygger och returnerar ett PyPSA Network.
@@ -123,5 +125,11 @@ def build_network(
     if syncon:                # {aux_loss_pu, extendable}
         add_synchronous_condensers(n, zones, ccfg, r, n_years, syncon["aux_loss_pu"],
                                    syncon["extendable"])
+    if syncon_fixed:          # {mva: {zon: MVA}, aux_loss_pu}
+        add_fixed_synchronous_condensers(n, syncon_fixed["mva"], ccfg, r, n_years,
+                                         syncon_fixed["aux_loss_pu"])
+    if gfm_fixed:             # {mw: {zon: MW}, hours, cost_scale, gfm_extra}
+        add_fixed_gfm_batteries(n, gfm_fixed["mw"], ccfg, r, n_years, gfm_fixed["hours"],
+                                gfm_fixed["cost_scale"], gfm_fixed["gfm_extra"])
 
     return n

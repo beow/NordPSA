@@ -81,13 +81,19 @@ battery:                    # batteriflottan; ärvs av dispatch --from
   endogenous: false         # true: demand-scenariots FRIA batterier ersätts av investerbara, två typer:
                             # nätföljande '{zon} battery exp' och nätbildande '{zon} battery gfm'
                             # (merkostnad zones.yaml:costs.battery.gfm_extra_eur_per_kw)
+  keep_scenario: false      # true (kräver endogenous): scenariots fria batterier BEHÅLLS och de
+                            # investerbara byggs ovanpå dem
   hours: 4                  # lagringstid för de investerbara batterierna
   cost_scale: 1.0           # skalar investeringen (effekt- och energidel) för de investerbara batterierna
   gfm_extra_eur_per_kw: null  # merkostnad nätbildande; null = zones.yaml:costs.battery. 0 ⇒ BARA
                             # nätbildande byggs (nätföljande vore dominerad och bara degenererad)
+  gfm_fixed_mw: {}          # fri tabell, zon: MW. EXOGENA nätbildande batterier '{zon} battery gfm fixed'
+                            # (lagringstid battery.hours), i alla lägen och OVANPÅ övriga batterier
 
 syncon:
   enabled: false            # investerbara synkronkompensatorer '{zon} syncon' (zones.yaml:costs.syncon)
+  fixed_mva: {}             # fri tabell, zon: MVA. EXOGENA synkronkompensatorer '{zon} syncon fixed',
+                            # i alla lägen (t.ex. tillägg i en dispatch av en äldre expansion)
 
 solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex. user_bound_scale)
 

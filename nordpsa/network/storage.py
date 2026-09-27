@@ -82,3 +82,35 @@ def add_investable_batteries(n: pypsa.Network, zones: list, ccfg: dict, r: float
         print(f"  → investerbara batterier '{kind}' ({carrier}), {hours:g}h, "
               f"{oc_mw/1e3:.0f} €/kW, {oc_mw*ann/1e3:.1f} k€/MW/år"
               + ("" if extendable else "  [dispatch: fryses till källan]"))
+
+
+def add_fixed_gfm_batteries(n: pypsa.Network, mw_by_zone: dict, ccfg: dict, r: float,
+                            n_years: float, hours: float, cost_scale: float = 1.0,
+                            gfm_extra: float | None = None) -> None:
+    """battery.gfm_fixed_mw: EXOGENA nätbildande batterier '{zon} battery gfm fixed'.
+
+    Byggs i alla lägen, ovanpå övriga batterier, och fryses aldrig. Samma teknik och
+    kostnadsräkning som add_investable_batteries; årskostnaden skrivs ut för redovisningen.
+    """
+    from nordpsa.network.costs import crf
+    bc = ccfg["battery"]
+    ann = crf(int(bc["lifetime_years"]), r) + float(bc.get("fom_fraction", 0.025))
+    extra = float(bc["gfm_extra_eur_per_kw"] if gfm_extra is None else gfm_extra)
+    oc_mw = (cost_scale * (float(bc["power_eur_per_kw"]) + hours * float(bc["energy_eur_per_kwh"]))
+             + extra) * 1e3
+    for zone, mw in mw_by_zone.items():
+        n.add(
+            "StorageUnit", f"{zone} battery gfm fixed",
+            bus=zone,
+            carrier="battery_gfm",
+            p_nom=float(mw),
+            p_nom_extendable=False,
+            max_hours=float(hours),
+            efficiency_store=0.95,
+            efficiency_dispatch=0.95,
+            cyclic_state_of_charge=True,
+            marginal_cost=0.01,
+            capital_cost=oc_mw * ann * n_years,
+        )
+        print(f"  → exogent nätbildande batteri {zone}: {mw:.0f} MW / {hours:g}h, "
+              f"kapitalkostnad {mw * oc_mw * ann / 1e6:.1f} M€/år (utanför optimeringen)")

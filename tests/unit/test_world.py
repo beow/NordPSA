@@ -78,6 +78,15 @@ def test_battery_total_rescales_scenario_batteries():
     assert {h for _, _, h in extras["batteries"]} == {4.0}
 
 
+def test_battery_keep_scenario_keeps_free_batteries_beside_investable():
+    _, free = _prepare()
+    _, gone = _prepare(sets=["battery.endogenous=true"])
+    _, kept = _prepare(sets=["battery.endogenous=true", "battery.keep_scenario=true"])
+    assert free["batteries"] and gone["batteries"] == []
+    assert kept["batteries"] == free["batteries"]
+    assert kept["battery_invest"] is not None and kept["battery_invest"]["extendable"]
+
+
 def test_heat_tax_zero():
     cfg, _ = _prepare(experiments=["notax"])
     assert cfg["heat"]["enabled"] and cfg["heat"]["el_tax_eur_per_mwh"] == 0.0

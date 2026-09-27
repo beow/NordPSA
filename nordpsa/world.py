@@ -188,15 +188,35 @@ def prepare_config(cfg: dict, s: dict) -> dict:
     extras["battery_invest"] = None
     if s["battery"]["endogenous"]:
         if extras["batteries"]:
-            print("  → battery.endogenous: scenariots fria batterier tas bort ("
+            kept = s["battery"]["keep_scenario"]
+            print("  → battery.endogenous: scenariots fria batterier "
+                  + ("BEHÅLLS, investerbara byggs ovanpå (" if kept else "tas bort (")
                   + ", ".join(f"{z} {mw:.0f}MW" for z, mw, _h in extras["batteries"]) + ")")
-        extras["batteries"] = []
+        if not s["battery"]["keep_scenario"]:
+            extras["batteries"] = []
         ge = s["battery"]["gfm_extra_eur_per_kw"]
         extras["battery_invest"] = {"hours": float(s["battery"]["hours"]), "extendable": ext,
                                     "cost_scale": float(s["battery"]["cost_scale"]),
                                     "gfm_extra": None if ge is None else float(ge)}
     extras["syncon"] = ({"aux_loss_pu": float(cfg["stability"]["tech"]["syncon"]["aux_loss_pu"]),
                          "extendable": ext} if s["syncon"]["enabled"] else None)
+    # Exogena tillskott (alla lägen): {zon: MVA} resp. {zon: MW}
+    for key, table in (("syncon.fixed_mva", s["syncon"]["fixed_mva"]),
+                       ("battery.gfm_fixed_mw", s["battery"]["gfm_fixed_mw"])):
+        for zone, v in (table or {}).items():
+            if zone not in cfg.get("zones", {}):
+                raise SystemExit(f"{key}: okänd zon {zone!r}")
+            if float(v) < 0:
+                raise SystemExit(f"{key}: {zone} måste vara ≥ 0")
+    extras["syncon_fixed"] = {z: float(v) for z, v in (s["syncon"]["fixed_mva"] or {}).items()
+                              if float(v) > 0} or None
+    if extras["syncon_fixed"]:
+        extras["syncon_fixed"] = {"mva": extras["syncon_fixed"], "aux_loss_pu":
+                                  float(cfg["stability"]["tech"]["syncon"]["aux_loss_pu"])}
+    gf = {z: float(v) for z, v in (s["battery"]["gfm_fixed_mw"] or {}).items() if float(v) > 0}
+    extras["gfm_fixed"] = ({"mw": gf, "hours": float(s["battery"]["hours"]),
+                            "cost_scale": float(s["battery"]["cost_scale"]),
+                            "gfm_extra": s["battery"]["gfm_extra_eur_per_kw"]} if gf else None)
 
     for pair, mw in (s["grid"]["ntc_override"] or {}).items():
         z0, z1 = pair.split(":")

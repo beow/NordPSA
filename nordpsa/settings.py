@@ -180,6 +180,8 @@ def validate(s: dict) -> None:
             raise SystemExit("battery.endogenous och scenario.battery_total utesluter varandra")
         if s["run"]["capacities"] == "config":
             raise SystemExit("battery.endogenous kräver en expansion (eller dispatch --from en)")
+    if s["battery"]["keep_scenario"] and not s["battery"]["endogenous"]:
+        raise SystemExit("battery.keep_scenario kräver battery.endogenous")
     ge = s["battery"]["gfm_extra_eur_per_kw"]
     if ge is not None and float(ge) < 0:
         raise SystemExit("battery.gfm_extra_eur_per_kw: ≥ 0 eller null")

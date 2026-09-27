@@ -64,8 +64,13 @@ def summary_flags(s: dict) -> list[str]:
                  + ("gfm-only" if ge is not None and float(ge) == 0 else "gfl+gfm")
                  + ("" if ge is None or float(ge) == 0 else f"_gfmextra{float(ge):g}")
                  + ("" if float(s["battery"]["cost_scale"]) == 1.0
-                    else f"_cost×{float(s['battery']['cost_scale']):g}"))
+                    else f"_cost×{float(s['battery']['cost_scale']):g}")
+                 + ("_keep-scenario" if s["battery"]["keep_scenario"] else ""))
     if s["syncon"]["enabled"]: f.append("syncon")
+    for z, v in (s["syncon"]["fixed_mva"] or {}).items():
+        f.append(f"syncon-fixed-{z}{float(v):g}")
+    for z, v in (s["battery"]["gfm_fixed_mw"] or {}).items():
+        f.append(f"gfm-fixed-{z}{float(v):g}")
     st = s["stability"]
     if st["enabled"]:
         d = s["dispatch"]
@@ -265,7 +270,9 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
                       ror_hifreq_seed=int(rh["seed"]),
                       ror_hifreq_tau_days=float(rh["tau_days"]),
                       battery_invest=extras["battery_invest"],
-                      syncon=extras["syncon"])
+                      syncon=extras["syncon"],
+                      syncon_fixed=extras["syncon_fixed"],
+                      gfm_fixed=extras["gfm_fixed"])
 
     n_years = len(snapshots) * res / 8760.0
     world.apply_post_build(n, cfg, s, n_years)

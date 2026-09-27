@@ -34,3 +34,30 @@ def add_synchronous_condensers(n: pypsa.Network, zones: list, ccfg: dict, r: flo
     print(f"  → synkronkompensatorer i {len(zones)} zoner: {oc_mva/1e3:.0f} €/kVA, "
           f"{cap_cost:.0f} €/MVA/år, hjälpkraft {aux_loss_pu:.1%}"
           + ("" if extendable else "  [dispatch: fryses till källan]"))
+
+
+def add_fixed_synchronous_condensers(n: pypsa.Network, mva_by_zone: dict, ccfg: dict, r: float,
+                                     n_years: float, aux_loss_pu: float) -> None:
+    """syncon.fixed_mva: EXOGENA synkronkompensatorer '{zon} syncon fixed' (fast p_nom = MVA).
+
+    Byggs i alla lägen och fryses aldrig (namnet finns inte i en källkörning). capital_cost
+    sätts för redovisningen; årskostnaden skrivs ut, eftersom den inte optimeras.
+    """
+    sc = ccfg["syncon"]
+    cap_cost = (float(sc["overnight_eur_per_kva"]) * 1e3
+                * (crf(int(sc["lifetime_years"]), r) + float(sc["fom_fraction"])))
+    for zone, mva in mva_by_zone.items():
+        n.add(
+            "Generator", f"{zone} syncon fixed",
+            bus=zone,
+            carrier="syncon",
+            p_nom=float(mva),
+            p_nom_extendable=False,
+            p_min_pu=-float(aux_loss_pu),
+            p_max_pu=-float(aux_loss_pu),
+            marginal_cost=0.0,
+            capital_cost=cap_cost * n_years,
+        )
+        print(f"  → exogen synkronkompensator {zone}: {mva:.0f} MVA, "
+              f"kapitalkostnad {mva * cap_cost / 1e6:.1f} M€/år (utanför optimeringen), "
+              f"hjälpkraft {mva * aux_loss_pu:.0f} MW")

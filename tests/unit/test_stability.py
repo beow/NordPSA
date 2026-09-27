@@ -348,3 +348,29 @@ def test_investable_batteries_cost_scale_and_gfm_only():
     n2.add("Bus", "Z", carrier="AC")
     add_investable_batteries(n2, ["Z"], ccfg, 0.06, 1.0, 4, True)
     assert set(n2.storage_units.index) == {"Z battery exp", "Z battery gfm"}
+
+
+def test_fixed_additions_are_built_and_counted():
+    from nordpsa.inputs import load_config
+    from nordpsa.network.stability import add_fixed_synchronous_condensers
+    from nordpsa.network.storage import add_fixed_gfm_batteries
+    ccfg = load_config()["costs"]
+    n = toy()
+    add_fixed_synchronous_condensers(n, {"B": 400.0}, ccfg, 0.06, 1.0, 0.01)
+    add_fixed_gfm_batteries(n, {"B": 500.0}, ccfg, 0.06, 1.0, 4)
+    u = unit_table(n, SD)
+    assert u.loc["B syncon fixed", "mode"] == "syncon" and not u.loc["B syncon fixed", "extendable"]
+    assert u.loc["B battery gfm fixed", "mode"] == "gfm"
+    ts = stability_metrics(n, u)
+    k_sc = 400 * S_SC + 500 * GFM["sk_pu"] * GFM["avail"]
+    # Sk_max i B = gasen (allt tillgängligt) + de fasta tillskotten
+    s_gas = 500 / ((SD["tech"]["gas"]["xd2"] + X_T) * SD["tech"]["gas"]["cos_phi"])
+    np.testing.assert_allclose(ts[("Sk_max", "B")], (s_gas + k_sc) / 1e3)
+
+
+def test_fixed_additions_settings_validate_zone(results_dir):
+    from nordpsa import settings, world
+    from nordpsa.inputs import load_config
+    s = settings.resolve("expansion", "2040_svk_mm", sets=["syncon.fixed_mva.XX=100"])
+    with pytest.raises(SystemExit, match="okänd zon"):
+        world.prepare_config(load_config(), s)
