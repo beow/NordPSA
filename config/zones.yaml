@@ -620,10 +620,12 @@ costs:
     gfm_extra_eur_per_kw: 40
 
   # Synkronkompensator ('{zon} syncon', stability.syncon). p_nom tolkas som MVA.
-  # ⚠️ ANTAGANDEN: 100 €/kVA, 40 år ⇒ ~8 650 €/MVA/år vid r = 6 %. Kalibrera mot verklig
-  # upphandling (National Grid Stability Pathfinder, EirGrid, Energinet).
+  # 200 €/kVA (höjt från 100 2026-09-28): ElectraNet SA, 4 st med svänghjul, AER-godkänd
+  # kapex 166 MA$ på ~508 MVA ≈ 330 A$/kVA ≈ 200 €/kVA (2019–21, inkl. anslutning);
+  # Transgrid NSW 2026 +38 % mot plan. ENS-katalogen och NREL ATB saknar syncons.
+  # ⚠️ MVA-talet för ElectraNet ej verifierat mot primärkälla. 40 år ⇒ ~17 300 €/MVA/år vid r = 6 %.
   syncon:
-    overnight_eur_per_kva: 100
+    overnight_eur_per_kva: 200
     lifetime_years: 40
     fom_fraction: 0.02
     p_nom_max_mw: 10000         # tak per zon [MVA]

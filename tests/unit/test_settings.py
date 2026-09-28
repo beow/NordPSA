@@ -123,6 +123,9 @@ def test_stability_validation_rules():
     with pytest.raises(SystemExit, match="utesluter"):
         settings.resolve("expansion", "2040_svk_mm",
                          sets=["battery.endogenous=true", "scenario.battery_total=[25, 4]"])
+    # med keep_scenario behålls den omskalade scenarioflottan bredvid de investerbara
+    settings.resolve("expansion", "2040_svk_mm", sets=["battery.endogenous=true",
+                     "battery.keep_scenario=true", "scenario.battery_total=[6, 2]"])
     with pytest.raises(SystemExit, match="kräver en expansion"):
         settings.resolve("dispatch", "today", capacities="config", sets=["syncon.enabled=true"])
     with pytest.raises(SystemExit, match="keep_scenario kräver"):

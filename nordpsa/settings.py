@@ -176,8 +176,9 @@ def validate(s: dict) -> None:
     if bl is not None and (len(bl) != 2 or int(bl[0]) < 1):
         raise SystemExit("hydro.bid_ladder: [K, BREDD] med K ≥ 1, eller null")
     if s["battery"]["endogenous"]:
-        if s["scenario"]["battery_total"] is not None:
-            raise SystemExit("battery.endogenous och scenario.battery_total utesluter varandra")
+        if s["scenario"]["battery_total"] is not None and not s["battery"]["keep_scenario"]:
+            raise SystemExit("battery.endogenous och scenario.battery_total utesluter varandra "
+                             "(utom med battery.keep_scenario, som behåller den omskalade flottan)")
         if s["run"]["capacities"] == "config":
             raise SystemExit("battery.endogenous kräver en expansion (eller dispatch --from en)")
     if s["battery"]["keep_scenario"] and not s["battery"]["endogenous"]:
