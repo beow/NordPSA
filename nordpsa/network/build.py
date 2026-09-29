@@ -128,8 +128,8 @@ def build_network(
     if syncon_fixed:          # {mva: {zon: MVA}, aux_loss_pu}
         add_fixed_synchronous_condensers(n, syncon_fixed["mva"], ccfg, r, n_years,
                                          syncon_fixed["aux_loss_pu"])
-    if gfm_fixed:             # {mw: {zon: MW}, hours, cost_scale, gfm_extra}
+    if gfm_fixed:             # {mw: {zon: MW}, hours, gfm_extra}
         add_fixed_gfm_batteries(n, gfm_fixed["mw"], ccfg, r, n_years, gfm_fixed["hours"],
-                                gfm_fixed["cost_scale"], gfm_fixed["gfm_extra"])
+                                gfm_fixed["gfm_extra"])
 
     return n

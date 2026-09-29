@@ -368,6 +368,18 @@ def test_fixed_additions_are_built_and_counted():
     np.testing.assert_allclose(ts[("Sk_max", "B")], (s_gas + k_sc) / 1e3)
 
 
+def test_fixed_gfm_batteries_ignore_cost_scale(results_dir):
+    """battery.cost_scale billigar bara investerbara batterier; den exogena flottan har fullt pris."""
+    from nordpsa import settings, world
+    from nordpsa.inputs import load_config
+    s = settings.resolve("expansion", "2040_svk_mm",
+                         sets=["battery.endogenous=true", "battery.cost_scale=0.5",
+                               "battery.gfm_fixed_mw={SE-S: 1000}"])
+    extras = world.prepare_config(load_config(), s)
+    assert "cost_scale" not in extras["gfm_fixed"]
+    assert extras["battery_invest"]["cost_scale"] == 0.5
+
+
 def test_fixed_additions_settings_validate_zone(results_dir):
     from nordpsa import settings, world
     from nordpsa.inputs import load_config

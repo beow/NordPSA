@@ -214,8 +214,7 @@ def prepare_config(cfg: dict, s: dict) -> dict:
         extras["syncon_fixed"] = {"mva": extras["syncon_fixed"], "aux_loss_pu":
                                   float(cfg["stability"]["tech"]["syncon"]["aux_loss_pu"])}
     gf = {z: float(v) for z, v in (s["battery"]["gfm_fixed_mw"] or {}).items() if float(v) > 0}
-    extras["gfm_fixed"] = ({"mw": gf, "hours": float(s["battery"]["hours"]),
-                            "cost_scale": float(s["battery"]["cost_scale"]),
+    extras["gfm_fixed"] = ({"mw": gf, "hours": float(s["battery"]["hours"]),   # fullt pris, ej cost_scale
                             "gfm_extra": s["battery"]["gfm_extra_eur_per_kw"]} if gf else None)
 
     for pair, mw in (s["grid"]["ntc_override"] or {}).items():
