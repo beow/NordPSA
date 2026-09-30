@@ -107,6 +107,10 @@ dispatch:
   vre_curtailment_cost: 5   # ursprungsgarantier; enda vägen till negativa priser
   rolling_weeks: 1          # fönsterlängd
   lookahead_weeks: 3        # extra look-ahead som löses men kastas
+  carry_storage: true       # bär över batteri-SOC och Store-nivåer (EV, värme, H2) mellan fönstren,
+                            # med slut ≥ start per fönster. false = gamla beteendet: cykliska INOM
+                            # varje fönster ⇒ lagerhopp vid varje fönstergräns (t.o.m. run508)
+  storage_initial_frac: 0.5 # startnivå för de överburna lagren vid periodens början
   terminal_curve: config/terminal_curves/terminal_curve_2040_gemini_v12.yaml
   terminal_anchor: null     # tal (alla zoner) eller {zon: λ_bas}; null = kurvfilens ankare
   terminal_segments: 20

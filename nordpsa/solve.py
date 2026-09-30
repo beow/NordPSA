@@ -140,6 +140,42 @@ def solve_rolling_horizon(n, cfg: dict, d: dict, res: int,
 
     cap = {u: float(n.storage_units.at[u, "p_nom"]) * float(n.storage_units.at[u, "max_hours"])
            for u in units}
+
+    # ⭐ ÖVRIGA LAGER (batterier, och alla Stores: EV, värme, H2) bärs också över mellan
+    # fönstren (`dispatch.carry_storage`). Tidigare var de cykliska INOM varje fönster med
+    # fritt startläge ⇒ lagerhopp vid varje fönstergräns (run508: SE-S EV −122 GWh, FI värme
+    # +201 GWh över tre år) och lagervärden μ satta av ett cykliskt villkor, inte en bana.
+    # Nu: fast start (överburet), och i stället för cykliskt villkor SLUT ≥ START i varje
+    # fönster — så att fönstret inte kan tömma lagret gratis mot look-ahead-svansens slut.
+    carry_on = bool(d["carry_storage"])
+    su_other = [u for u in n.storage_units.index if u not in units] if carry_on else []
+    st_all = list(n.stores.index) if carry_on else []
+    su_cap = {u: float(n.storage_units.at[u, "p_nom"]) * float(n.storage_units.at[u, "max_hours"])
+              for u in su_other}
+    st_cap = {s: float(n.stores.at[s, "e_nom"]) for s in st_all}
+    frac0 = float(d["storage_initial_frac"])
+    su_carry = {u: frac0 * su_cap[u] for u in su_other}
+    st_carry = {s: max(frac0, float(n.stores.at[s, "e_min_pu"])) * st_cap[s] for s in st_all}
+    if carry_on:
+        n.storage_units.loc[su_other, "cyclic_state_of_charge"] = False
+        n.stores.loc[st_all, "e_cyclic"] = False
+        print(f"  → övriga lager bärs över: {len(su_other)} batterier + {len(st_all)} stores, "
+              f"start {frac0:.0%}, villkor slut ≥ start per fönster")
+
+    def carry_end_ge_start(nn, snapshots):
+        """Slut ≥ start för de överburna lagren (ersätter det cykliska villkoret)."""
+        if not (su_other or st_all):
+            return
+        m, t1 = nn.model, snapshots[-1]
+        if su_other:
+            soc = m.variables["StorageUnit-state_of_charge"]
+            for u in su_other:
+                m.add_constraints(soc.sel(name=u, snapshot=t1) >= su_carry[u], name=f"carry_end-{u}")
+        if st_all:
+            e = m.variables["Store-e"]
+            for s in st_all:
+                if st_cap[s] > 0:
+                    m.add_constraints(e.sel(name=s, snapshot=t1) >= st_carry[s], name=f"carry_end-{s}")
     # Start-SOC: samma ankare (hydro_soc_initial) som expansionens cykliska villkor, dvs
     # den UPPMÄTTA EC-nivån 2023-01-02. I rullande horisont är det ett äkta begynnelse-
     # villkor som propagerar genom hela perioden.
@@ -194,11 +230,16 @@ def solve_rolling_horizon(n, cfg: dict, d: dict, res: int,
     for i, (keep, sns) in enumerate(windows, 1):
         for u in units:
             n.storage_units.at[u, "state_of_charge_initial"] = soc_carry[u]
+        for u in su_other:
+            n.storage_units.at[u, "state_of_charge_initial"] = su_carry[u]
+        for s in st_all:
+            n.stores.at[s, "e_initial"] = st_carry[s]
 
         wk   = tc.week_of(sns[-1])
         lam  = tc.lambdas_for_week(wk, units, canchor, cparams)
         prof = tc.profiles_for_week(wk, units, cparams, segments)
-        callbacks = [hydro_terminal_value(lam, cap, prof)] + list(extra_callbacks or [])
+        callbacks = ([hydro_terminal_value(lam, cap, prof), carry_end_ge_start]
+                     + list(extra_callbacks or []))
 
         def extra_func(nn, snapshots, _cbs=callbacks):
             for cb in _cbs:
@@ -217,6 +258,9 @@ def solve_rolling_horizon(n, cfg: dict, d: dict, res: int,
             # svansen är bara en framtidsbild och kastas.
             soc_carry = {u: float(n.storage_units_t.state_of_charge.at[keep[-1], u])
                          for u in units}
+            su_carry = {u: max(0.0, float(n.storage_units_t.state_of_charge.at[keep[-1], u]))
+                        for u in su_other}
+            st_carry = {s: max(0.0, float(n.stores_t.e.at[keep[-1], s])) for s in st_all}
             slut_txt = " ".join(f"→{soc_carry[u]/cap[u]:.0%}" for u in units)
         else:
             slut_txt = ""
