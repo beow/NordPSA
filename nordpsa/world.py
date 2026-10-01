@@ -287,17 +287,21 @@ def prepare_config(cfg: dict, s: dict) -> dict:
 def scale_continent_prices(cfg: dict, s: dict, market_prices: dict) -> None:
     """Demand-scenariots continent_price_eur_mwh: multiplikativ omskalning av 2023-25-
     serien per budzon till scenariots nivå (timformen bevaras, nivån byts). Görs på HELA
-    serien, före årsurval och resampling."""
-    if not s["scenario"]["demand"]:
-        return
-    cps = (cfg.get("demand_scenarios", {}).get(s["scenario"]["demand"], {})
-           .get("continent_price_eur_mwh") or {})
+    serien, före årsurval och resampling. Därefter `market.price_scale` på alla budzoner."""
+    cps = ((cfg.get("demand_scenarios", {}).get(s["scenario"]["demand"], {})
+            .get("continent_price_eur_mwh") or {}) if s["scenario"]["demand"] else {})
     for bzn, target in cps.items():
         if bzn in market_prices:
             m = market_prices[bzn].mean()
             if m > 0:
                 market_prices[bzn] = market_prices[bzn] * (float(target) / m)
                 print(f"  → kontinentpris {bzn}: snitt {m:.1f} → {float(target):.0f} €/MWh (×{float(target)/m:.2f})")
+    k = s["market"]["price_scale"]
+    if k is not None:
+        used = sorted({c[3] for c in cfg.get("market_connections", [])} & set(market_prices))
+        for bzn in used:            # bara kablarnas budzoner; filen har även nordiska historiska priser
+            market_prices[bzn] = market_prices[bzn] * float(k)
+        print(f"  → kontinentpriser ×{float(k):.2f} (market.price_scale): {', '.join(used)}")
 
 
 def nuclear_build_args(cfg: dict, s: dict) -> tuple[list, dict]:

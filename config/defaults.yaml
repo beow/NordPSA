@@ -45,6 +45,7 @@ market:
   enabled: true             # false = inga kontinentkablar
   ntc_scale: null           # skala ALLA kontinentkablar (efter scenariot, före ntc_override)
   ntc_override: {}          # fri tabell, kabelnamn: MW
+  price_scale: null         # multiplicera ALLA kontinentpriser (efter scenariots nivå); känslighet
   elasticity: true          # pristrappa vid kontinentgränsen (zones.yaml:market_elasticity)
 
 heat:

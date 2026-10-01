@@ -102,3 +102,21 @@ def test_extra_load_and_soc_anchor_override():
     cfg, _ = _prepare(sets=["scenario.extra_load_mw.SE-S=1000", "hydro.soc_initial.FI=0.4"])
     assert cfg["additional_load_mw"]["SE-S"] >= 1000
     assert cfg["zones"]["FI"]["hydro_soc_initial"] == 0.4
+
+
+def test_price_scale_multiplies_cable_prices_after_scenario_level():
+    import pandas as pd
+    idx = pd.date_range("2024-01-01", periods=4, freq="h")
+    base = {"DE-LU": pd.Series([50.0, 70, 90, 110], idx), "SE-S": pd.Series(40.0, idx)}
+    for k, expect in [(None, 1.0), (1.1, 1.1), (0.9, 0.9)]:
+        sets = [] if k is None else [f"market.price_scale={k}"]
+        s = settings.resolve("expansion", "2040_svk_mm", [], sets)
+        cfg = load_config()
+        world.prepare_config(cfg, s)
+        mp = {b: v.copy() for b, v in base.items()}
+        world.scale_continent_prices(cfg, s, mp)
+        target = cfg["demand_scenarios"][s["scenario"]["demand"]]["continent_price_eur_mwh"]["DE-LU"]
+        assert mp["DE-LU"].mean() == pytest.approx(target * expect)          # scenariots nivå × skala
+        assert (mp["DE-LU"] / mp["DE-LU"].mean()).tolist() == pytest.approx(  # timformen bevaras
+            (base["DE-LU"] / base["DE-LU"].mean()).tolist())
+        assert mp["SE-S"].mean() == pytest.approx(40.0)                       # nordiska serier orörda
