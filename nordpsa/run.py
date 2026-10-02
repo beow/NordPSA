@@ -129,6 +129,10 @@ def _hydro_constraints(n, cfg: dict, s: dict) -> list:
         print(f"  min tim {ocfg.get('min_hourly_frac', 0) or 0:.2f} × p_nom, "
               f"min dygn {ocfg.get('min_daily_frac', 0) or 0:.2f} × max dygn, "
               + _wk + (f" ({by_zone})" if by_zone else ""))
+        _rz = ocfg.get("max_ramp_frac_by_zone") or {}
+        if float(ocfg.get("max_ramp_frac", 0) or 0) > 0 or _rz:
+            print(f"  max ändringstakt {float(ocfg.get('max_ramp_frac', 0) or 0):.2f} × p_nom per timme"
+                  + (f" ({_rz})" if _rz else ""))
         if (ocfg.get("bypass_spill") or {}).get("active"):
             bs = ocfg["bypass_spill"]
             print(f"  bypass-spill PÅ: κ={bs.get('coefficient')} över "

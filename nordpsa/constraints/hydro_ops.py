@@ -28,13 +28,22 @@ def hydro_operation_constraints(ocfg: dict):
     skulle svämma över), och att köra på maxeffekt vecka efter vecka (vanligt
     utfall i ELLI-liknande modeller).
 
-    Fyra villkor, alla valfria (0/None = av). Referenseffekten är StorageUnitens
+    Fem villkor, alla valfria (0/None = av). Referenseffekten är StorageUnitens
     p_nom, dvs. RESERVOARDELEN efter en ev. RoR-split — inte hela flottan.
 
       min_hourly_frac   p_dispatch[t] ≥ f × p_nom                       (t.ex. 0.10)
       min_daily_frac    Σ_dygn p·w    ≥ f × p_nom × H_dygn              (t.ex. 0.20)
       max_weekly_frac   Σ_vecka p·w   ≤ f × p_nom × H_vecka             (t.ex. 0.77)
       bypass_spill      Σ_vecka spill·w ≥ κ × (Σ_vecka p·w − tröskel)
+      max_ramp_frac     |p[t] − p[t−1]| ≤ f × p_nom × w_t               (t.ex. 0.20 per timme)
+
+    max_ramp_frac (+ max_ramp_frac_by_zone) begränsar hur fort zonens SAMMANLAGDA
+    reservoarproduktion får ändras, per timme (w_t = tidsstegets längd i timmar). Den
+    står för det modellen annars saknar: älvkedjor med gångtid, tappningsändringar i
+    vattendomar, isläggning och aggregatens driftområden. Första tidssteget i ett LP
+    villkoras mot föregående tidsstegs LÖSTA produktion om den finns i nätverket — så
+    gäller gränsen även över fönstergränserna i den rullande horisonten. Ingen
+    omslagning (t0 mot sista steget) i ett cykliskt LP.
 
     H_fönster är den FAKTISKA summan av snapshot-vikter i fönstret, så villkoren
     blir korrekta på 1h/2h/3h-upplösning och partiella fönster i seriens kanter
@@ -56,6 +65,43 @@ def hydro_operation_constraints(ocfg: dict):
     max_w = float(ocfg.get("max_weekly_frac") or 0.0)
     max_w_zone = dict(ocfg.get("max_weekly_frac_by_zone") or {})
     bcfg = dict(ocfg.get("bypass_spill") or {})
+    ramp = float(ocfg.get("max_ramp_frac") or 0.0)
+    ramp_zone = dict(ocfg.get("max_ramp_frac_by_zone") or {})
+
+    def _ramp(n: pypsa.Network, snapshots: pd.DatetimeIndex, names, disp, p_nom, w) -> None:
+        fr = pd.Series(ramp if ramp > 0 else np.nan, index=names, dtype=float)
+        for zone, val in ramp_zone.items():
+            if f"{zone} hydro" in fr.index:
+                fr[f"{zone} hydro"] = float(val)
+        fr = fr.dropna()
+        fr = fr[fr > 0]
+        if len(fr) == 0:
+            return
+        m, rn = n.model, pd.Index(fr.index)
+        lim = (xr.DataArray(fr.to_numpy(dtype=float), coords={"name": rn}, dims="name")
+               * p_nom.sel(name=rn) * w)                          # MW per tidssteg
+        d = disp.sel(name=rn)
+        step = d - d.shift(snapshot=1)
+        first = xr.DataArray(np.arange(len(snapshots)) > 0,
+                             coords={"snapshot": snapshots}, dims="snapshot")
+        m.add_constraints(step <= lim, name="custom-hydro_ramp_up", mask=first)
+        m.add_constraints(step >= -lim, name="custom-hydro_ramp_down", mask=first)
+        # Fönstergräns: mot föregående tidsstegs lösta produktion, om den finns.
+        pos = n.snapshots.get_loc(snapshots[0])
+        if pos == 0 or "p_dispatch" not in n.storage_units_t:
+            return
+        prev_t = n.snapshots[pos - 1]
+        pd_t = n.storage_units_t.p_dispatch
+        if prev_t not in pd_t.index or not set(rn) <= set(pd_t.columns):
+            return
+        prev = pd_t.loc[prev_t, rn].astype(float)
+        if prev.isna().any():
+            return
+        prev_da = xr.DataArray(prev.to_numpy(), coords={"name": rn}, dims="name")
+        d0 = d.isel(snapshot=0)
+        l0 = lim.isel(snapshot=0)
+        m.add_constraints(d0 - prev_da <= l0, name="custom-hydro_ramp_up_boundary")
+        m.add_constraints(d0 - prev_da >= -l0, name="custom-hydro_ramp_down_boundary")
 
     def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
         su = n.storage_units
@@ -71,6 +117,8 @@ def hydro_operation_constraints(ocfg: dict):
             n.snapshot_weightings.stores.reindex(snapshots).to_numpy(dtype=float),
             coords={"snapshot": snapshots}, dims="snapshot")
         energy = disp * w          # MWh per snapshot
+
+        _ramp(n, snapshots, names, disp, p_nom, w)
 
         if min_h > 0:
             m.add_constraints(disp >= min_h * p_nom,

@@ -95,3 +95,34 @@ def test_bypass_spill_hinge_holds_week_by_week():
     thr_w = (KAP - THR) * P_NOM * ww.groupby(wk).sum()
     for k in prod_w.index:
         assert spill_w[k] >= max(0.0, KOEF * (prod_w[k] - thr_w[k])) - 1e-4
+
+
+def _max_step(n):
+    d = n.storage_units_t.p_dispatch['Z hydro']
+    return float((d.diff().abs() / n.snapshot_weightings.stores).max())
+
+
+def test_ramp_limit_binds_and_costs_more():
+    ref = run(build(900, cheap_mw=0), None)
+    assert _max_step(ref['n']) > 0.10 * P_NOM, 'referensen ändrades redan långsamt — svagt test'
+    r = run(build(900, cheap_mw=0), {'max_ramp_frac': 0.10})
+    assert _max_step(r['n']) <= 0.10 * P_NOM + 1e-4          # per timme, 3h-steg ⇒ 300 MW/steg
+    assert r['obj'] > ref['obj']
+    rz = run(build(900, cheap_mw=0), {'max_ramp_frac': 0.50, 'max_ramp_frac_by_zone': {'Z': 0.05}})
+    assert _max_step(rz['n']) <= 0.05 * P_NOM + 1e-4
+
+
+def test_ramp_limit_holds_across_window_boundary():
+    """Andra fönstret ska villkoras mot första fönstrets sista lösta steg. Som i den rullande
+    horisonten löses första fönstret MED look-ahead (hela perioden) och bara början behålls —
+    utan look-ahead kan gränsnivån bli omöjlig att ramp:a ned från (leksaksnätet saknar sänka)."""
+    n = build(900, cheap_mw=0)
+    half = len(n.snapshots) // 2
+    cb = hydro_operation_constraints({'max_ramp_frac': 0.10})
+    for sns in (n.snapshots, n.snapshots[half:]):
+        n.optimize.create_model(snapshots=sns); cb(n, sns)
+        st, _ = n.optimize.solve_model(solver_name='highs')
+        assert st == 'ok'
+    d = n.storage_units_t.p_dispatch['Z hydro']
+    step = abs(d.iloc[half] - d.iloc[half - 1]) / RES
+    assert step <= 0.10 * P_NOM + 1e-4

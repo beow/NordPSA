@@ -213,12 +213,14 @@ A single `marginal_cost` per reservoir makes the whole 52 GW fleet bid at one pr
 | `min_hourly_frac` | `p[t] ≥ f · p_nom` | **0.05** |
 | `min_daily_frac` | `Σ_day p·w ≥ f · p_nom · H_day` | **0.20** |
 | `max_weekly_frac_by_zone` | `Σ_week p·w ≤ f · p_nom · H_week` | SE-N 0.83 · SE-S 0.77 · NO 0.85 · FI 0.80 |
+| `max_ramp_frac` (+ `_by_zone`) | `\|p[t] − p[t−1]\| ≤ f · p_nom · w_t` | **0.20** per hour (since 2026-10-02) |
 | `bypass_spill` | weekly spill ≥ κ·(production − threshold) | off |
 
 - ⚠️ **`min_hourly_frac` and `min_daily_frac` are locked against the observed bid curve** (production vs price, SE1+SE2): 0.10 → 0.05 cut the error below 10 EUR/MWh from 1.40 to 0.89 GW; relaxing the daily floor to 0.10/0.15 worsened the 20–60 EUR/MWh fit and caused hoarding. Neither comes from the literature — they are guardrails. Do not change without a new measurement.
 - The weekly caps and the bypass κ come from Ek Fälth et al. (2025), Sweden only; NO and FI are assumptions argued from reservoir hours. A year-constant cap cannot capture the strong seasonality in the source.
 - With cyclic SOC the constraints are consistent only if `min_daily ≤ inflow/(p_nom·H) ≤ max_weekly`; `run.py` prints that ratio per zone before solving (0.46–0.55 for 2024).
 - ⚠️ Known leak: rolling windows run Sunday–Saturday while the weekly cap groups ISO weeks, so realized weeks can reach 0.848 against a 0.83 cap (1–4 weeks of 156 per zone). Expansion is exact.
+- **Ramp limit 0.20 per hour** (default since run513; earlier runs had none — reproduce them with `--set hydro.operation.max_ramp_frac=0`). Basis: observed eSett hydro 2023–25 (all hydro per zone, `temp/hydro_ramp.py`): largest hourly change 17–25 % of capacity, p99 7.5–12.5 %; without a limit the model jumped p99 27–32 %, max 46–82 % (whole bid-ladder tiers). The first step of each rolling window is bounded against the previous window's solved output (safe thanks to the look-ahead). run509 / run513 (0.20) / run514 (0.10): binds in 9–15 % / 26–35 % of hours, but the daily price spread barely moves (SE-S 21.4 / 21.7 / 23.7 EUR/MWh vs 66.7 observed today; NO-S 17.3 / 17.9 / 22.1 vs 36.4), country prices +0.0–0.3 — batteries, EV, heat stores and cables take over. ⇒ hydro ramping is **not** the cause of the too-flat intraday prices; the limit is kept because it is realistic, not to move prices.
 - `bypass_spill` is off because PyPSA bounds spill by the same-snapshot inflow, which can make a high-production/low-inflow week infeasible. Verified on a toy network in `tests/unit/test_hydro_ops.py`.
 
 ### Hydro SOC anchor

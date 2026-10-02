@@ -403,6 +403,17 @@ hydro_operation:
   min_hourly_frac: 0.05    # min timproduktion / installerad reservoareffekt
   min_daily_frac:  0.20    # min dygnsproduktion / maximal dygnsproduktion
   max_weekly_frac: 0       # 0 = inget globalt tak; sätts per zon nedan (provenienser skiljer sig)
+  # Ändringstakt: |p[t] − p[t−1]| ≤ f × p_nom(reservoar) per timme, mellan tidssteg och över
+  # fönstergränserna. 0 = av. Mätt 2023–25 (eSett,
+  # all vattenkraft per zon, temp/hydro_ramp.py): största timändring 17–25 % av kapaciteten,
+  # p99 7,5–12,5 %; run509 hoppar p99 27–32 %, max 46–82 % (budtrappans hela steg).
+  # DEFAULT 0,20 sedan 2026-10-02 (run513) ≈ observerat max: bevisat möjligt för den samlade
+  # flottan, men inte överflexibelt. run509/513/514 (av / 0,20 / 0,10): binder 9–15 % / 26–35 %
+  # av timmarna, men dygnsspannet rör sig knappt (SE-S 21,4 / 21,7 / 23,7) — batterier, EV,
+  # värmelager och kablar tar över. Gamla körningar: --set hydro.operation.max_ramp_frac=0.
+  # ⚠️ Det observerade är dagens system och vad flottan GJORDE, inte vad den KAN.
+  max_ramp_frac: 0.20
+  max_ramp_frac_by_zone: {}
   # Källa: Ek Fälth m.fl. (2025), supplementary material (docs/hydro_restrictions.pdf),
   # Figur A.2 "Sustained capacity", scenariot Present regime, 1 vecka. Avläsning ur
   # violinplottar → osäkerhet ca ±2–3 procentenheter. Studien täcker BARA Sverige.
