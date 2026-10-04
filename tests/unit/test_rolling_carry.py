@@ -36,7 +36,7 @@ def run(carry):
     cfg = {"solver": {"name": "highs", "output_flag": False},
            "zones": {"SE-N": {"hydro_soc_initial": 0.5}}}
     d = {"rolling_weeks": 1, "lookahead_weeks": 1, "terminal_segments": 5,
-         "terminal_curve": "config/terminal_curves/terminal_curve_2040_gemini_v12.yaml",
+         "terminal_curve": "config/terminal_curves/terminal_curve_2040_gemini_v13.yaml",
          "terminal_anchor": None, "carry_storage": carry, "storage_initial_frac": 0.5}
     ok, res = solve_rolling_horizon(n, cfg, d, res=1)
     assert ok

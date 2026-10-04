@@ -59,6 +59,12 @@ hydro:
   operation: {}             # fri tabell: overrides på zones.yaml:hydro_operation
   soc_initial: {}           # fri tabell, zon: fyllnadsfraktion (override på zones.<zon>.hydro_soc_initial)
   bid_ladder: [3, 36]       # [K, BREDD]: budtrappa på reservoaren; null = ett enda bud
+  bid_ladder_by_zone:       # zon: BREDD (ersätter bid_ladder:s bredd i zonen; K gemensamt). Baslinje
+    SE-N: 140               # 2026-10-03: kalibrerad i dagens värld mot vattnets uppmätta svar per
+    NO-N: 110               # 10 €/MWh (eSett), prisspridning bara som övre gräns (run518–525).
+    NO-S: 150               # Gamla körningar (t.o.m. run551): alla fem = 36 (tabellen slås ihop per nyckel)
+    SE-S: 250
+    FI: 150
   ror_hifreq:               # högfrekvent struktur i syntetisk RoR (SE-N/SE-S/FI); null = av
     sigma: 0.22
     tau_days: 3.5
@@ -101,7 +107,7 @@ solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex.
 # ---- lägesberoende; bara det aktiva lägets sektion används ----------------------------
 expansion:
   spill_cost: 50            # räcke mot fantomabsorption av VRE (se CLAUDE.md)
-  hydro_mc_curve: config/terminal_curves/terminal_curve_2040_gemini_v12_exp73.yaml
+  hydro_mc_curve: config/terminal_curves/terminal_curve_2040_gemini_v13_exp73.yaml
 
 dispatch:
   spill_cost: 0.1           # fysisk kostnad; vattnets värde bärs redan av SOC-dualen
@@ -112,7 +118,7 @@ dispatch:
                             # med slut ≥ start per fönster. false = gamla beteendet: cykliska INOM
                             # varje fönster ⇒ lagerhopp vid varje fönstergräns (t.o.m. run508)
   storage_initial_frac: 0.5 # startnivå för de överburna lagren vid periodens början
-  terminal_curve: config/terminal_curves/terminal_curve_2040_gemini_v12.yaml
+  terminal_curve: config/terminal_curves/terminal_curve_2040_gemini_v13.yaml   # v12 + ankare × 0,976 (2026-10-03)
   terminal_anchor: null     # tal (alla zoner) eller {zon: λ_bas}; null = kurvfilens ankare
   terminal_segments: 20
   stability_slack_penalty: 100  # €/(MWs·h) underskott mot stabilitetskraven; null = hårt krav.

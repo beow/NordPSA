@@ -4,8 +4,8 @@ Aktiva kurvor ligger en nivå upp:
 
 | fil | används av |
 |---|---|
-| `../terminal_curve_2040_gemini_v12.yaml` | `dispatch.terminal_curve` (rullande horisont) |
-| `../terminal_curve_2040_gemini_v12_exp73.yaml` | `expansion.hydro_mc_curve` (λ_bas 73 likformigt) |
+| `../terminal_curve_2040_gemini_v13.yaml` | `dispatch.terminal_curve` (rullande horisont) |
+| `../terminal_curve_2040_gemini_v13_exp73.yaml` | `expansion.hydro_mc_curve` (λ_bas 73 likformigt; = v12_exp73) |
 
 Filerna här är tidigare produktionskurvor, kandidater och svepvarianter. De ligger kvar
 så att äldre körningar kan läsas och jämföras. Varje fil har ett `note:`-fält med sin
@@ -17,6 +17,7 @@ direkt i `config/`. Den nya koden kan köra en arkiverad kurva med
 
 | fil | ändring mot föregående | reproducerar |
 |---|---|---|
+| `terminal_curve_2040_gemini_v12.yaml` (+ `_exp73`) | `b_mean` 4,0 / `a_scale` 0,15; ersatt av v13 (ankare × 0,976 efter budtrappa per zon, 2026-10-03) | t.o.m. run551 och run513–531 (+ `hydro.bid_ladder_by_zone` = 36 för de äldre) |
 | `terminal_curve_2040_gemini_v11.yaml` (+ `_exp73`) | `b_mean` 2,0 / `a_scale` 0,30 | kandidat före v12 |
 | `terminal_curve_2040_gemini_v10.yaml` (+ `_exp73`) | medianbanor `x_ref` per zon (00abdf4) | |
 | `terminal_curve_2040_gemini_v9.yaml` (+ `_exp73`) | `b_amp` 0 (var 0,27) | run420–438 |

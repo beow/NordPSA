@@ -58,6 +58,18 @@ def test_bid_ladder_rejects_degenerate_parameters():
         hydro_bid_ladder(1, 36.0)
     with pytest.raises(ValueError):
         hydro_bid_ladder(3, 0.0)
+    with pytest.raises(ValueError):
+        hydro_bid_ladder(3, 36.0, {"Z": 0.0})
+
+
+def test_bid_ladder_width_by_zone_replaces_global_width_in_that_zone():
+    wide = solve(toy(), [hydro_bid_ladder(3, 72.0)]).objective
+    by_zone = solve(toy(), [hydro_bid_ladder(3, 36.0, {"Z": 72.0})]).objective
+    narrow = solve(toy(), [hydro_bid_ladder(3, 36.0)]).objective
+    assert by_zone == pytest.approx(wide, rel=1e-6)
+    assert abs(narrow - wide) > 1.0
+    with pytest.raises(ValueError, match="utan reservoar"):
+        solve(toy(), [hydro_bid_ladder(3, 36.0, {"X": 72.0})])
 
 
 def test_higher_terminal_value_keeps_more_water():

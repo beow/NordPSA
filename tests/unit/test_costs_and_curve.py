@@ -34,7 +34,7 @@ def test_production_curves_load():
     params, anchor = tc.load_params(None)
     assert set(params) == {"SE-N", "SE-S", "NO-N", "NO-S", "FI"}
     assert all(p.b_mean == 4.0 and p.b_amp == 0.0 for p in params.values())
-    _, anchor_exp = tc.load_params("config/terminal_curves/terminal_curve_2040_gemini_v12_exp73.yaml")
+    _, anchor_exp = tc.load_params("config/terminal_curves/terminal_curve_2040_gemini_v13_exp73.yaml")
     assert set(anchor_exp.values()) == {73.0}
 
 

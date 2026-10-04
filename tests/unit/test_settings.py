@@ -19,7 +19,7 @@ def test_today_world_has_todays_system_and_own_anchors():
     s = settings.resolve("dispatch", "today", capacities="config")
     assert s["scenario"]["cost"] is None and s["scenario"]["demand"] is None
     assert s["nuclear"]["add"] == [] and s["heat"]["enabled"] is False
-    assert s["dispatch"]["terminal_anchor"]["SE-N"] == pytest.approx(27.1)
+    assert s["dispatch"]["terminal_anchor"]["SE-N"] == pytest.approx(32.01)   # run458:s 27,1 × 1,1813
 
 
 def test_today_world_refuses_expansion():

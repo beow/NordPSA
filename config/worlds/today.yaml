@@ -7,6 +7,8 @@ nuclear:
   new_min_load: 1.0
 
 dispatch:
-  # Ankare per zon för DAGENS flotta (run458). 2040-kurvans egna ankare är kalibrerade
-  # mot 2040-systemet och ger fel magasindrift här.
-  terminal_anchor: {SE-N: 27.1, SE-S: 47.5, NO-N: 25.8, NO-S: 58.1, FI: 47.5}
+  # Ankare per zon för DAGENS flotta. 2040-kurvans egna ankare är kalibrerade mot 2040-systemet
+  # och ger fel magasindrift här. 2026-10-03: run458:s ankare (27,1/47,5/25,8/58,1/47,5) × 1,1813 efter
+  # budtrappa per zon — driftsökning run522–525 (temp/anchor_search.py): run525 +3,06 TWh mot uppmätt
+  # +3,13. ⚠️ Sökt med NO-N-bredd 120 (baslinjen blev 110).
+  terminal_anchor: {SE-N: 32.01, SE-S: 56.11, NO-N: 30.48, NO-S: 68.63, FI: 56.11}

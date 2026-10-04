@@ -175,6 +175,11 @@ def validate(s: dict) -> None:
     bl = s["hydro"]["bid_ladder"]
     if bl is not None and (len(bl) != 2 or int(bl[0]) < 1):
         raise SystemExit("hydro.bid_ladder: [K, BREDD] med K ≥ 1, eller null")
+    bz = s["hydro"]["bid_ladder_by_zone"] or {}
+    if bz and bl is None:
+        raise SystemExit("hydro.bid_ladder_by_zone kräver hydro.bid_ladder")
+    if any(not isinstance(w, (int, float)) or w <= 0 for w in bz.values()):
+        raise SystemExit("hydro.bid_ladder_by_zone: {zon: BREDD > 0}")
     if s["battery"]["endogenous"]:
         if s["scenario"]["battery_total"] is not None and not s["battery"]["keep_scenario"]:
             raise SystemExit("battery.endogenous och scenario.battery_total utesluter varandra "

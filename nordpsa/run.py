@@ -49,6 +49,9 @@ def summary_flags(s: dict) -> list[str]:
     f.append(f"spill-{s[mode]['spill_cost']:g}")
     bl = s["hydro"]["bid_ladder"]
     f.append(f"bidladder-{bl[0]}_{bl[1]:g}" if bl else "no-bidladder")
+    if bl and s["hydro"]["bid_ladder_by_zone"]:
+        f.append("bidladderzon-" + "_".join(f"{z}:{float(w):g}"
+                                            for z, w in s["hydro"]["bid_ladder_by_zone"].items()))
     rh = s["hydro"]["ror_hifreq"]
     f.append(f"rorhifreq-{rh['sigma']:g}_tau{rh['tau_days']:g}_seed{rh['seed']}"
              if rh else "no-rorhifreq")
@@ -159,10 +162,14 @@ def _hydro_constraints(n, cfg: dict, s: dict) -> list:
         hyd = [su for su in n.storage_units.index
                if n.storage_units.at[su, "carrier"] == "hydro"
                and float(n.storage_units.at[su, "p_nom"]) > 0.0]
+        bz = s["hydro"]["bid_ladder_by_zone"] or {}
         print(f"  → HYDROBUDTRAPPA: {k} nivåer, bredd {width:g} EUR/MWh, {len(hyd)} reservoarer")
         print("       avvikelser: " + ", ".join(f"{o:+.1f}" for o in offs)
               + "  (medel 0,0 ⇒ NIVÅN oförändrad, bara spridningen)")
-        callbacks.append(hydro_bid_ladder(k, width))
+        for z, wz in bz.items():
+            print(f"       {z}: bredd {float(wz):g} → "
+                  + ", ".join(f"{float(wz) * ((i + 0.5) / k - 0.5):+.1f}" for i in range(k)))
+        callbacks.append(hydro_bid_ladder(k, width, bz))
     return callbacks
 
 

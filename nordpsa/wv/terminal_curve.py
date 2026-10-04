@@ -412,7 +412,7 @@ def anchor_from_run(label: str = "run260_baseline_2h",
 #: Kalibreringens utdata och den rullande dispatchens indata: produktionskurvan v12
 #: (b_mean 4,0, a_scale 0,15; se filens note_v12). Tidigare versioner och svep ligger i
 #: config/terminal_curves/archive/ (se README.md där).
-DEFAULT_PARAM_FILE = "config/terminal_curves/terminal_curve_2040_gemini_v12.yaml"
+DEFAULT_PARAM_FILE = "config/terminal_curves/terminal_curve_2040_gemini_v13.yaml"
 
 
 def save_params(params: Dict[str, CurveParams], anchor: Dict[str, float],

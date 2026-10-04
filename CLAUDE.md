@@ -165,7 +165,7 @@ Consequences worth knowing when reading results:
 
 ### Hydro marginal cost in expansion
 
-The reservoir's `marginal_cost` in expansion is the terminal curve evaluated along its reference path, `λ_bas · A(v)` (`expansion.hydro_mc_curve`, file `…_v12_exp73.yaml`). Hydro needs *some* time shape in its bid — a flat bid makes the LP degenerate — and this one comes from zone tables and measured reservoir data, not from prices.
+The reservoir's `marginal_cost` in expansion is the terminal curve evaluated along its reference path, `λ_bas · A(v)` (`expansion.hydro_mc_curve`, file `…_v13_exp73.yaml`, identical to v12_exp73). Hydro needs *some* time shape in its bid — a flat bid makes the LP degenerate — and this one comes from zone tables and measured reservoir data, not from prices.
 
 - **λ_bas = 73 uniformly, locked.** Read directly off full-foresight reference runs: 73.02 and 72.87 EUR/MWh in all five zones and all hours, on two different grids (NO-N export capacity −39 % moved λ by 0.2 %). The dispatch file's per-zone anchors are a drift correction and must **not** be used in expansion.
 - The level is nearly inert (the SOC dual absorbs it), but the curve is multiplicative, so the *shape* matters: a flat A(v) moved +5.5 GW solar and −1.0 GW offshore wind.
@@ -174,7 +174,7 @@ The reservoir's `marginal_cost` in expansion is the terminal curve evaluated alo
 
 ### Terminal water-value curve (dispatch)
 
-`λ_k(v, z) = λ_bas[z] · A(v, z) · P_k(x − x_ref(v, z))` — v = week, x = fill, k = SOC segment (20 segments, concave). A(v) is the seasonal level, `x_ref(v)` the normal reservoir path, and B = `b_mean` sets how steeply the value responds to being off that path. Production file: `config/terminal_curves/terminal_curve_2040_gemini_v12.yaml`; every earlier version is in `archive/` with an index.
+`λ_k(v, z) = λ_bas[z] · A(v, z) · P_k(x − x_ref(v, z))` — v = week, x = fill, k = SOC segment (20 segments, concave). A(v) is the seasonal level, `x_ref(v)` the normal reservoir path, and B = `b_mean` sets how steeply the value responds to being off that path. Production file: `config/terminal_curves/terminal_curve_2040_gemini_v13.yaml` (= v12 with anchors × 0.976 after the per-zone bid ladder, 2026-10-03); every earlier version is in `archive/` with an index.
 
 **Three global degrees of freedom, everything else is shape:**
 
@@ -184,7 +184,7 @@ The reservoir's `marginal_cost` in expansion is the terminal curve evaluated alo
 | `a_scale` | **0.15** | Robustness: A(v) is the only seasonal signal outside `x_ref`. |
 | `b_amp` | **0** | Measured near-inert in a 2×2; the measured seasonal amplitude is not distinguishable from zero. |
 | `x_ref` | two harmonics, **per zone** | Least squares against EC median reservoir paths; two harmonics halve the error of one (FI R² 0.64 → 0.92). SE-S is rain-fed and needs its own path (v/s error −92 %). 52 free weekly values were tried and rejected. |
-| anchors λ_bas | SE-N 66.0 · SE-S 64.5 · NO-N 70.2 · NO-S 69.6 · FI 72.5 | A drift correction for limited foresight, not a claim that water is worth different amounts per zone. `today` has its own anchors (27–58), set in `worlds/today.yaml`. |
+| anchors λ_bas | SE-N 64.42 · SE-S 62.95 · NO-N 68.52 · NO-S 67.93 · FI 70.76 (v13; v12 × 0.976) | A drift correction for limited foresight, not a claim that water is worth different amounts per zone; searched so the 1h dispatch ends at the measured +3.13 TWh. `today` has its own anchors (32–69, run458's × 1.1813), set in `worlds/today.yaml`. |
 
 **Calibration targets, in order:** the observed hydro *bid curve* (production vs price) and the measured price elasticity B; seasonal ratio (winter/summer, eSett, measured on *all* hydro including RoR, per zone) and EC reservoir band are validation. ⛔ Never calibrate the curve against the price distribution — that reintroduces the circularity the proxy had.
 
@@ -203,6 +203,10 @@ A single `marginal_cost` per reservoir makes the whole 52 GW fleet bid at one pr
 - ⚠️ WIDTH is not the bid span (span = WIDTH·(K−1)/K), and matching the span does not match strength: the perturbation is `SD = WIDTH·√((1 − 1/K²)/12)`. A fair K comparison holds SD fixed (`[5, 34.6]` or `[10, 34.1]` vs `[3, 36]`).
 - **K = 10 at fixed SD changes almost nothing** (run503 `[10, 34.1]` vs run504 `[3, 36]`, 1h dispatch of run460, 2023–25): mean prices ±0.2, SE-S daily spread 28.4 → 28.2 €/MWh, mean hourly change unchanged; only the share of hours with a flat price (Δ < 0.1) falls 71 → 60 %. The model's too-flat intraday prices (run458 SE-S daily spread 19 vs 69 observed, `temp/ses_price_structure.py`) are therefore not caused by the number of tiers. run504 is **bit-identical** to `run460_baseline_dispatch_1h` (prices, hydro dispatch, SOC), which confirms that the new CLI reproduces the old one.
 - ⛔ Calibrate WIDTH against the observed bid curve, never the price distribution.
+- **Width per zone (baseline since 2026-10-03, `hydro.bid_ladder_by_zone`): SE-N 140, NO-N 110, NO-S 150, SE-S 250, FI 150** (K = 3 kept). Basis: the hydro's *within-week* response, % of reservoir capacity per 10 €/MWh above the weekly mean, in hours where hydro likely sets the price (proxy: price 5–200 and equal to another big hydro zone), measured on eSett 2023–25 (`temp/hydro_bid_slope_cond.py`): 3–5 % in SE-N/NO/FI, ~2 % in SE-S; with width 36 the model answered 11–15 % (today's world, run518) and 9–11 % (2040). Calibrated in **today's world** (run518–521: widths 36/90/150/220), where the observed price spread inside the day is used only as an **upper bound** (NO-N is capped by it at 110; its response measure wanted ~200). With the baseline (run525): response 5–6 %, SE-S 3.7 (flattens — floors/ramp, not the ladder), within-day price std SE-N 13.5 vs 13.3 observed (run518: 5.8). K = 5/10 at equal SD change little (run515–517) — the width does the work; K = 3 is marginally stiffer because its 30 €/MWh risers leave hydro idle while other flexibility sets the price.
+  - ⚠️ A wider ladder **drains reservoirs** in today's world (−3.6 TWh at 150) but barely in 2040 (−0.6): anchors were re-searched on drift (`temp/anchor_search.py`) — today ×1.1813 (`worlds/today.yaml`), 2040 ×0.976 (terminal curve **v13**). Today's-world price levels then match observed in SE-S/NO-S/FI within ~1 €/MWh; SE-N/NO-N stay ~11–15 too high (pre-existing).
+  - ⚠️ `dispatch --from` an OLD run (no `bid_ladder_by_zone` in its run_config) picks up the new default widths; reproduce old runs with all five widths = 36.
+  - **The ladder is an investment driver, not only an operations calibration** (run532 = run541 + per-zone widths, 2023–25 @ 2h; run533 its 1h dispatch with v13): solar **−10.9 GW** (NO-S −6.6, SE-S −2.6, NO-N −1.2), offshore wind +1.1, syncons −1.2 GVA (SE-S → 0), real cost **+481 M€/yr (+2.3 %)**. A stiffer hydro shifts less water from midday to evening, so solar's market value falls. Dispatch vs run509: country prices +1.8–2.4 €/MWh, daily spread SE-N/NO-N/NO-S 21/9/17 → 30/22/30 (today observed 31/22/38), hydro response 9–11 → 5–6 % (eSett 3–5), FI hours > 200 231 → 271, reservoir +2.09 TWh (target 3.13; SE 2.50 vs 2.24). Expansion SOC dual μ rose ~2.2 (λ_bas 73 kept, v13_exp73 = v12_exp73). ⚠️ How much of today's hydro stiffness is behaviour that 2040 incentives could change is unknown — run width 36 (flexible hydro) as a sensitivity.
 
 ### Hydro operation restrictions (both modes)
 
@@ -299,4 +303,4 @@ HiGHS IPM **with crossover** (`run_crossover: "on"`) is required for expansion: 
 - `config/defaults.yaml` — run SETTINGS and their defaults (which parts of the data are used, and how).
 - `config/worlds/*.yaml` — `2040_svk_mm` (default for `expand`), `today` (default for `today`, dispatch only).
 - `config/experiments/*.yaml` — named deviations, e.g. the seven standard scenarios run by `scripts/run_batch.py`.
-- `config/terminal_curves/` — the two active terminal curves (v12 for dispatch, v12_exp73 for expansion); `archive/` holds every earlier version and sweep variant, indexed in `archive/README.md`.
+- `config/terminal_curves/` — the two active terminal curves (v13 for dispatch, v13_exp73 for expansion); `archive/` holds every earlier version and sweep variant, indexed in `archive/README.md`.

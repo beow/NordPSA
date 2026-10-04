@@ -6,7 +6,7 @@ import pypsa
 import xarray as xr
 
 
-def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float):
+def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float, width_by_zone: dict | None = None):
     """extra_functionality-callback som ger reservoarvattenkraften en STIGANDE budkurva.
 
     ## Vad den lagar
@@ -85,18 +85,26 @@ def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float):
     observabel som satte `min_hourly_frac`), aldrig mot prisfördelningen — det senare
     vore prisproxyns cirkularitet i ny form.
 
+    ⭐ BREDD PER ZON (`width_by_zone`, settings `hydro.bid_ladder_by_zone`). Den kortsiktiga
+    budlutningen inom veckan, uppmätt på eSett 2023–25 i timmar då vattenkraften troligen
+    sätter priset (temp/hydro_bid_slope_cond.py), är 3–5 % av reservoareffekten per
+    10 EUR/MWh i SE-N/NO-N/NO-S/FI men ~1,8 % i SE-S — och run551 (bredd 36 överallt) svarar
+    9–11 %. K är gemensamt; bara bredden kan sättas per zon (zoner som saknas får `width`).
+
     tiers:              antal budnivåer K ≥ 2
     width_eur_per_mwh:  trappans totala bredd; nivåerna spänner ±width/2 kring basbudet
+    width_by_zone:      {zon: bredd} som ersätter width för reservoarer på den bussen
     """
     K = int(tiers)
     W = float(width_eur_per_mwh)
+    WZ = {str(z): float(w) for z, w in (width_by_zone or {}).items()}
     if K < 2:
         raise ValueError(f"hydro_bid_ladder: tiers måste vara ≥ 2, fick {K} "
                          "— K=1 är ingen trappa utan dagens platta bud")
-    if W <= 0.0:
-        raise ValueError(f"hydro_bid_ladder: width måste vara > 0, fick {W}")
+    if W <= 0.0 or any(w <= 0.0 for w in WZ.values()):
+        raise ValueError(f"hydro_bid_ladder: width måste vara > 0, fick {W} / {WZ}")
 
-    offsets = [W * ((k + 0.5) / K - 0.5) for k in range(K)]
+    shape = np.array([(k + 0.5) / K - 0.5 for k in range(K)], dtype=float)
 
     def _extra_functionality(n: pypsa.Network, snapshots: pd.DatetimeIndex) -> None:
         units = [su for su in n.storage_units.index
@@ -104,6 +112,11 @@ def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float):
                  and float(n.storage_units.at[su, "p_nom"]) > 0.0]
         if not units:
             return
+        buses = {n.storage_units.at[su, "bus"] for su in units}
+        unknown = set(WZ) - buses
+        if unknown:
+            raise ValueError(f"hydro_bid_ladder: width_by_zone har zoner utan reservoar: {sorted(unknown)}")
+        widths = np.array([WZ.get(n.storage_units.at[su, "bus"], W) for su in units], dtype=float)
 
         m     = n.model
         p_dis = m.variables["StorageUnit-p_dispatch"]
@@ -128,7 +141,7 @@ def hydro_bid_ladder(tiers: int, width_eur_per_mwh: float):
         # Objektivtillägg: bara AVVIKELSEN, viktad som PyPSA viktar marginal_cost.
         w   = n.snapshot_weightings.objective.reindex(snapshots).to_numpy()
         coef = xr.DataArray(
-            np.broadcast_to(np.array(offsets, dtype=float)[None, :, None]
+            np.broadcast_to((widths[:, None] * shape[None, :])[:, :, None]
                             * w[None, None, :], (len(names), K, len(sns))),
             coords=[names, segs, sns])
         m.objective = m.objective + (coef * d).sum()
