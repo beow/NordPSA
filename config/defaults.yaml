@@ -103,6 +103,11 @@ syncon:
                             # i alla lägen (t.ex. tillägg i en dispatch av en äldre expansion)
 
 solver: {}                  # fri tabell: overrides på zones.yaml:solver (t.ex. user_bound_scale)
+numerics:                   # numerisk städning före lösning (nordpsa/numerics.py), sedan 2026-10-04
+  objective_constant_var: false   # true = PyPSA:s gamla sätt: befintlig kapitalkostnad som låst variabel (~2e10)
+  pmax_eps: 1.0e-3          # p_max_pu under detta → 0 (solens nattbrus); 0 = av
+  cost_eps: 5.0e-3          # |marginal_cost| under detta (€/MWh) → 0; under skiljekostnaden 0,01; 0 = av
+                            # Gamla körningar (t.o.m. run533): true / 0 / 0
 
 # ---- lägesberoende; bara det aktiva lägets sektion används ----------------------------
 expansion:

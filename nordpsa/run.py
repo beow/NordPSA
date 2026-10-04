@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 from nordpsa import inputs as inp
-from nordpsa import modes, settings, solve, world
+from nordpsa import modes, numerics, settings, solve, world
 from nordpsa.analysis.stability import stability_data, stability_report, write_stability_reports
 from nordpsa.constraints import (hydro_bid_ladder, hydro_operation_bounds,
                                  hydro_operation_constraints, hydro_operation_feasibility_report,
@@ -49,6 +49,8 @@ def summary_flags(s: dict) -> list[str]:
     f.append(f"spill-{s[mode]['spill_cost']:g}")
     bl = s["hydro"]["bid_ladder"]
     f.append(f"bidladder-{bl[0]}_{bl[1]:g}" if bl else "no-bidladder")
+    nm = s["numerics"]
+    f.append(f"numerik-{nm['pmax_eps']:g}_{nm['cost_eps']:g}_konst{'var' if nm['objective_constant_var'] else 'ut'}")
     if bl and s["hydro"]["bid_ladder_by_zone"]:
         f.append("bidladderzon-" + "_".join(f"{z}:{float(w):g}"
                                             for z, w in s["hydro"]["bid_ladder_by_zone"].items()))
@@ -304,11 +306,17 @@ def run(s: dict, label: str, desc: str | None = None, dry_run: bool = False) -> 
     write_run_meta(label, s, desc, len(snapshots))
     log_path = RESULTS_DIR / label / "highs.log"
     n.sanitize()
+    nm = s["numerics"]
+    changed = numerics.tidy(n, float(nm["pmax_eps"]), float(nm["cost_eps"]))
+    print("  → NUMERIK: " + ", ".join(f"{k} {v}" for k, v in changed.items() if v)
+          + f"; objektivkonstant som variabel: {'ja' if nm['objective_constant_var'] else 'nej'}")
+    ocv = bool(nm["objective_constant_var"])
     if mode == "dispatch":
         ok, results = solve.solve_rolling_horizon(n, cfg, s["dispatch"], res,
-                                                  log_path=log_path, extra_callbacks=callbacks)
+                                                  log_path=log_path, extra_callbacks=callbacks,
+                                                  objective_constant_var=ocv)
     else:
-        ok = solve.solve(n, cfg, log_path=log_path, extra_callbacks=callbacks)
+        ok = solve.solve(n, cfg, log_path=log_path, extra_callbacks=callbacks, objective_constant_var=ocv)
     if not ok:
         raise SystemExit("Lösning misslyckades — kontrollera nätverket")
 

@@ -12,7 +12,10 @@ from nordpsa.settings import RESULTS_DIR, ROOT
 
 
 def solve(n, cfg: dict, log_path: Path | None = None,
-          extra_callbacks: list | None = None) -> bool:
+          extra_callbacks: list | None = None, objective_constant_var: bool = True) -> bool:
+    """`objective_constant_var` = PyPSA:s include_objective_constant: True lägger kapitalkostnaden för
+    befintlig kapacitet som en låst variabel (~2e10, värsta gränsen i LP:t); False låter objektivet bära
+    hela kapitalkostnaden direkt och n.objective_constant = 0 — objektiv + konstant blir identiskt."""
     scfg    = cfg["solver"]
     solver  = scfg["name"]
     options = {k: v for k, v in scfg.items() if k != "name"}
@@ -38,6 +41,7 @@ def solve(n, cfg: dict, log_path: Path | None = None,
         solver_options=options,
         extra_functionality=extra_func,
         assign_all_duals=True,   # behövs för att få vattenvärdet (mu_energy_balance)
+        include_objective_constant=objective_constant_var,
     )
 
     print(f"  Status: {status} / {condition}")
@@ -113,7 +117,8 @@ def rolling_windows(snapshots: pd.DatetimeIndex, window_steps: int,
 
 def solve_rolling_horizon(n, cfg: dict, d: dict, res: int,
                           log_path: Path | None = None,
-                          extra_callbacks: list | None = None) -> tuple[bool, dict | None]:
+                          extra_callbacks: list | None = None,
+                          objective_constant_var: bool = True) -> tuple[bool, dict | None]:
     """Rullande horisont: lös perioden fönster för fönster med icke-cyklisk SOC,
     carry-over av slut-SOC, och ett terminalvärde −λ×SOC[T] per fönster.
 
@@ -251,6 +256,7 @@ def solve_rolling_horizon(n, cfg: dict, d: dict, res: int,
             solver_options=options,
             extra_functionality=extra_func,
             assign_all_duals=True,
+            include_objective_constant=objective_constant_var,
         )
         start_txt = " ".join(f"{u.split()[0]} {soc_carry[u]/cap[u]:.0%}" for u in units)
         if status == "ok":
