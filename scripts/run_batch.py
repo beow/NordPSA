@@ -29,8 +29,16 @@ batchens baseline. En mapp utan network.nc är en kraschad körning och körs om
 en avbruten batch kan återupptas med samma kommando.
 
 Med --dispatch-resolution H följs varje expansion av `nordpsa dispatch --from` i samma
-arbetare: run{PREFIX}X_<namn>_dispatch_{H}h. Dispatchen ärver expansionens värld,
+arbetare: run{PREFIX+1}X_<namn>_dispatch_{H}h — dispatchen får NÄSTA prefix (run540 → run550),
+så batch NN reserverar run{NN}0–7 OCH run{NN+1}0–7 (--dispatch-prefix väljer ett annat).
+Före batch 54 hette dispatchen run{PREFIX}X_<namn>_dispatch_{H}h. Dispatchen ärver expansionens värld,
 inklusive experimentet (t.ex. torråret), så inga flaggor behöver upprepas.
+
+--dispatch-only (kräver --dispatch-resolution) kör BARA dispatcherna, för scenarier vars
+expansion är klar (network.nc) men vars dispatch saknar network.nc. Används för att köra
+om en kraschad dispatch (den vanliga återupptagningen hoppar över hela pipelinen när
+expansionen är klar), eller för att låta dispatchen gå parallellt med nästa expansion:
+expansioner utan --dispatch-resolution i en kö, --dispatch-only i en annan.
 
 Samtidighet räknas i PIPELINES (expansion + ev. dispatch). Default 2: en 2h-expansion
 ≈ 4–5h / ~5–6 GB RAM, så 3 parallellt spräcker 15 GB. En 3h-expansion ≈ 1–1,5h /
@@ -79,11 +87,11 @@ def build_cmd(prefix, idx, name, desc, experiment, label, res, common):
     return out, cmd
 
 
-def build_dispatch_cmd(exp_out, prefix, idx, name, res_disp, label, common):
+def build_dispatch_cmd(exp_out, batch, prefix, idx, name, res_disp, label, common):
     """Kanonisk dispatch av expansionen: källans värld (inkl. experimentet) och frysta
     kapaciteter, rullande horisont 1+3 veckor, terminalkurvan."""
-    out = f"run{prefix}{idx}_{name}_dispatch_{res_disp}h"
-    desc = (f"[batch {prefix}] {res_disp}h dispatch av {exp_out} (frysta p_nom_opt)"
+    out = f"run{prefix}{idx}_{name}_dispatch_{res_disp}h"  # prefix = dispatchprefixet
+    desc = (f"[batch {batch}] {res_disp}h dispatch av {exp_out} (frysta p_nom_opt)"
             + (f"; {label}" if label else ""))
     cmd = [sys.executable, "-m", "nordpsa", "dispatch", "--from", exp_out,
            "--resolution", str(res_disp), *common, "--output", out, "--desc", desc]
@@ -128,22 +136,42 @@ def main():
     ap.add_argument("--dispatch-resolution", type=int, default=None, metavar="H",
                     help="Kör en dispatch av varje expansion på H h upplösning "
                          "(t.ex. 1). Utelämnad = ingen dispatch.")
+    ap.add_argument("--dispatch-prefix", default=None,
+                    help="Run-nummerprefix för dispatcherna (default: --prefix + 1, "
+                         "t.ex. 54 → run550..run557)")
+    ap.add_argument("--dispatch-only", action="store_true",
+                    help="Kör bara dispatcherna (kräver --dispatch-resolution) för scenarier "
+                         "vars expansion är klar och vars dispatch saknar network.nc")
     ap.add_argument("--force", action="store_true",
                     help="Kör om scenarier som redan har ett FÄRDIGT resultat (network.nc) "
                          "och skriv över det. Utan flaggan hoppas de över.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Visa kommandona och kör inget")
     args = ap.parse_args()
+    if args.dispatch_only and not args.dispatch_resolution:
+        ap.error("--dispatch-only kräver --dispatch-resolution")
 
     sel = {int(x) for x in args.only.split(",") if x.strip() != ""}
     scen = [s for s in SCENARIOS if not sel or s[0] in sel]
 
     common = [tok for spec in args.set for tok in ("--set", spec)]
+    dprefix = args.dispatch_prefix or str(int(args.prefix) + 1)
 
-    jobs, skipped = [], []
+    jobs, skipped, missing = [], [], []
     for idx, name, desc, extra in scen:
         out, cmd = build_cmd(args.prefix, idx, name, desc, extra,
                              args.label, args.resolution, common)
+        if args.dispatch_only:
+            if not (ROOT / "results" / out / "network.nc").exists():
+                missing.append(out)
+                continue
+            fout, fcmd = build_dispatch_cmd(out, args.prefix, dprefix, idx, name,
+                                            args.dispatch_resolution, args.label, common)
+            if not args.force and (ROOT / "results" / fout / "network.nc").exists():
+                skipped.append(fout)
+                continue
+            jobs.append((fout, fcmd, None))
+            continue
         # Ett FÄRDIGT resultat (network.nc finns) skrivs inte över av misstag. Skyddar
         # bl.a. run260_baseline_2h, som redan ÄR batch 26:s scenario 0. En mapp utan
         # network.nc är en kraschad/avbruten körning och körs om.
@@ -152,7 +180,7 @@ def main():
             continue
         follow = None
         if args.dispatch_resolution:
-            follow = build_dispatch_cmd(out, args.prefix, idx, name,
+            follow = build_dispatch_cmd(out, args.prefix, dprefix, idx, name,
                                         args.dispatch_resolution, args.label, common)
         jobs.append((out, cmd, follow))
 
@@ -162,15 +190,24 @@ def main():
         for s in skipped:
             print(f"  • {s}")
         print()
+    if missing:
+        print(f"Hoppar över {len(missing)} dispatch(er) vars expansion inte är klar (saknar network.nc):")
+        for s in missing:
+            print(f"  • {s}")
+        print()
     if not jobs:
         print("Inget att köra.")
         return
 
-    print(f"Batch {args.prefix}: {len(jobs)} pipelines @ {args.resolution}h, "
-          f"samtidighet {args.concurrency}"
-          + (f" + {args.dispatch_resolution}h rullande dispatch (kanonisk mall)"
-             if args.dispatch_resolution else "")
-          + (f", etikett: {args.label}" if args.label else ""))
+    if args.dispatch_only:
+        print(f"Batch {args.prefix}: {len(jobs)} dispatcher @ {args.dispatch_resolution}h "
+              f"(--dispatch-only), samtidighet {args.concurrency}")
+    else:
+        print(f"Batch {args.prefix}: {len(jobs)} pipelines @ {args.resolution}h, "
+              f"samtidighet {args.concurrency}"
+              + (f" + {args.dispatch_resolution}h rullande dispatch (kanonisk mall)"
+                 if args.dispatch_resolution else "")
+              + (f", etikett: {args.label}" if args.label else ""))
     for out, cmd, follow in jobs:
         print(f"\n  {out}")
         print("    " + " ".join(shlex.quote(c) for c in cmd))
@@ -192,7 +229,7 @@ def main():
             extra_txt = ""
             if fout is not None:
                 extra_txt = f"  + dispatch {fout}: {'OK' if frc == 0 else f'FAIL (rc={frc})'}"
-            elif rc == 0 and args.dispatch_resolution:
+            elif rc != 0 and args.dispatch_resolution and not args.dispatch_only:
                 extra_txt = "  + dispatch HOPPAD (expansionen misslyckades)"
             print(f"  [{status}] {out}  ({dt/60:.0f} min){extra_txt}")
             results.append((out, rc, dt, fout, frc))
