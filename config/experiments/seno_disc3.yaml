@@ -1,0 +1,13 @@
+# 3 % diskonteringsränta för ny kärnkraft och havsvind i Sverige OCH Norge (= se_disc3 + Norge).
+# Norge saknar kärnkraftskandidater i 2040-världen; här läggs tio reaktorer per norsk zon till
+# (egna frön). Vid 6 % byggs ingen ny kärnkraft någonstans, så baselinen (run560) är oförändrad.
+nuclear:
+  add:
+    - [SE-S, 10, 201]
+    - [SE-N, 10, 202]
+    - [FI,   10, 203]
+    - [NO-N, 10, 204]
+    - [NO-S, 10, 205]
+  discount_rate_by_zone: {SE-N: 0.03, SE-S: 0.03, NO-N: 0.03, NO-S: 0.03}
+vre:
+  offwind_discount_rate_by_zone: {SE-N: 0.03, SE-S: 0.03, NO-N: 0.03, NO-S: 0.03}
