@@ -1,0 +1,10 @@
+# Ny kärnkraft i hela Norden: 2040-världens kandidater (SE-S, SE-N, FI) + tio reaktorer per zon i NO-N, NO-S och DK
+# (egna frön; NO-frön som i seno_disc3). Ränta som baslinjen (6 %). ⚠️ DK har i dag kärnkraftsförbud.
+nuclear:
+  add:
+    - [SE-S, 10, 201]
+    - [SE-N, 10, 202]
+    - [FI,   10, 203]
+    - [NO-N, 10, 204]
+    - [NO-S, 10, 205]
+    - [DK,   10, 206]
