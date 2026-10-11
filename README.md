@@ -10,7 +10,7 @@ using 2023–2025 weather, inflow and load as the three reference years.
 ![Model overview](docs/nordpsa_overview.png)
 
 *Model structure per zone, the six-zone grid, and the annual energy balance from the
-baseline 2040 dispatch run. Labels are in Swedish.*
+baseline 2040 dispatch run (run570, tag `baseline-2026-10`). Labels are in Swedish.*
 
 ## What it models
 
