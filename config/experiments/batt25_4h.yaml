@@ -1,3 +1,7 @@
-# demand-scenariots batterier omskalade till 25 GW à 4 h.
+# demand-scenariots batterier omskalade till 25 GW à 4 h: 12,5 GW fria nätföljande + 12,5 GW fasta nätbildande
+# (stab_batt12-fördelningen × 12,5/6). Används ovanpå stab_batt12 (run565/575); ersätter dess batteriinställningar.
 scenario:
-  battery_total: [25, 4]
+  battery_total: [12.5, 4]
+battery:
+  hours: 4
+  gfm_fixed_mw: {SE-N: 1042, SE-S: 4688, DK: 3958, FI: 2813}

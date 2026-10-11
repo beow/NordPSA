@@ -73,7 +73,7 @@ def test_cost_scenario_adds_interest_during_construction():
 
 
 def test_battery_total_rescales_scenario_batteries():
-    _, extras = _prepare(experiments=["batt25_4h"])
+    _, extras = _prepare(sets=["scenario.battery_total=[25, 4]"])
     assert sum(p for _, p, _ in extras["batteries"]) == pytest.approx(25_000)
     assert {h for _, _, h in extras["batteries"]} == {4.0}
 

@@ -1,0 +1,20 @@
+# Batch 56-baslinjen (run560/570, 2026-10): stabilitetskrav + scenariots 12 GW batterier hälften grid-forming.
+# Ovanpå 2040_svk_mm: nordpsa expand --experiment stab_batt12 [--experiment <delscenario> …]
+#                     nordpsa dispatch --from <run> --resolution 1 --experiment stab_batt12
+# Rotationsenergi ≥ 120 GWs (Norden) och SCR ≥ 2,0 per zon (SE-S gemensamt med 0,35 av DK = DK2), synkron-
+# kompensatorer investerbara; 12 GW à 2 h = 6 GW fria nätföljande + 6 GW fasta nätbildande (run507-fördelningen).
+stability:
+  enabled: true
+  ek_system_gws: 120
+  scr_min: 2.0
+  scr_joint: {SE-S: {DK: 0.35}}
+syncon:
+  enabled: true
+dispatch:
+  stability_scr_slack_penalty: 100
+scenario:
+  battery_total: [6, 2]
+battery:
+  hours: 2
+  gfm_extra_eur_per_kw: 0
+  gfm_fixed_mw: {SE-N: 500, SE-S: 2250, DK: 1900, FI: 1350}

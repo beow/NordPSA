@@ -102,6 +102,35 @@ python scripts/nordpsa_overview.py run002_disp        # writes docs/nordpsa_over
 A full three-year expansion at 2h resolution takes several hours and ~6 GB of RAM; a
 single year at 3h runs in minutes.
 
+### Baseline and scenarios
+
+The reference model is the 2040 world plus the experiment `stab_batt12` (stability
+requirements, synchronous condensers, 12 GW of batteries of which half grid-forming).
+Scenarios are added on top:
+
+```bash
+nordpsa expand   --resolution 2 --experiment stab_batt12 [--experiment SCENARIO …] --output runX
+nordpsa dispatch --from runX --resolution 1 --output runY
+```
+
+| Experiment | What it changes |
+|---|---|
+| *(none)* | baseline |
+| `onshore80` | onshore wind potential × 0.8 |
+| `lowhydro06` | dry year: 2024 inflow and run-of-river × 0.6 |
+| `lowhydro07` | as above, × 0.7 |
+| `market50` | all continental cables × 0.5 |
+| `batt25_4h` | scenario batteries 25 GW à 4 h |
+| `notax` | no electricity tax on district-heating heat pumps and electric boilers |
+| `se_disc3` | 3 % discount rate for new nuclear and offshore wind in Sweden |
+| `seno_disc3` | as above in Sweden and Norway, plus Norwegian nuclear candidates |
+| `nuclear_nordic` | new-nuclear candidates in all six zones |
+
+Results and discussion of the scenarios: <https://adelsfors.se/category/nordpsa/> (in Swedish).
+
+The code state of the published baseline runs is tagged `baseline-2026-10`; those runs
+predate the numerics change in cc0be7d, so a rerun on `main` can differ marginally.
+
 ## Tests
 
 ```bash
